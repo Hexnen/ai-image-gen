@@ -1,10 +1,15 @@
+import { OPENAI_RATES, getModel, fitGeminiSize, fitOpenAIQuality, openaiSizeFor } from "../providers/models.mjs";
+
 // Stawki batch (USD / token) i koszt z usage. Port z roleplay workshopBatch/cost.ts.
 // OpenAI batch = sync ÷ 2: text-in $2.50, image-in $4, image-out $15 za 1M tok.
-export const OPENAI_BATCH_TEXT_IN = 2.5 / 1e6;
-export const OPENAI_BATCH_IMAGE_IN = 4 / 1e6;
-export const OPENAI_BATCH_OUT = 15 / 1e6;
+// gpt-image-2.5 ma te same stawki (OPENAI_RATES w providers/models.mjs).
+export const OPENAI_BATCH_TEXT_IN = OPENAI_RATES.batch.textIn / 1e6;
+export const OPENAI_BATCH_IMAGE_IN = OPENAI_RATES.batch.imageIn / 1e6;
+export const OPENAI_BATCH_OUT = OPENAI_RATES.batch.imageOut / 1e6;
 
+// Stawki batch Gemini (USD / token) wg modelu (oficjalny cennik 2026-10; tier z models.mjs).
 const GEMINI_BATCH = {
+  nb21: { in: 0.75 / 1e6, outImage: 15 / 1e6, outText: 3.75 / 1e6 },
   nano: { in: 0.125 / 1e6, outImage: 15 / 1e6, outText: 0.75 / 1e6 },
   flash: { in: 0.25 / 1e6, outImage: 30 / 1e6, outText: 1.5 / 1e6 },
   pro: { in: 1.0 / 1e6, outImage: 60 / 1e6, outText: 6.0 / 1e6 },
@@ -12,6 +17,7 @@ const GEMINI_BATCH = {
 
 export function geminiTierOf(model = "") {
   const m = String(model).toLowerCase();
+  if (m.includes("nano-banana-2.1")) return "nb21";
   if (m.includes("pro")) return "pro";
   if (m.includes("lite")) return "nano";
   if (m.includes("flash")) return "flash";
@@ -45,22 +51,29 @@ export function openaiBatchCost(u) {
   return inCost + outTok * OPENAI_BATCH_OUT;
 }
 
-const QUALITY_FACTOR = { low: 0.3, medium: 1, high: 4 };
+// Mnożniki liczby tokenów wyjścia względem "medium" (low/high z roleplay; xhigh/max to ZGRUBNE
+// założenie — OpenAI nie publikuje tokenów na jakość, a to tylko szacunek do limitów).
+const QUALITY_FACTOR = { low: 0.3, medium: 1, high: 4, xhigh: 8, max: 12, auto: 1 };
+const BASE_PIXELS = 1024 * 1536; // 1372 tok. zmierzone w roleplay dla 1024x1536 medium
 
 /**
- * SZACUNEK kosztu batcha przed wysłaniem (do limitów). Przybliżenie: ~1372 tok. wyjścia
- * (zmierzone w roleplay dla 1024x1536 medium), ~1536 tok. na obraz wejściowy.
+ * SZACUNEK kosztu batcha przed wysłaniem (do limitów). OpenAI: tokeny skalowane jakością i
+ * polem obrazu; Gemini: tokeny wg rozmiaru z katalogu modeli, ~260 tok. na obraz wejściowy.
  */
 export function estimateBatchCost(provider, model, items) {
   let total = 0;
   for (const it of items) {
     const refs = it.refs?.length ?? 0;
     if (provider === "openai") {
-      const q = QUALITY_FACTOR[it.quality ?? "medium"] ?? 1;
-      total += 1372 * q * OPENAI_BATCH_OUT + refs * 1536 * OPENAI_BATCH_IMAGE_IN + 150 * OPENAI_BATCH_TEXT_IN;
+      const q = QUALITY_FACTOR[fitOpenAIQuality(model, it.quality ?? "medium")] ?? 1;
+      const [w, h] = openaiSizeFor(model, { width: it.width, height: it.height }).split("x").map(Number);
+      const area = (w * h) / BASE_PIXELS;
+      total += 1372 * q * area * OPENAI_BATCH_OUT + refs * 1536 * OPENAI_BATCH_IMAGE_IN + 150 * OPENAI_BATCH_TEXT_IN;
     } else if (provider === "gemini") {
       const r = GEMINI_BATCH[geminiTierOf(model)];
-      total += 1120 * r.outImage + (260 * refs + 150) * r.in;
+      const m = getModel("gemini", model);
+      const tokens = m?.tokens?.[fitGeminiSize(model, it.imageSize)] ?? 1120;
+      total += tokens * r.outImage + (260 * refs + 150) * r.in;
     }
   }
   return total;

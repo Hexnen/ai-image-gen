@@ -71,5 +71,19 @@
   "AIIMG.Batches.Status.cancelling": "Cancelling",
   "AIIMG.Batches.Status.done": "Done",
   "AIIMG.Batches.Status.error": "Error",
-  "AIIMG.Batches.Status.cancelled": "Cancelled"
+  "AIIMG.Batches.Status.cancelled": "Cancelled",
+  "AIIMG.Quality.xhigh": "Extra high",
+  "AIIMG.Quality.max": "Max",
+  "AIIMG.ModelNote.detailed": "most detailed",
+  "AIIMG.ModelNote.fast": "fast",
+  "AIIMG.ModelNote.newest": "newest",
+  "AIIMG.ModelNote.cheapest": "cheapest",
+  "AIIMG.Config.ImageSize": "Image size",
+  "AIIMG.Config.Thinking": "Thinking",
+  "AIIMG.Config.ThinkingFixed": "Always on for this model (not adjustable).",
+  "AIIMG.Config.SizeRules": "Any size: multiples of 16, max 3840 px per edge, ratio 1:3 to 3:1, 0.65 to 8.3 megapixels (above 2560x1440 is experimental). Values are adjusted on save.",
+  "AIIMG.Thinking.minimal": "Minimal",
+  "AIIMG.Thinking.medium": "Medium",
+  "AIIMG.Thinking.high": "High",
+  "AIIMG.Thinking.default": "default"
 }

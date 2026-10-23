@@ -2,6 +2,7 @@
 // CORS: upload plików idzie JEDNYM żądaniem multipart (X-Goog-Upload-Protocol: multipart),
 // bez resumable — nie czytamy nagłówka x-goog-upload-url.
 import { mimeOf, b64ToBlob, nearestAspect } from "../providers/util.mjs";
+import { getModel, fitGeminiSize, fitGeminiThinking } from "../providers/models.mjs";
 import { UPLOAD_TIMEOUT_MS, DOWNLOAD_TIMEOUT_MS, readError, jsonl, parseJsonl, uniqueRefs } from "./util.mjs";
 import { geminiBatchCost } from "./cost.mjs";
 import { patchBatch, markIngested } from "./record.mjs";
@@ -32,6 +33,13 @@ async function uploadFile(apiKey, displayName, blob, mime) {
   return { name: file.name, uri: file.uri };
 }
 
+/** thinking_config tylko gdy poziom różni się od domyślnego modelu. */
+function thinkingCfg(model, level) {
+  const m = getModel("gemini", model);
+  const t = fitGeminiThinking(model, level);
+  return t && t !== m?.defaultThinking ? { thinking_config: { thinking_level: t } } : {};
+}
+
 /** Wysyła batch. @returns {{remoteId:string, endpoint:string}} */
 export async function submitGemini({ apiKey, model, items }) {
   const ups = new Map();
@@ -41,6 +49,10 @@ export async function submitGemini({ apiKey, model, items }) {
     const f = await uploadFile(apiKey, `ai-image-gen-ref-${Date.now()}-${n++}`, blob, mime);
     ups.set(blob, { uri: f.uri, mime });
   }
+  // Wszystkie modele Gemini idą przez batchGenerateContent (oficjalnie jedyny batch obrazów).
+  // NIEZWERYFIKOWANE z kluczem: czy gemini-nano-banana-2.1 przyjmuje ten kształt w batchu
+  // oraz pola image_config.image_size / thinking_config w linii JSONL.
+  const m = getModel("gemini", model);
   const lines = items.map((it) => {
     const parts = [];
     (it.refs ?? []).forEach((b, i) => {
@@ -53,8 +65,12 @@ export async function submitGemini({ apiKey, model, items }) {
       request: {
         contents: [{ parts }],
         generation_config: {
-          response_modalities: ["IMAGE"],
-          image_config: { aspect_ratio: nearestAspect({ width: it.width, height: it.height }, ASPECTS), image_size: "1K" },
+          response_modalities: m?.modalities ?? ["IMAGE"],
+          image_config: {
+            aspect_ratio: nearestAspect({ width: it.width, height: it.height }, m?.aspects ?? ASPECTS),
+            image_size: fitGeminiSize(model, it.imageSize),
+          },
+          ...thinkingCfg(model, it.thinkingLevel),
         },
       },
     };

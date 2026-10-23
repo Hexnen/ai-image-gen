@@ -44,13 +44,14 @@
       <label>{{localize "AIIMG.Config.Resolution"}}</label>
       <select name="size">
         {{#each sizes}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
-        <option value="custom" {{#if customSize}}selected{{/if}}>{{localize "AIIMG.Config.Custom"}}</option>
+        {{#if allowCustomSize}}<option value="custom" {{#if customSize}}selected{{/if}}>{{localize "AIIMG.Config.Custom"}}</option>{{/if}}
       </select>
       {{#if customSize}}
-      <input type="number" name="width" value="{{cfg.width}}" min="64" max="4096" step="64">
+      <input type="number" name="width" value="{{cfg.width}}" min="64" max="{{sizeMax}}" step="{{sizeStep}}">
       <span>×</span>
-      <input type="number" name="height" value="{{cfg.height}}" min="64" max="4096" step="64">
+      <input type="number" name="height" value="{{cfg.height}}" min="64" max="{{sizeMax}}" step="{{sizeStep}}">
       {{/if}}
+      {{#if exactSize}}<p class="hint">{{localize "AIIMG.Config.SizeRules"}}</p>{{/if}}
     </div>
 
     {{#if isOpenAI}}
@@ -59,6 +60,25 @@
       <select name="quality" {{#unless isGM}}disabled{{/unless}}>
         {{#each qualities}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
       </select>
+    </div>
+    {{/if}}
+
+    {{#if isGemini}}
+    <div class="form-group">
+      <label>{{localize "AIIMG.Config.ImageSize"}}</label>
+      <select name="imageSize" {{#unless isGM}}disabled{{/unless}}>
+        {{#each imageSizes}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+      </select>
+    </div>
+    <div class="form-group">
+      <label>{{localize "AIIMG.Config.Thinking"}}</label>
+      {{#if hasThinking}}
+      <select name="thinkingLevel" {{#unless isGM}}disabled{{/unless}}>
+        {{#each thinkingLevels}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+      </select>
+      {{else}}
+      <span class="hint">{{localize "AIIMG.Config.ThinkingFixed"}}</span>
+      {{/if}}
     </div>
     {{/if}}
 

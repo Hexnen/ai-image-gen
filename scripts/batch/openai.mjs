@@ -3,6 +3,7 @@
 import { mimeOf, blobToB64, b64ToBlob } from "../providers/util.mjs";
 import { UPLOAD_TIMEOUT_MS, DOWNLOAD_TIMEOUT_MS, readError, jsonl, parseJsonl, uniqueRefs } from "./util.mjs";
 import { openaiBatchCost } from "./cost.mjs";
+import { openaiSizeFor, fitOpenAIQuality } from "../providers/models.mjs";
 import { patchBatch, markIngested } from "./record.mjs";
 import { applyBatchItem } from "./apply.mjs";
 
@@ -10,13 +11,8 @@ export const OPENAI_BASE = "https://api.openai.com/v1";
 const auth = (apiKey) => ({ Authorization: `Bearer ${apiKey}` });
 const EXT = { "image/png": "png", "image/webp": "webp", "image/jpeg": "jpg" };
 
-export function openaiSize(width, height) {
-  if (!width || !height) return "1024x1024";
-  const r = width / height;
-  if (r > 1.2) return "1536x1024";
-  if (r < 0.83) return "1024x1536";
-  return "1024x1024";
-}
+/** Rozmiar linii batcha: dla 2.5 dokładny (po normalizacji), dla starszych koszyk. */
+export const openaiSize = (width, height, model = "gpt-image-2") => openaiSizeFor(model, { width, height });
 
 async function uploadFile(apiKey, purpose, filename, blob) {
   const form = new FormData();
@@ -61,8 +57,8 @@ export async function submitOpenAI({ apiKey, model, items }) {
       model,
       prompt: it.prompt,
       ...(withRefs ? { images: it.refs.map((b) => refInput.get(b)) } : {}),
-      size: openaiSize(it.width, it.height),
-      quality: it.quality ?? "medium",
+      size: openaiSize(it.width, it.height, model),
+      quality: fitOpenAIQuality(model, it.quality ?? "medium"),
       n: 1,
       output_format: "png",
     },

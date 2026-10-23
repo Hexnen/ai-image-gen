@@ -1,7 +1,8 @@
 // Warstwa providerów SYNC (tryb "fast"). Batch jest osobno (faza 5).
 //
 // generate({ provider, apiKey, model, prompt, refs?: Blob[], width?, height?,
-//            aspectRatio?: "w:h", quality?: "low"|"medium"|"high" (tylko openai), signal? })
+//            aspectRatio?: "w:h", quality? (openai: low..max wg modelu), imageSize? ("1K"|"2K"|"4K"|"0.5K", gemini),
+//            thinkingLevel? ("minimal"|"medium"|"high", gemini), signal? })
 //   -> { blob: Blob, cost: number /* USD; 0 gdy nieznany */, raw }
 //
 // Uwagi: wywołania idą z przeglądarki (CORS niezweryfikowany). Wymiary są mapowane
@@ -9,6 +10,9 @@
 import * as openai from "./openai.mjs";
 import * as gemini from "./gemini.mjs";
 import * as openrouter from "./openrouter.mjs";
+import { MODELS, getModel, defaultModelId } from "./models.mjs";
+
+export * from "./models.mjs";
 
 export const PROVIDERS = {
   openai: { label: "OpenAI", supportsBatch: true },
@@ -18,25 +22,14 @@ export const PROVIDERS = {
 
 const IMPL = { openai, gemini, openrouter };
 
-const MODELS = {
-  openai: [
-    { id: "gpt-image-2", label: "GPT Image 2" },
-    { id: "gpt-image-1.5", label: "GPT Image 1.5" },
-    { id: "gpt-image-1", label: "GPT Image 1" },
-    { id: "gpt-image-1-mini", label: "GPT Image 1 mini" },
-  ],
-  gemini: [
-    { id: "gemini-3.1-flash-lite-image", label: "Nano Banana 2 Lite" },
-  ],
-  openrouter: [
-    { id: "google/gemini-3.1-flash-lite-image", label: "Nano Banana 2 Lite (OpenRouter)" },
-    { id: "openai/gpt-5.4-image-2", label: "GPT Image 2 (OpenRouter, chat)" },
-  ],
-};
-
+/** [{ id, label, note?, ...możliwości }] — pełne wpisy katalogu (models.mjs). */
 export function listModels(provider) {
   return (MODELS[provider] ?? []).map((m) => ({ ...m }));
 }
+
+/** Możliwości jednego modelu (albo null dla nieznanego/OpenRouter). */
+export const modelCaps = (provider, id) => getModel(provider, id);
+export { defaultModelId };
 
 export async function generate({ provider, ...rest }) {
   const impl = IMPL[provider];

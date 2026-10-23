@@ -1,6 +1,6 @@
 import { MODULE_ID } from "./constants.mjs";
 import { detectImageTypes } from "./image-types.mjs";
-import { getConfig, setConfig, resetConfig, isConfigured, SIZE_PRESETS, QUALITIES } from "./config-store.mjs";
+import { getConfig, setConfig, resetConfig, isConfigured, sizePresetsFor, fitConfig } from "./config-store.mjs";
 import * as providers from "./providers/index.mjs";
 import { getUsage } from "./limits.mjs";
 
@@ -55,10 +55,18 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const providerList = Object.entries(providers.PROVIDERS).map(([id, p]) => ({
       id, label: p.label, selected: id === cfg.provider
     }));
-    const models = providers.listModels(cfg.provider).map((m) => ({ ...m, selected: m.id === cfg.model }));
+    const L = (k) => game.i18n.localize(k);
+    const models = providers.listModels(cfg.provider).map((m) => ({
+      id: m.id,
+      label: m.note ? `${m.label} — ${L(`AIIMG.ModelNote.${m.note}`)}` : m.label,
+      selected: m.id === cfg.model
+    }));
+    const caps = providers.modelCaps(cfg.provider, cfg.model);
+    const presets = sizePresetsFor(cfg.provider, cfg.model);
     const sizeId = `${cfg.width}x${cfg.height}`;
-    const customSize = !!cfg.custom || !SIZE_PRESETS.some((s) => s.id === sizeId);
-    const sizes = SIZE_PRESETS.map((s) => ({
+    const customSize = !!cfg.custom || !presets.some((s) => s.id === sizeId);
+    const exactSize = cfg.provider === "openai" && !!caps?.customSize; // 2.5: any WxH (x16)
+    const sizes = presets.map((s) => ({
       ...s, label: `${s.width}×${s.height}`, selected: !customSize && s.id === sizeId
     }));
     const supportsBatch = !!providers.PROVIDERS[cfg.provider]?.supportsBatch;
@@ -81,8 +89,19 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       isBatch: cfg.defaultMode === "batch",
       supportsBatch,
       isOpenAI: cfg.provider === "openai",
-      qualities: QUALITIES.map((q) => ({
-        id: q, selected: q === cfg.quality, label: game.i18n.localize(`AIIMG.Quality.${q}`)
+      isGemini: cfg.provider === "gemini",
+      allowCustomSize: cfg.provider !== "openai" || exactSize,
+      sizeStep: exactSize ? 16 : 64,
+      sizeMax: exactSize ? 3840 : 4096,
+      exactSize,
+      qualities: (caps?.qualities ?? providers.OPENAI_QUALITIES_OLD).map((q) => ({
+        id: q, selected: q === cfg.quality, label: L(`AIIMG.Quality.${q}`)
+      })),
+      imageSizes: (caps?.sizes ?? []).map((v) => ({ id: v, label: v, selected: v === cfg.imageSize })),
+      hasThinking: !!caps?.thinking?.length,
+      thinkingLevels: (caps?.thinking ?? []).map((v) => ({
+        id: v, selected: v === (cfg.thinkingLevel || caps.defaultThinking),
+        label: L(`AIIMG.Thinking.${v}`) + (v === caps.defaultThinking ? ` (${L("AIIMG.Thinking.default")})` : "")
       })),
       batchWarn: cfg.defaultMode === "batch" && !supportsBatch,
       refs: cfg.refs.map((path, index) => ({ path, index })),
@@ -102,6 +121,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     d.promptTemplate = fd.promptTemplate ?? d.promptTemplate;
     d.defaultMode = fd.defaultMode ?? d.defaultMode;
     d.quality = fd.quality ?? d.quality;
+    d.imageSize = fd.imageSize ?? d.imageSize;
+    d.thinkingLevel = fd.thinkingLevel ?? d.thinkingLevel;
     if (fd.size && fd.size !== "custom") {
       const [w, h] = fd.size.split("x").map(Number);
       d.width = w;
@@ -121,6 +142,15 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       const models = providers.listModels(this.draft.provider);
       this.draft.model = models[0]?.id ?? "";
       if (!providers.PROVIDERS[this.draft.provider]?.supportsBatch) this.draft.defaultMode = "fast";
+      Object.assign(this.draft, fitConfig(this.draft));
+      this.draft.custom = false;
+      this.render();
+    });
+    // Model change: re-clamp quality / size / thinking to what the new model supports.
+    el.querySelector("select[name=model]")?.addEventListener("change", () => {
+      this.#readForm();
+      Object.assign(this.draft, fitConfig(this.draft));
+      this.draft.custom = false;
       this.render();
     });
     // Switching to "custom" must keep the current numbers; switching away applies the preset.

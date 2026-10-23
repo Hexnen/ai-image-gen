@@ -1,13 +1,13 @@
 // OpenAI Images (gpt-image-*) bezpośrednio. Port z roleplay imageGen/openai.ts.
 // Bez refs: JSON /images/generations; z refs: multipart /images/edits (max 16).
 import { GPT_IMAGE_TIMEOUT_MS, withTimeout, httpError, b64ToBlob, mimeOf } from "./util.mjs";
+import { OPENAI_RATES, openaiSizeFor, fitOpenAIQuality, bucketOpenAISize } from "./models.mjs";
 
 export const OPENAI_BASE = "https://api.openai.com/v1";
-const SIZES = ["1024x1024", "1024x1536", "1536x1024"];
 const EDIT_REF_LIMIT = 16;
 
-// Stawki za token (USD), cennik OpenAI gpt-image-2 (wg roleplay 2026-07-15).
-const TXT_IN = 5 / 1e6, IMG_IN = 8 / 1e6, IMG_OUT = 30 / 1e6;
+// Stawki za token (USD): gpt-image-2 i gpt-image-2.5 mają te same (OPENAI_RATES w models.mjs).
+const TXT_IN = OPENAI_RATES.sync.textIn / 1e6, IMG_IN = OPENAI_RATES.sync.imageIn / 1e6, IMG_OUT = OPENAI_RATES.sync.imageOut / 1e6;
 // Fallback per obraz, gdy brak usage.
 const PRICES = {
   low: { "1024x1024": 0.006, "1024x1536": 0.005, "1536x1024": 0.005 },
@@ -15,20 +15,16 @@ const PRICES = {
   high: { "1024x1024": 0.211, "1024x1536": 0.165, "1536x1024": 0.165 },
 };
 
-/** width/height/aspectRatio -> jeden z trzech rozmiarów API. */
-export function pickSize({ width, height, aspectRatio }) {
-  if (width && height && SIZES.includes(`${width}x${height}`)) return `${width}x${height}`;
-  let r = 1;
-  if (width && height) r = width / height;
-  else if (aspectRatio && /^\d+:\d+$/.test(aspectRatio)) { const [w, h] = aspectRatio.split(":").map(Number); r = w / h; }
-  return r > 1.2 ? "1536x1024" : r < 0.83 ? "1024x1536" : "1024x1024";
-}
+/** Zachowane dla zgodności: rozmiar-koszyk (starsze modele). */
+export const pickSize = ({ width, height, aspectRatio }) => bucketOpenAISize(width, height, aspectRatio);
 
 export async function generate({ apiKey, model, prompt, refs = [], width, height, aspectRatio, quality = "medium", signal }) {
+  quality = fitOpenAIQuality(model, quality);
   if (refs.length > EDIT_REF_LIMIT) {
     throw new Error(`OpenAI ${model}: ${refs.length} referencji przekracza limit /images/edits (${EDIT_REF_LIMIT}).`);
   }
-  const size = pickSize({ width, height, aspectRatio });
+  // 2.5: dokładny rozmiar po normalizacji (×16, limity API); starsze: 3 koszyki.
+  const size = openaiSizeFor(model, { width, height, aspectRatio });
   let res;
   if (refs.length) {
     const form = new FormData();

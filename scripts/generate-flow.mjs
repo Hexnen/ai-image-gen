@@ -58,7 +58,9 @@ function describe(document, description) {
 /** Szacunek kosztu pojedynczego żądania (sync ≈ 2× batch). 0 gdy nieznany. */
 function estimateFast(cfg, refCount) {
   try {
-    return estimateBatchCost(cfg.provider, cfg.model, [{ refs: new Array(refCount) }]) * 2;
+    return estimateBatchCost(cfg.provider, cfg.model, [{
+      refs: new Array(refCount), width: cfg.width, height: cfg.height, quality: cfg.quality, imageSize: cfg.imageSize
+    }]) * 2;
   } catch {
     return 0;
   }
@@ -74,7 +76,8 @@ export async function runFast(document, description, { signal } = {}) {
   const refs = await loadRefs(cfg.refs);
   const { blob, cost } = await providers.generate({
     provider: cfg.provider, apiKey, model: cfg.model, prompt, refs,
-    width: cfg.width, height: cfg.height, quality: cfg.quality, signal
+    width: cfg.width, height: cfg.height, quality: cfg.quality,
+    imageSize: cfg.imageSize, thinkingLevel: cfg.thinkingLevel, signal
   });
   await recordCost(cost); // koszt jest realny nawet gdy zapis się nie uda
   const path = await saveImageBlob(blob, meta);
@@ -93,6 +96,7 @@ export async function runBatch(document, description) {
     items: [{
       id: foundry.utils.randomID(),
       prompt, refs, width: cfg.width, height: cfg.height, quality: cfg.quality,
+      imageSize: cfg.imageSize, thinkingLevel: cfg.thinkingLevel,
       target: { uuid: document.uuid, field: FIELD },
       meta
     }]

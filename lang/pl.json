@@ -71,5 +71,19 @@
   "AIIMG.Batches.Status.cancelling": "Anulowanie",
   "AIIMG.Batches.Status.done": "Gotowy",
   "AIIMG.Batches.Status.error": "Błąd",
-  "AIIMG.Batches.Status.cancelled": "Anulowany"
+  "AIIMG.Batches.Status.cancelled": "Anulowany",
+  "AIIMG.Quality.xhigh": "Bardzo wysoka",
+  "AIIMG.Quality.max": "Maksymalna",
+  "AIIMG.ModelNote.detailed": "najbardziej szczegółowy",
+  "AIIMG.ModelNote.fast": "szybki",
+  "AIIMG.ModelNote.newest": "najnowszy",
+  "AIIMG.ModelNote.cheapest": "najtańszy",
+  "AIIMG.Config.ImageSize": "Rozmiar obrazu",
+  "AIIMG.Config.Thinking": "Thinking (namysł)",
+  "AIIMG.Config.ThinkingFixed": "Zawsze włączone dla tego modelu (bez ustawień).",
+  "AIIMG.Config.SizeRules": "Dowolny rozmiar: wielokrotność 16, maks. 3840 px na krawędź, proporcje 1:3 do 3:1, 0,65 do 8,3 megapiksela (powyżej 2560x1440 eksperymentalne). Wartości są poprawiane przy zapisie.",
+  "AIIMG.Thinking.minimal": "Minimalny",
+  "AIIMG.Thinking.medium": "Średni",
+  "AIIMG.Thinking.high": "Wysoki",
+  "AIIMG.Thinking.default": "domyślny"
 }
