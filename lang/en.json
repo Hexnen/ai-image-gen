@@ -24,6 +24,7 @@
   "AIIMG.Config.Resolution": "Resolution",
   "AIIMG.Config.Width": "Width (px)",
   "AIIMG.Config.Height": "Height (px)",
+  "AIIMG.Config.SizeAdjusted": "Adjusted for {model}: {from} → {to}",
   "AIIMG.Config.AspectAria": "Aspect ratio {ratio} ({dec}), {w} by {h} pixels",
   "AIIMG.Config.Custom": "Custom",
   "AIIMG.Config.Prompt": "Prompt template",

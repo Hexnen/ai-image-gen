@@ -49,6 +49,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   selectedKey = null;
+  /** {draft, text}: size adjusted by the last provider/model change (shown only while that draft is open). */
+  sizeNote = null;
   groupFilter = "all";
   /** Unsaved edits for the selected type; discarded on type switch. */
   draft = null;
@@ -226,6 +228,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       sizes,
       customSize,
       aspect: this.#aspectContext(cfg.width, cfg.height),
+      sizeNote: this.sizeNote?.draft === this.draft ? this.sizeNote.text : "",
       isFast: cfg.defaultMode === "fast",
       isBatch: cfg.defaultMode === "batch",
       supportsBatch,
@@ -288,18 +291,22 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     // Provider change: fall back to that provider's first model (and Fast if no batch).
     el.querySelector("select[name=provider]")?.addEventListener("change", () => {
       this.#readForm();
+      const prev = { w: this.draft.width, h: this.draft.height };
       const models = providers.listModels(this.draft.provider);
       this.draft.model = models[0]?.id ?? "";
       if (!providers.PROVIDERS[this.draft.provider]?.supportsBatch) this.draft.defaultMode = "fast";
       Object.assign(this.draft, fitConfig(this.draft));
       this.draft.custom = false;
+      this.#noteSizeFit(prev);
       this.render();
     });
     // Model change: re-clamp quality / size / thinking to what the new model supports.
     el.querySelector("select[name=model]")?.addEventListener("change", () => {
       this.#readForm();
+      const prev = { w: this.draft.width, h: this.draft.height };
       Object.assign(this.draft, fitConfig(this.draft));
       this.draft.custom = false;
+      this.#noteSizeFit(prev);
       this.render();
     });
     // Switching to "custom" must keep the current numbers; switching away applies the preset.
@@ -318,6 +325,9 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     });
     // Quality / image size / thinking / custom width+height only change the draft and the live estimate
     // (no re-render, so focus and caret survive). Provider, model, size preset and mode re-render above.
+    for (const n of ["size", "width", "height"]) {
+      el.querySelector(`[name=${n}]`)?.addEventListener(n === "size" ? "change" : "input", () => { this.sizeNote = null; el.querySelector("[data-role=sizeNote]")?.remove(); });
+    }
     for (const n of ["quality", "imageSize", "thinkingLevel", "width", "height", "outMaxEdge", "outFormat", "outQualityPct"]) {
       const f = el.querySelector(`[name=${n}]`);
       f?.addEventListener(f.tagName === "SELECT" ? "change" : "input", () => this.#onDraftInput());
@@ -345,6 +355,19 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     this.#readTest();
     this.#updateTestPreview();
     this.#updateAspect();
+  }
+
+  /** Remember (for this draft only) that the model change adjusted the size, so the row can say so. */
+  #noteSizeFit(prev) {
+    const d = this.draft;
+    if (d.width === prev.w && d.height === prev.h) { this.sizeNote = null; return; }
+    const m = providers.listModels(d.provider).find((x) => x.id === d.model);
+    this.sizeNote = {
+      draft: d,
+      text: game.i18n.format("AIIMG.Config.SizeAdjusted", {
+        model: m?.label ?? d.model, from: `${prev.w}×${prev.h}`, to: `${d.width}×${d.height}`
+      })
+    };
   }
 
   /** Aspect data for the Resolution row (reduced ratio, decimal, rectangle size in px, aria text). */

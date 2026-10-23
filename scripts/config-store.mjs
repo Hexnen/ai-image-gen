@@ -50,15 +50,13 @@ export function fitConfig(cfg) {
   const out = { ...cfg, ...normalizeOutput(cfg) };
   if (out.provider === "openai") {
     out.quality = providers.fitOpenAIQuality(out.model, out.quality);
-    if (providers.openaiCustomSize(out.model)) {
-      const n = providers.normalizeOpenAISize(out.width, out.height);
-      out.width = n.width;
-      out.height = n.height;
-    }
   } else if (out.provider === "gemini") {
     out.imageSize = providers.fitGeminiSize(out.model, out.imageSize);
     out.thinkingLevel = providers.fitGeminiThinking(out.model, out.thinkingLevel);
   }
+  const fit = providers.fitSizeFor(out.provider, out.model, out.width, out.height);
+  out.width = fit.width;
+  out.height = fit.height;
   return out;
 }
 

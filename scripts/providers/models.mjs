@@ -154,6 +154,57 @@ export function openaiSizeFor(modelId, { width, height, aspectRatio } = {}) {
   return bucketOpenAISize(width, height, aspectRatio);
 }
 
+
+const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+const aspectOf = (a) => a.split(":").map(Number);
+// Aspekty obsługiwane przez OpenRouter /images (jak w openrouter.mjs).
+const OPENROUTER_ASPECTS = ASPECTS_BASE;
+
+/** Aspekty, które provider/model faktycznie przyjmuje (null = dowolny rozmiar WxH / koszyki OpenAI). */
+export function allowedAspects(provider, modelId) {
+  if (provider === "gemini") return getModel("gemini", modelId)?.aspects ?? null;
+  if (provider === "openrouter") return OPENROUTER_ASPECTS;
+  return null;
+}
+
+/** Wymiary reprezentujące aspekt "a:b": preset 1024/1536, inaczej krok 16 z dłuższym bokiem ~1536. */
+function dimsForAspect(aspect) {
+  let [a, b] = aspectOf(aspect);
+  const g = gcd(a, b); a /= g; b /= g;
+  for (const id of [...PRESETS_25]) {
+    const [pw, ph] = id.split("x").map(Number);
+    if (pw * b === ph * a && pw <= 1536 && ph <= 1536) return { width: pw, height: ph };
+  }
+  const k = 16 * Math.max(1, Math.round(1536 / (16 * Math.max(a, b))));
+  return { width: a * k, height: b * k };
+}
+
+/**
+ * Rozmiar dozwolony dla modelu (czysta funkcja, idempotentna): OpenAI 2.5 → reguły API,
+ * starsze OpenAI → jeden z 3 koszyków, Gemini/OpenRouter → najbliższy obsługiwany aspekt
+ * (rozmiar pikseli określa wtedy imageSize, nie WxH). Rozmiar już dozwolony zostaje bez zmian.
+ */
+export function fitSizeFor(provider, modelId, width, height) {
+  const w = Number(width) || 1024, h = Number(height) || 1024;
+  if (provider === "openai") {
+    if (openaiCustomSize(modelId)) { const n = normalizeOpenAISize(w, h); return { ...n, changed: n.width !== w || n.height !== h }; }
+    const [bw, bh] = bucketOpenAISize(w, h).split("x").map(Number);
+    return { width: bw, height: bh, changed: bw !== w || bh !== h };
+  }
+  const allowed = allowedAspects(provider, modelId);
+  if (!allowed) return { width: w, height: h, changed: false };
+  // porównanie przez iloczyn krzyżowy: "7:3" i "21:9" to ten sam aspekt
+  if (allowed.some((asp) => { const [a, b] = aspectOf(asp); return a * h === b * w; })) return { width: w, height: h, changed: false };
+  let best = allowed[0], bd = Infinity;
+  for (const asp of allowed) {
+    const [a, b] = aspectOf(asp);
+    const d = Math.abs(Math.log(a / b / (w / h)));
+    if (d < bd) { bd = d; best = asp; }
+  }
+  const out = dimsForAspect(best);
+  return { ...out, changed: out.width !== w || out.height !== h };
+}
+
 /** Jakość dopuszczalna dla modelu (xhigh/max tylko 2.5); nieznana → domyślna. */
 export function fitOpenAIQuality(modelId, quality) {
   const m = getModel("openai", modelId);

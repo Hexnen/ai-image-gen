@@ -60,6 +60,7 @@
           <span class="aiimg-aspect-text"><strong data-role="aspectText">{{aspect.text}}</strong><small data-role="aspectDec">{{aspect.decText}}</small></span>
         </div>
         {{/if}}
+        {{#if sizeNote}}<span class="aiimg-size-note" data-role="sizeNote" role="status">{{sizeNote}}</span>{{/if}}
       </div>
       {{#if exactSize}}<p class="hint">{{localize "AIIMG.Config.SizeRules"}}</p>{{/if}}
     </div>
