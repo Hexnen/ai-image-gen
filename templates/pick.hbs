@@ -1,5 +1,5 @@
 <section class="aiimg-pick-body">
-  <p class="aiimg-pick-hint">{{localize "AIIMG.Pick.Hint"}}</p>
+  <p class="aiimg-pick-hint">{{#if handoff}}{{localize "AIIMG.Pick.HintHandoff"}}{{else}}{{localize "AIIMG.Pick.Hint"}}{{/if}}</p>
   <div class="aiimg-pick-grid">
     {{#each cands}}
     <figure class="aiimg-pick-card">
@@ -23,7 +23,7 @@
 
   <footer class="aiimg-footer aiimg-pick-footer">
     {{#if memory}}
-    <label class="aiimg-keep"><input type="checkbox" name="keep" {{#if keep}}checked{{/if}}> {{localize "AIIMG.Pick.Keep"}}</label>
+    <label class="aiimg-keep"><input type="checkbox" name="keep" {{#if keep}}checked{{/if}}> {{#if handoff}}{{localize "AIIMG.Pick.KeepHandoff"}}{{else}}{{localize "AIIMG.Pick.Keep"}}{{/if}}</label>
     {{/if}}
     {{#if canRegenerate}}
     <button type="button" data-action="regenerate" {{#if busy}}disabled{{/if}}>

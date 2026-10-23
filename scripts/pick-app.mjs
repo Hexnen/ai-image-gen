@@ -96,6 +96,7 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
         size: PickApp.#sizeText(c)
       })),
       memory: this.source === "memory",
+      handoff: !!this.commitFn, // another module asked for the image: no document is involved
       canRegenerate: this.source === "memory" && !!this.regenerate,
       keep: this.#keep,
       busy: this.#busy,

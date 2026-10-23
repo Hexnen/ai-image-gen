@@ -115,7 +115,7 @@ export async function generateImage(o = {}) {
   }
   const prompt = renderPrompt(cfg.promptTemplate, {
     description: String(description).trim(), name, type: virtual?.label ?? typeKey.split(".").slice(1).join(".")
-  });
+  }).trim();
   const owner = slug(virtual?.owner || caller, "module");
   const meta = { system: owner, docType: typeKey, name: name || "image", typeKey, description: String(description).trim() };
   const doc = { name: name || typeKey, type: typeKey, documentName: "", uuid: undefined };

@@ -162,6 +162,8 @@
   "AIIMG.Pick.Title": "Wybierz wersję",
   "AIIMG.Pick.TitleFor": "Wybierz wersję: {name}",
   "AIIMG.Pick.Hint": "„Użyj tej” ustawia wersję jako obraz dokumentu.",
+  "AIIMG.Pick.HintHandoff": "„Użyj tej” zapisuje wersję i przekazuje ją modułowi, który o obraz poprosił.",
+  "AIIMG.Pick.KeepHandoff": "Zachowaj też pozostałe wersje (zapisane obok wybranej)",
   "AIIMG.Pick.Use": "Użyj tej",
   "AIIMG.Pick.Zoom": "Powiększ",
   "AIIMG.Pick.Keep": "Zachowaj pozostałe (zapisz w folderze typu)",

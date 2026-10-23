@@ -162,6 +162,8 @@
   "AIIMG.Pick.Title": "Choose a version",
   "AIIMG.Pick.TitleFor": "Choose a version: {name}",
   "AIIMG.Pick.Hint": "“Use this” sets the version as the document image.",
+  "AIIMG.Pick.HintHandoff": "“Use this” saves the version and hands it to the module that asked for the image.",
+  "AIIMG.Pick.KeepHandoff": "Also keep the other versions (saved next to the chosen one)",
   "AIIMG.Pick.Use": "Use this",
   "AIIMG.Pick.Zoom": "Enlarge",
   "AIIMG.Pick.Keep": "Keep the others (save to the type folder)",
