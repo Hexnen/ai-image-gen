@@ -28,6 +28,9 @@
       {{/each}}
     </div>
     {{/if}}
+    {{#if canSaveRef}}
+    <label class="aiimg-saveref"><input type="checkbox" name="saveRef" {{#if saveRef}}checked{{/if}} {{#if busy}}disabled{{/if}}> {{localize "AIIMG.Gen.SaveRef"}}</label>
+    {{/if}}
     <p class="notes">{{localize "AIIMG.Gen.ExtraRefsHint" mb=maxMb}}</p>
     {{#if refsOver}}<p class="aiimg-error"><i class="fa-solid fa-circle-xmark"></i> {{localize "AIIMG.Gen.TooManyRefs" total=refsTotal max=maxRefs}}</p>{{/if}}
   </div>

@@ -4,6 +4,9 @@ import {
 } from "./generate-flow.mjs";
 import { ImageConfigApp } from "./config-app.mjs";
 import { PickApp } from "./pick-app.mjs";
+import { saveRefFile } from "./save-image.mjs";
+import { resolveTypeKey } from "./image-types.mjs";
+import { getConfig, setConfig } from "./config-store.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
@@ -60,6 +63,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     const prefs = loadPrefs();
     this.count = Math.min(MAX_VERSIONS, Math.max(1, Math.floor(Number(prefs.count)) || 1));
     this.preview = !!prefs.preview;
+    this.saveRef = false;
   }
 
   get title() {
@@ -96,7 +100,9 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       showPreview: this.count === 1,
       estFast: money(fast),
       estBatch: r.canBatch ? money(batch) : "",
-      maxMb: MAX_EXTRA_REF_BYTES / 1048576
+      maxMb: MAX_EXTRA_REF_BYTES / 1048576,
+      canSaveRef: game.user.isGM && !!resolveTypeKey(this.document) && this.extraRefs.length > 0,
+      saveRef: this.saveRef
     };
   }
 
@@ -149,6 +155,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       this.preview = ev.target.checked;
       savePrefs({ count: this.count, preview: this.preview });
     });
+    el.querySelector("input[name=saveRef]")?.addEventListener("change", (ev) => { this.saveRef = ev.target.checked; });
     el.querySelector("input[name=refFiles]")?.addEventListener("change", (ev) => {
       this.#addFiles([...ev.target.files]);
       ev.target.value = "";
@@ -175,6 +182,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       return this.render();
     }
     const refs = this.extraRefs.map((r) => r.blob);
+    const refsFiles = this.saveRef ? [...refs] : [];
     const count = this.count;
     this.busy = mode;
     await this.render();
@@ -199,6 +207,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
         ui.notifications.info(game.i18n.format(count > 1 ? "AIIMG.Gen.QueuedMany" : "AIIMG.Gen.Queued", { name: this.document.name, n: count }));
       }
       savePrefs({ count: this.count, preview: this.preview });
+      await this.#persistRefs(refsFiles);
       return this.close();
     } catch (e) {
       console.error(`${MODULE_ID} |`, e);
@@ -206,6 +215,23 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       ui.notifications.error(this.error, { console: false });
       this.busy = null;
       return this.render();
+    }
+  }
+
+  /** After a successful run: upload the extra references to _refs/ and append them to the type config. */
+  async #persistRefs(files) {
+    if (!files.length || !game.user.isGM) return;
+    const key = resolveTypeKey(this.document);
+    if (!key) return;
+    try {
+      const paths = [];
+      for (const f of files) paths.push(await saveRefFile(f, key));
+      const cfg = getConfig(key);
+      await setConfig(key, { ...cfg, refs: [...new Set([...cfg.refs, ...paths])] });
+      ui.notifications.info(game.i18n.format("AIIMG.Gen.RefsSaved", { n: paths.length }));
+    } catch (e) {
+      console.error(`${MODULE_ID} |`, e);
+      ui.notifications.warn(game.i18n.format("AIIMG.Gen.RefsSaveFailed", { error: e.message }));
     }
   }
 

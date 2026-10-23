@@ -3,6 +3,7 @@ import { detectImageTypes } from "./image-types.mjs";
 import { getConfig, setConfig, resetConfig, isConfigured, sizePresetsFor, fitConfig } from "./config-store.mjs";
 import * as providers from "./providers/index.mjs";
 import { getUsage } from "./limits.mjs";
+import { saveRefFile } from "./save-image.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 const filePicker = () => foundry.applications.apps.FilePicker.implementation;
@@ -18,6 +19,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       selectType: ImageConfigApp.#onSelectType,
       filter: ImageConfigApp.#onFilter,
       addRef: ImageConfigApp.#onAddRef,
+      uploadRefs: ImageConfigApp.#onUploadRefs,
       removeRef: ImageConfigApp.#onRemoveRef,
       save: ImageConfigApp.#onSave,
       reset: ImageConfigApp.#onReset
@@ -167,11 +169,62 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       this.#readFormExceptSize();
       this.render();
     });
+    this.#wireRefZone(el.querySelector(".aiimg-refs"));
+    el.querySelector("input[name=refUpload]")?.addEventListener("change", (ev) => {
+      this.#uploadFiles([...ev.target.files]);
+      ev.target.value = "";
+    });
     el.querySelectorAll("input[name=defaultMode]").forEach((r) =>
       r.addEventListener("change", () => {
         this.#readFormExceptSize();
         this.render();
       }));
+  }
+
+  /** Drag&drop and Ctrl+V (while the zone has focus) upload images as permanent references. */
+  #wireRefZone(zone) {
+    if (!zone || !game.user.isGM) return;
+    const imgs = (list) => [...(list ?? [])].filter((f) => f.type?.startsWith("image/"));
+    zone.addEventListener("dragover", (ev) => {
+      if ([...(ev.dataTransfer?.types ?? [])].includes("Files")) { ev.preventDefault(); zone.classList.add("aiimg-dragging"); }
+    });
+    zone.addEventListener("dragleave", (ev) => {
+      if (!zone.contains(ev.relatedTarget)) zone.classList.remove("aiimg-dragging");
+    });
+    zone.addEventListener("drop", (ev) => {
+      zone.classList.remove("aiimg-dragging");
+      const files = imgs(ev.dataTransfer?.files);
+      if (!files.length) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.#uploadFiles(files);
+    });
+    zone.addEventListener("paste", (ev) => {
+      const files = imgs(ev.clipboardData?.files);
+      if (!files.length) return;
+      ev.preventDefault();
+      this.#uploadFiles(files);
+    });
+  }
+
+  /** Upload to _refs/<system>/<type>/ and append the stored paths to the draft (not saved until Save). */
+  async #uploadFiles(files) {
+    if (!files.length || !this.selectedKey || this.uploading) return;
+    this.#readForm();
+    this.uploading = true;
+    const errors = [];
+    try {
+      for (const f of files) {
+        try {
+          const path = await saveRefFile(f, this.selectedKey);
+          if (!this.draft.refs.includes(path)) this.draft.refs.push(path);
+        } catch (e) { errors.push(e.message); }
+      }
+    } finally {
+      this.uploading = false;
+    }
+    if (errors.length) ui.notifications.warn(game.i18n.format("AIIMG.Config.UploadFailed", { error: errors.join("; ") }));
+    this.render();
   }
 
   /** Like #readForm but leaves width/height as the size handler set them. */
@@ -203,6 +256,10 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
         this.render();
       }
     }).render({ force: true });
+  }
+
+  static #onUploadRefs() {
+    this.element.querySelector("input[name=refUpload]")?.click();
   }
 
   static #onRemoveRef(event, target) {

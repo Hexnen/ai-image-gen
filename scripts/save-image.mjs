@@ -50,6 +50,32 @@ export async function saveImageBlob(blob, { system = "core", docType = "Document
   return res.path;
 }
 
+export const MAX_REF_BYTES = 20 * 1024 * 1024;
+const REF_EXT = { "image/png": "png", "image/webp": "webp", "image/jpeg": "jpg", "image/gif": "gif", "image/avif": "avif" };
+
+/** Folder for the permanent references of an image type key (`<system>.<Doc>.<type>`). */
+export function refsDirFor(typeKey) {
+  const [system = "core", ...rest] = String(typeKey).split(".");
+  return `${MODULE_ID}/_refs/${slug(system, "core")}/${slug(rest.join("-"), "type")}`;
+}
+
+/**
+ * Upload original bytes (no re-encoding) of a reference image to `ai-image-gen/_refs/<system>/<type>/`.
+ * Throws for non-images and files over 20 MB.
+ * @returns {Promise<string>} stored path
+ */
+export async function saveRefFile(file, typeKey) {
+  if (!file?.type?.startsWith("image/")) throw new Error(`${file?.name ?? "file"}: not an image`);
+  if (file.size > MAX_REF_BYTES) throw new Error(`${file.name}: larger than ${MAX_REF_BYTES / 1048576} MB`);
+  const dir = refsDirFor(typeKey);
+  await ensureDir(dir);
+  const base = (file.name ?? "").replace(/\.[^.]+$/, "");
+  const filename = `${slug(base, "ref")}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}.${REF_EXT[file.type] ?? "png"}`;
+  const res = await FP().upload("data", dir, new File([file], filename, { type: file.type }), {}, { notify: false });
+  if (!res?.path) throw new Error(`Upload failed for ${dir}/${filename}`);
+  return res.path;
+}
+
 /** Set `field` (dot-path, default "img") on the document with the given UUID. */
 export async function applyImage(uuid, path, field = "img") {
   const doc = await fromUuid(uuid);

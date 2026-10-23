@@ -138,7 +138,7 @@
   "AIIMG.Gen.ExtraRefs": "Dodatkowe obrazy referencyjne (tylko to wywołanie)",
   "AIIMG.Gen.AddImages": "Dodaj obrazy…",
   "AIIMG.Gen.RemoveRef": "Usuń obraz referencyjny",
-  "AIIMG.Gen.ExtraRefsHint": "Wybierz pliki, upuść tu obrazy albo wklej obraz przez Ctrl+V. Nigdzie się nie zapisują (maks. {mb} MB każdy).",
+  "AIIMG.Gen.ExtraRefsHint": "Wybierz pliki, upuść tu obrazy albo wklej obraz przez Ctrl+V. Dotyczą tylko tego wywołania, chyba że zaznaczysz pole poniżej (maks. {mb} MB każdy).",
   "AIIMG.Gen.TooManyRefs": "Za dużo obrazów referencyjnych: {total} (maks. {max} dla tego modelu).",
   "AIIMG.Gen.RefsRejected": "Pominięto (to nie obraz albo za duży): {files}",
   "AIIMG.Gen.Versions": "Wersje",
@@ -164,5 +164,11 @@
   "AIIMG.Pick.DocMissing": "Dokument docelowy już nie istnieje.",
   "AIIMG.Pick.Ready": "Batch dla {name} gotowy: wybierz wersję.",
   "AIIMG.Pick.Open": "Wybierz",
-  "AIIMG.Batches.Status.awaiting-pick": "Wybierz wersję"
+  "AIIMG.Batches.Status.awaiting-pick": "Wybierz wersję",
+  "AIIMG.Config.UploadRefsTip": "Wgraj z komputera",
+  "AIIMG.Config.RefsUploadHint": "Wgraj z komputera, upuść tu obrazy albo wklej przez Ctrl+V, gdy ten obszar ma fokus. Pliki trafiają do ai-image-gen/_refs/<system>/<typ>/. Usunięcie referencji tylko ją odpina; Foundry nie kasuje plików, więc plik zostaje na dysku.",
+  "AIIMG.Config.UploadFailed": "Nie udało się wgrać referencji: {error}",
+  "AIIMG.Gen.SaveRef": "Zapisz jako stałą referencję tego typu",
+  "AIIMG.Gen.RefsSaved": "Zapisano {n} obraz(ów) referencyjnych w konfiguracji tego typu.",
+  "AIIMG.Gen.RefsSaveFailed": "Nie udało się zapisać referencji: {error}"
 }

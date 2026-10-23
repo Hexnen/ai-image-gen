@@ -104,3 +104,7 @@
 .aiimg-pick-footer { align-items: center; }
 .aiimg-pick-footer .aiimg-keep { display: flex; align-items: center; gap: 4px; margin-right: auto; font-size: var(--font-size-12); }
 .aiimg-status-awaiting-pick { color: var(--color-warm-2, #ff6400); }
+
+.aiimg-refs { padding: 4px; border: 1px dashed transparent; border-radius: 6px; outline: none; }
+.aiimg-refs:focus-visible, .aiimg-refs.aiimg-dragging { border-color: var(--color-warm-2, #c9593f); background: rgba(255, 255, 255, .04); }
+.aiimg-saveref { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: var(--font-size-12); }

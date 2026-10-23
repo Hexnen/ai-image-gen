@@ -90,7 +90,7 @@
 
     <div class="form-group stacked">
       <label>{{localize "AIIMG.Config.Refs"}}</label>
-      <div class="aiimg-refs">
+      <div class="aiimg-refs" tabindex="0">
         {{#each refs}}
         <figure>
           <img src="{{path}}" alt="">
@@ -98,7 +98,12 @@
         </figure>
         {{/each}}
         <button type="button" class="aiimg-add" data-action="addRef" data-tooltip="AIIMG.Config.AddRef"><i class="fa-solid fa-plus"></i></button>
+        {{#if isGM}}
+        <button type="button" class="aiimg-add" data-action="uploadRefs" data-tooltip="AIIMG.Config.UploadRefsTip"><i class="fa-solid fa-upload"></i></button>
+        <input type="file" name="refUpload" accept="image/*" multiple hidden>
+        {{/if}}
       </div>
+      {{#if isGM}}<p class="hint">{{localize "AIIMG.Config.RefsUploadHint"}}</p>{{/if}}
     </div>
 
     <div class="form-group">
