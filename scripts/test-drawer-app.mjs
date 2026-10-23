@@ -34,7 +34,8 @@ export class TestDrawerApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   /** @param {import("./config-app.mjs").ImageConfigApp} owner */
   constructor(owner) {
-    super();
+    // Unique id: closing is async, so a window reopened right away must not collide with the previous drawer.
+    super({ id: `${MODULE_ID}-test-drawer-${foundry.utils.randomID(6)}` });
     this.owner = owner;
   }
 

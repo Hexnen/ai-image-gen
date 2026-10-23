@@ -240,7 +240,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const usage = getUsage();
 
     return {
-      filters: ["all", "Actor", "Item", "Macro", ...virtualGroups()].map((g) => ({
+      filters: [...new Set(["all", "Actor", "Item", "Macro", ...virtualGroups()])].map((g) => ({
         id: g,
         active: this.groupFilter === g,
         // document groups are localized; groups added by other modules are already display names
@@ -407,7 +407,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   /** Text under the max-size chips: what the limit does to the image this draft generates. */
   #outPreview(cfg) {
-    const gen = generatedSize(cfg);
+    const gen = generatedSize(fitTestConfig(cfg)); // rozmiar po regułach modelu, nie surowy szkic (np. 1000 → 1008)
     const p = outputPreview(gen, cfg.outMaxEdge);
     if (!p) return { state: "none", text: "" };
     const mark = (box) => `${p.approx ? "≈ " : ""}${box.w}×${box.h}`;
@@ -421,7 +421,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
   #updateOutput() {
     const el = this.element;
     if (!el || !this.draft) return;
-    const gen = generatedSize(this.draft);
+    const gen = generatedSize(fitTestConfig(this.draft));
     const prev = el.querySelector("[data-role=outPrev]");
     if (prev) {
       const o = this.#outPreview(this.draft);
@@ -528,20 +528,24 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
   async #uploadFiles(files) {
     if (!files.length || !this.selectedKey || this.uploading) return;
     this.#readForm();
+    // Snapshot: switching to another type mid-upload must not move the remaining files into that type's folder/draft.
+    const key = this.selectedKey;
+    const draft = this.draft;
+    if (!draft) return;
     this.uploading = true;
     const errors = [];
     try {
       for (const f of files) {
         try {
-          const path = await saveRefFile(f, this.selectedKey);
-          if (!this.draft.refs.includes(path)) this.draft.refs.push(path);
+          const path = await saveRefFile(f, key);
+          if (!draft.refs.includes(path)) draft.refs.push(path);
         } catch (e) { errors.push(e.message); }
       }
     } finally {
       this.uploading = false;
     }
     if (errors.length) ui.notifications.warn(game.i18n.format("AIIMG.Config.UploadFailed", { error: safeMessage(errors.join("; ")) }));
-    this.render();
+    if (this.selectedKey === key && this.draft === draft) this.render();
   }
 
   /** Like #readForm but leaves width/height as the size handler set them. */
@@ -613,7 +617,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
           provider: esc(providers.PROVIDERS[cfg.provider]?.label ?? cfg.provider),
           model: esc(cfg.model), cost: estimateTest(cfg, count).toFixed(3), count
         })}</p>`,
-        yes: { default: false }
+        yes: { default: false },
+        rejectClose: false // X/Esc resolves to null → treated as "no" (v14 default, explicit here)
       });
     } finally {
       t.confirming = false;
@@ -680,10 +685,10 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     try {
       await setConfig(this.selectedKey, this.draft);
       ui.notifications.info(game.i18n.localize("AIIMG.Config.Saved"));
+      this.draft = null; // only after success: a failed save keeps the unsaved edits
     } catch (e) {
       ui.notifications.error(safeMessage(e.message));
     }
-    this.draft = null;
     this.render();
   }
 
