@@ -6,7 +6,7 @@ const DOCS = ["Actor", "Item", "Macro"];
 
 export function registerContextMenus() {
   for (const name of DOCS) {
-    Hooks.on(`get${name}ContextOptions`, (entries) => {
+    Hooks.on(`get${name}ContextOptions`, (app, entries) => { // v14 passes the directory application first
       const getDocument = (li) => game.collections.get(name)?.get(li.closest("[data-entry-id]")?.dataset.entryId);
       entries.push({
         label: game.i18n.localize("AIIMG.Sheet.Generate"),
