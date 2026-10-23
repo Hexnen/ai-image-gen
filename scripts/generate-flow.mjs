@@ -3,10 +3,10 @@ import { getKey } from "./settings.mjs";
 import { resolveTypeKey } from "./image-types.mjs";
 import { getConfig, isConfigured, renderPrompt, fitConfig, DEFAULT_CONFIG } from "./config-store.mjs";
 import * as providers from "./providers/index.mjs";
-import { assertWithinLimits, recordCost } from "./limits.mjs";
+import { reserveBudget, recordCost } from "./limits.mjs";
 import { saveImageBlob, applyImage } from "./save-image.mjs";
 import { submitBatch } from "./batch/index.mjs";
-import { estimateBatchCost } from "./batch/cost.mjs";
+import { estimateSyncCost } from "./batch/cost.mjs";
 import { logCall, updateCall, tokensFrom } from "./call-log.mjs";
 
 const FIELD = "img";
@@ -14,17 +14,69 @@ const FIELD = "img";
 export const MAX_VERSIONS = 8;
 export const MAX_EXTRA_REF_BYTES = 20 * 1024 * 1024;
 const FAST_CONCURRENCY = 3;
+/** Szacunek, gdy wyliczenie kosztu się nie uda: nie 0, bo 0 wyłącza wszystkie limity. */
+const FALLBACK_ESTIMATE = 0.25;
+/** Formaty referencji akceptowane przez wszystkich providerów. */
+const REF_TYPES = ["image/png", "image/jpeg", "image/webp"];
 
-/** Wczytaj obrazy referencyjne (ścieżki z konfiguracji) jako Blob-y. */
+/** Konwersja obrazu w innym formacie (gif/avif/bmp…) do PNG przez canvas. */
+async function convertToPng(blob) {
+  const bmp = await createImageBitmap(blob);
+  const canvas = typeof OffscreenCanvas === "function"
+    ? new OffscreenCanvas(bmp.width, bmp.height)
+    : Object.assign(document.createElement("canvas"), { width: bmp.width, height: bmp.height });
+  canvas.getContext("2d").drawImage(bmp, 0, 0);
+  bmp.close?.();
+  if (canvas.convertToBlob) return canvas.convertToBlob({ type: "image/png" });
+  return new Promise((res, rej) => canvas.toBlob((b) => (b ? res(b) : rej(new Error("toBlob failed"))), "image/png"));
+}
+
+/** Format po magic bytes: "image/png|jpeg|webp", "other" (rozpoznany inny: gif/bmp/avif…) albo null (nieznany). */
+async function sniffImage(blob) {
+  const h = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+  const ascii = (a, b) => String.fromCharCode(...h.subarray(a, b));
+  if (h[0] === 0x89 && ascii(1, 4) === "PNG") return "image/png";
+  if (h[0] === 0xff && h[1] === 0xd8) return "image/jpeg";
+  if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "image/webp";
+  if (ascii(0, 3) === "GIF" || ascii(0, 2) === "BM" || ascii(4, 8) === "ftyp" || ascii(0, 4) === "RIFF") return "other";
+  return null;
+}
+
+/**
+ * Referencja musi być png/jpeg/webp WEDŁUG ZAWARTOŚCI (deklarowany typ bywa kłamliwy): inne rozpoznane
+ * formaty konwertujemy do PNG przez canvas albo odrzucamy z czytelnym błędem.
+ */
+async function normalizeRef(blob, label) {
+  const sniffed = await sniffImage(blob);
+  if (sniffed && sniffed !== "other") return blob.type === sniffed ? blob : new Blob([blob], { type: sniffed });
+  if (!sniffed && REF_TYPES.includes(blob.type)) return blob; // nieznana zawartość, ale deklarowany typ jest dozwolony
+  try {
+    return await convertToPng(blob);
+  } catch {
+    throw new Error(`Reference image ${label}: unsupported format (${sniffed === "other" ? "not PNG/JPEG/WebP" : blob.type || "unknown"}). Use PNG, JPEG or WebP.`);
+  }
+}
+
+/** Wczytaj obrazy referencyjne (ścieżki z konfiguracji) jako Blob-y (bez duplikatów ścieżek). */
 export async function loadRefs(paths = []) {
   const out = [];
-  for (const p of paths) {
+  for (const p of [...new Set(paths)]) {
     const url = /^(https?:|data:|blob:)/.test(p) ? p : foundry.utils.getRoute(p);
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Reference image ${p}: HTTP ${res.status}`);
-    out.push(await res.blob());
+    out.push(await normalizeRef(await res.blob(), p));
   }
   return out;
+}
+
+/**
+ * Rzuca, gdy wynik nie mógłby zostać zastosowany do dokumentu — wołać PRZED płatnym wywołaniem:
+ * brak UUID (niezapisany), brak uprawnienia do edycji, dokument w zablokowanym kompendium (także embedded).
+ */
+export function assertCanApply(doc) {
+  if (!doc?.uuid) throw new Error("Save the document first: it has no UUID, so the image could not be applied.");
+  if (doc.canUserModify && !doc.canUserModify(game.user, "update")) throw new Error("You do not have permission to modify this document.");
+  if (doc.compendium?.locked ?? doc.parent?.compendium?.locked) throw new Error("This document is in a locked compendium.");
 }
 
 /** Maks. liczba obrazów referencyjnych dla modelu (OpenAI edits 16, Gemini wg katalogu, reszta 14). */
@@ -75,14 +127,14 @@ function describe(document, description) {
   return { key, cfg, prompt, meta };
 }
 
-/** Szacunek kosztu pojedynczego żądania (sync ≈ 2× batch). 0 gdy nieznany. */
+/** Szacunek kosztu pojedynczego żądania (sync; OpenRouter: stała ostrożna kwota). Nigdy 0 przy błędzie wyliczenia. */
 function estimateFast(cfg, refCount) {
   try {
-    return estimateBatchCost(cfg.provider, cfg.model, [{
+    return estimateSyncCost(cfg.provider, cfg.model, [{
       refs: new Array(refCount), width: cfg.width, height: cfg.height, quality: cfg.quality, imageSize: cfg.imageSize
-    }]) * 2;
+    }]);
   } catch {
-    return 0;
+    return FALLBACK_ESTIMATE;
   }
 }
 
@@ -106,6 +158,7 @@ function validateRun(cfg, count, extraRefs) {
   if (total > max) throw new Error(`Too many reference images: ${total} (max ${max} for this model).`);
   for (const b of extraRefs) {
     if (!/^image\//.test(b.type || "")) throw new Error("Extra references must be images.");
+    if (!REF_TYPES.includes(b.type)) throw new Error(`Unsupported reference format (${b.type.replace("image/", "")}). Use PNG, JPEG or WebP.`);
     if (b.size > MAX_EXTRA_REF_BYTES) throw new Error(`A reference image is larger than ${MAX_EXTRA_REF_BYTES / 1048576} MB.`);
   }
   return total;
@@ -124,18 +177,36 @@ function logBase(document, description, key, cfg, prompt, kind, refsTotal) {
   };
 }
 
-/** Wykonaj `count` zadań z ograniczoną współbieżnością; zadanie nigdy nie przerywa reszty. */
-async function pool(count, limit, task) {
+/**
+ * Wykonaj `count` zadań z ograniczoną współbieżnością; zadanie nigdy nie przerywa reszty.
+ * Po anulowaniu (signal.aborted) kolejne zadania NIE startują i są oznaczone `skipped` (bez N błędów "Aborted").
+ */
+async function pool(count, limit, signal, task) {
   const out = new Array(count);
   let next = 0;
   const worker = async () => {
     while (next < count) {
+      if (signal?.aborted) {
+        while (next < count) out[next++] = { ok: false, skipped: true, error: "Cancelled.", cost: 0, costKind: "actual" };
+        return;
+      }
       const i = next++;
-      out[i] = await task(i).then((v) => ({ ok: true, ...v }), (e) => ({ ok: false, error: e?.message ?? String(e) }));
+      out[i] = await task(i).catch((e) => ({ ok: false, error: e?.message ?? String(e), cost: 0, costKind: "actual" }));
     }
   };
   await Promise.all(Array.from({ length: Math.min(limit, count) }, worker));
   return out;
+}
+
+/**
+ * Opis nieudanego żądania. Koszt: rzeczywisty, jeśli provider go podał w błędzie (odpowiedź bez obrazu bywa
+ * rozliczona); przy timeoucie/anulowaniu w locie serwer mógł dokończyć i naliczyć, więc księgujemy SZACUNEK.
+ */
+function failure(e, startMs, estShare) {
+  let cost = Number(e?.cost) || 0;
+  let costKind = "actual";
+  if (!cost && (e?.name === "TimeoutError" || e?.name === "AbortError")) { cost = estShare; costKind = "estimated"; }
+  return { ok: false, error: e?.message ?? String(e), cost, costKind, durationMs: performance.now() - startMs, cancelled: e?.name === "AbortError" };
 }
 
 /**
@@ -146,6 +217,7 @@ async function pool(count, limit, task) {
  *   failed:{index:number, error:string}[], cost:number, meta:object, prompt:string, key:string}>}
  */
 export async function generateCandidates(document, description, { count = 1, extraRefs = [], signal } = {}) {
+  assertCanApply(document); // zanim cokolwiek zapłacimy
   const { key, cfg, prompt, meta } = describe(document, description);
   return executeGeneration({ doc: document, description, key, cfg, prompt, meta, count, extraRefs, signal, runKind: "fast" });
 }
@@ -167,16 +239,28 @@ async function executeGeneration({ doc: document, description, key, cfg, prompt,
     refsTotal = validateRun(cfg, count, extraRefs);
   } catch (e) { throw await preFail(e); }
   const est = estimateFast(cfg, refsTotal) * count;
+  // Rezerwacja: równoległe wywołania (inne okno, szuflada testu, regenerate) widzą ten szacunek, zanim koszt zostanie zaksięgowany.
+  let release;
   try {
-    assertWithinLimits(est, { count });
+    release = reserveBudget(est, { count });
   } catch (e) { throw await preFail(e, "limit-blocked", "blocked", est, "estimated"); }
+  try {
+    return await runGeneration({ document, description, key, cfg, prompt, meta, count, extraRefs, signal, ts, base, est, apiKey });
+  } finally {
+    release();
+  }
+}
 
-  const refs = [...(await loadRefs(cfg.refs)), ...extraRefs];
+async function runGeneration({ document, description, key, cfg, prompt, meta, count, extraRefs, signal, ts, base, est, apiKey }) {
+  const normalizedExtra = [];
+  for (const [i, b] of extraRefs.entries()) normalizedExtra.push(await normalizeRef(b, `#${i + 1}`));
+  const refs = [...(await loadRefs(cfg.refs)), ...normalizedExtra];
   const common = {
     provider: cfg.provider, apiKey, model: cfg.model, prompt, refs,
     width: cfg.width, height: cfg.height, quality: cfg.quality,
     imageSize: cfg.imageSize, thinkingLevel: cfg.thinkingLevel, signal
   };
+  const share = est / count;
   const results = [];
   const t0 = performance.now();
   if (cfg.provider === "openai") {
@@ -184,17 +268,27 @@ async function executeGeneration({ doc: document, description, key, cfg, prompt,
       const r = await providers.generate({ ...common, n: count });
       const blobs = r.blobs ?? [r.blob];
       blobs.forEach((blob) => results.push({
-        ok: true, blob, cost: r.cost / blobs.length, raw: r.raw, route: r.route, durationMs: performance.now() - t0
+        ok: true, blob, cost: r.cost / blobs.length, costKind: r.costEstimated ? "estimated" : "actual",
+        raw: r.raw, route: r.route, durationMs: performance.now() - t0
       }));
-      for (let i = blobs.length; i < count; i++) results.push({ ok: false, error: "The API returned fewer images than requested." });
+      for (let i = blobs.length; i < count; i++) results.push({ ok: false, error: "The API returned fewer images than requested.", cost: 0, costKind: "actual" });
     } catch (e) {
-      for (let i = 0; i < count; i++) results.push({ ok: false, error: e?.message ?? String(e), durationMs: performance.now() - t0 });
+      // jedno żądanie na wszystkie wersje: ewentualny koszt (np. szacunek po timeoucie) księgujemy RAZ
+      const f = failure(e, t0, est);
+      for (let i = 0; i < count; i++) results.push(i === 0 ? f : { ...f, cost: 0 });
     }
   } else {
-    const rs = await pool(count, FAST_CONCURRENCY, async () => {
+    const rs = await pool(count, FAST_CONCURRENCY, signal, async () => {
       const s = performance.now();
-      const r = await providers.generate(common);
-      return { blob: r.blob, cost: r.cost, raw: r.raw, route: r.route, durationMs: performance.now() - s };
+      try {
+        const r = await providers.generate(common);
+        return {
+          ok: true, blob: r.blob, cost: r.cost, costKind: r.costEstimated ? "estimated" : "actual",
+          raw: r.raw, route: r.route, durationMs: performance.now() - s
+        };
+      } catch (e) {
+        return failure(e, s, share);
+      }
     });
     results.push(...rs);
   }
@@ -203,24 +297,26 @@ async function executeGeneration({ doc: document, description, key, cfg, prompt,
   let total = 0;
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
+    total += r.cost ?? 0;
+    if (r.skipped) { failed.push({ index: i, error: r.error }); continue; } // anulowane przed startem: bez wpisu w logu
     const vbase = { ...base, ts, itemId: count > 1 ? `v${i + 1}/${count}` : undefined };
     if (r.ok) {
       const entry = await logCall({
-        ...vbase, status: "ok", durationMs: r.durationMs, route: r.route, cost: r.cost, costKind: "actual",
+        ...vbase, status: "ok", durationMs: r.durationMs, route: r.route, cost: r.cost, costKind: r.costKind,
         // tokeny OpenAI dotyczą całego żądania (n obrazów): tylko przy pojedynczej wersji
         tokens: cfg.provider === "openai" && count > 1 ? undefined : tokensFrom(r.raw) ?? undefined
       });
-      total += r.cost;
       candidates.push({ index: i, blob: r.blob, cost: r.cost, logId: entry?.id });
     } else {
-      await logCall({ ...vbase, status: "error", durationMs: r.durationMs ?? performance.now() - t0, cost: 0, costKind: "actual", error: r.error });
+      await logCall({ ...vbase, status: "error", durationMs: r.durationMs ?? performance.now() - t0, cost: r.cost ?? 0, costKind: r.costKind ?? "actual", error: r.error });
       failed.push({ index: i, error: r.error });
     }
   }
-  await recordCost(total); // koszt jest realny nawet gdy zapis się nie uda
+  await recordCost(total); // koszt jest realny (albo szacowany po timeoucie) nawet gdy zapis się nie uda
   if (!candidates.length) {
     const e = new Error(failed[0]?.error ?? "Generation failed.");
     e.aiimgLogged = true;
+    if (results.every((r) => r.skipped || r.cancelled)) e.name = "AbortError";
     throw e;
   }
   return { candidates, failed, cost: total, meta, prompt, key };
@@ -272,6 +368,12 @@ export async function runFast(document, description, { signal, extraRefs = [] } 
     return await commitCandidate(document, cand, res.meta);
   } catch (e) {
     if (cand.logId) await updateCall(cand.logId, { status: "error", error: `After generation: ${e.message}` });
+    // Obraz jest już opłacony: nie gubimy go, tylko oddajemy do okna wyboru (zapis można powtórzyć stamtąd).
+    try {
+      const { PickApp } = await import("./pick-app.mjs"); // dynamicznie: pick-app importuje ten plik
+      PickApp.open({ document, candidates: [cand], meta: res.meta, source: "memory" });
+      e.message += " The generated image was kept in the picker window: save it from there.";
+    } catch { /* okno niedostępne: zostaje oryginalny błąd */ }
     throw e;
   }
 }
@@ -282,10 +384,13 @@ export async function runFast(document, description, { signal, extraRefs = [] } 
  * @returns {Promise<object>} rekord batcha
  */
 export async function runBatch(document, description, { count = 1, extraRefs = [] } = {}) {
+  assertCanApply(document); // zanim cokolwiek zapłacimy
   const { cfg, prompt, meta } = describe(document, description);
   if (!prompt.trim()) throw new Error("Empty prompt.");
   validateRun(cfg, count, extraRefs);
-  const refs = [...(await loadRefs(cfg.refs)), ...extraRefs];
+  const extra = [];
+  for (const [i, b] of extraRefs.entries()) extra.push(await normalizeRef(b, `#${i + 1}`));
+  const refs = [...(await loadRefs(cfg.refs)), ...extra];
   const items = Array.from({ length: count }, (_, i) => ({
     id: foundry.utils.randomID(),
     prompt, refs, width: cfg.width, height: cfg.height, quality: cfg.quality,
