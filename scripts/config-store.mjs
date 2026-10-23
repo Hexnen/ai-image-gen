@@ -1,5 +1,6 @@
 import { MODULE_ID, PROVIDER_IDS } from "./constants.mjs";
 import * as providers from "./providers/index.mjs";
+import { DEFAULT_OUTPUT, MAX_EDGES, FORMATS } from "./optimize.mjs";
 
 export const DEFAULT_CONFIG = Object.freeze({
   provider: "openai",
@@ -11,7 +12,11 @@ export const DEFAULT_CONFIG = Object.freeze({
   defaultMode: "fast",
   quality: "medium",
   imageSize: "1K",     // Gemini
-  thinkingLevel: ""    // Gemini; "" = domyślny modelu
+  thinkingLevel: "",   // Gemini; "" = domyślny modelu
+  // Output: co zapisujemy na dysk (nie zmienia żądania do API). outMaxEdge 0 = bez zmniejszania.
+  outMaxEdge: DEFAULT_OUTPUT.maxEdge,
+  outFormat: DEFAULT_OUTPUT.format,
+  outQuality: DEFAULT_OUTPUT.quality
 });
 
 /** Wszystkie wartości jakości (UI pokazuje podzbiór wg modelu: providers.modelCaps). */
@@ -26,12 +31,23 @@ export function sizePresetsFor(provider, model) {
   return (caps?.presets ?? ["1024x1024", "1536x1024", "1024x1536", "1536x864"]).map(toPreset);
 }
 
+/** Pola „Output” z wartościami w dozwolonym zakresie (stare zapisy bez nich dostają domyślne). */
+export function normalizeOutput(cfg = {}) {
+  const edge = Number(cfg.outMaxEdge);
+  const q = Number(cfg.outQuality);
+  return {
+    outMaxEdge: Number.isFinite(edge) && MAX_EDGES.includes(Math.round(edge)) ? Math.round(edge) : DEFAULT_OUTPUT.maxEdge,
+    outFormat: FORMATS.includes(cfg.outFormat) ? cfg.outFormat : DEFAULT_OUTPUT.format,
+    outQuality: Number.isFinite(q) ? Math.min(1, Math.max(0.5, Math.round(q * 100) / 100)) : DEFAULT_OUTPUT.quality
+  };
+}
+
 /**
  * Dopasuj konfigurację do możliwości jej modelu (czysta funkcja, bez zapisu): jakość OpenAI,
  * rozmiar i thinking Gemini, rozmiar 2.5 do reguł API. Stare zapisy bez nowych pól dostają domyślne.
  */
 export function fitConfig(cfg) {
-  const out = { ...cfg };
+  const out = { ...cfg, ...normalizeOutput(cfg) };
   if (out.provider === "openai") {
     out.quality = providers.fitOpenAIQuality(out.model, out.quality);
     if (providers.openaiCustomSize(out.model)) {
@@ -108,7 +124,8 @@ export async function setConfig(key, data) {
     defaultMode: data.defaultMode === "batch" ? "batch" : "fast",
     quality: QUALITIES.includes(data.quality) ? data.quality : DEFAULT_CONFIG.quality,
     imageSize: String(data.imageSize ?? DEFAULT_CONFIG.imageSize),
-    thinkingLevel: String(data.thinkingLevel ?? "")
+    thinkingLevel: String(data.thinkingLevel ?? ""),
+    ...normalizeOutput(data)
   };
   clean = fitConfig(clean);
   if (!providers.PROVIDERS[clean.provider]?.supportsBatch) clean.defaultMode = "fast";

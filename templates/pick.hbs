@@ -7,7 +7,7 @@
         <img src="{{src}}" alt="#{{index}}">
       </button>
       <figcaption>
-        <span>#{{index}}{{#if cost}} · {{cost}}{{/if}}</span>
+        <span>#{{index}}{{#if cost}} · {{cost}}{{/if}}{{#if size}} · <small class="aiimg-size" data-role="size" data-uid="{{uid}}" data-tooltip="AIIMG.Pick.SizeTip">{{size}}</small>{{/if}}</span>
         <button type="button" class="primary" data-action="use" data-uid="{{uid}}" {{#if ../busy}}disabled{{/if}}>
           <i class="fa-solid fa-check"></i> {{localize "AIIMG.Pick.Use"}}
         </button>

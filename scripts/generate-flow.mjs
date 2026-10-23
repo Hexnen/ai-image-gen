@@ -4,10 +4,11 @@ import { resolveTypeKey } from "./image-types.mjs";
 import { getConfig, isConfigured, renderPrompt, fitConfig, DEFAULT_CONFIG } from "./config-store.mjs";
 import * as providers from "./providers/index.mjs";
 import { reserveBudget, recordCost } from "./limits.mjs";
-import { saveImageBlob, applyImage } from "./save-image.mjs";
+import { saveImageBlobEx, applyImage } from "./save-image.mjs";
 import { submitBatch } from "./batch/index.mjs";
 import { estimateSyncCost } from "./batch/cost.mjs";
 import { logCall, updateCall, tokensFrom } from "./call-log.mjs";
+import { outputOptsFromConfig, statsPatch } from "./optimize.mjs";
 
 const FIELD = "img";
 
@@ -355,17 +356,23 @@ export async function generateTest(draft, key, { description = "", name = "", ty
 
 /** Zapisz kandydata (Blob) do folderu typu; opcjonalnie podepnij pod dokument. @returns {Promise<string>} ścieżka */
 export async function commitCandidate(document, candidate, meta, { apply = true } = {}) {
-  const path = await saveImageBlob(candidate.blob, meta);
+  // Rozmiar/format zapisu z konfiguracji typu (sekcja Output); obraz do API jest już wysłany, to dotyczy tylko pliku.
+  const optimize = outputOptsFromConfig(meta?.typeKey ? getConfig(meta.typeKey) : {});
+  const { path, stats } = await saveImageBlobEx(candidate.blob, { ...meta, optimize, preOptimized: candidate.opt });
+  candidate.saved = stats;
+  if (candidate.logId) await updateCall(candidate.logId, statsPatch(stats));
   if (apply) await applyImage(document.uuid, path, FIELD);
   return path;
 }
 
 /** Fast dla jednej wersji: generuj, zapisz plik i podmień obraz dokumentu. @returns {Promise<string>} ścieżka */
-export async function runFast(document, description, { signal, extraRefs = [] } = {}) {
+export async function runFast(document, description, { signal, extraRefs = [], onSaved } = {}) {
   const res = await generateCandidates(document, description, { count: 1, extraRefs, signal });
   const cand = res.candidates[0];
   try {
-    return await commitCandidate(document, cand, res.meta);
+    const path = await commitCandidate(document, cand, res.meta);
+    onSaved?.(cand.saved);
+    return path;
   } catch (e) {
     if (cand.logId) await updateCall(cand.logId, { status: "error", error: `After generation: ${e.message}` });
     // Obraz jest już opłacony: nie gubimy go, tylko oddajemy do okna wyboru (zapis można powtórzyć stamtąd).

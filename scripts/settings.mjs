@@ -1,7 +1,8 @@
 import { MODULE_ID, PROVIDER_IDS } from "./constants.mjs";
 import { SLOTS, slotKey } from "./batch/record.mjs";
+import { syncOptimizerProfile } from "./optimize.mjs";
 
-const { NumberField, StringField, ObjectField } = foundry.data.fields;
+const { NumberField, StringField, ObjectField, BooleanField } = foundry.data.fields;
 
 /** Bieżący schemat danych modułu (migracje w migrate.mjs). */
 export const SCHEMA_VERSION = 2;
@@ -32,6 +33,17 @@ export function registerSettings() {
   limit("monthly", 50);       // USD per month, 0 = unlimited
   limit("perRequest", 1);     // USD, max estimated cost of one request, 0 = unlimited
   limit("batchSize", 50);     // max images in one batch, 0 = unlimited
+
+  // Zmniejszanie/WebP wyników przed zapisem (szczegóły per typ: sekcja „Output” w konfiguracji typu).
+  game.settings.register(MODULE_ID, "optimizeImages", {
+    name: "AIIMG.Settings.OptimizeImages.Name",
+    hint: "AIIMG.Settings.OptimizeImages.Hint",
+    scope: "world",
+    config: true,
+    restricted: true,
+    type: new BooleanField({ initial: true }),
+    onChange: () => syncOptimizerProfile()
+  });
 
   // Hidden state.
   game.settings.register(MODULE_ID, "usage", {

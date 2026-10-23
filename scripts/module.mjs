@@ -13,6 +13,7 @@ import { GenerateDialog } from "./generate-dialog.mjs";
 import { registerSheetButtons } from "./sheet-button.mjs";
 import { openPickForBatch } from "./pick-app.mjs";
 import { runMigrations } from "./migrate.mjs";
+import { syncOptimizerProfile } from "./optimize.mjs";
 
 /** GM-owe powiadomienie: batch z wieloma wersjami czeka na wybór (klik w powiadomienie otwiera okno). */
 function notifyPick(rec) {
@@ -39,6 +40,8 @@ Hooks.once("ready", async () => {
   // Log (prompty, koszty) i silnik batcha tylko dla GM-a: gracz nie ma ich ani przez API modułu.
   if (game.user.isGM) Object.assign(api, { batch, callLog });
   game.modules.get(MODULE_ID).api = api;
+  // local-media-optimizer (jeśli jest): profil folderu ai-image-gen/ z naszymi domyślnymi limitami.
+  syncOptimizerProfile();
   if (game.user.isGM) {
     try { await runMigrations(); }
     catch (e) { console.error(`${MODULE_ID} | migration failed (will retry next start)`, e); }

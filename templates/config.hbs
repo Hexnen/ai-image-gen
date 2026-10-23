@@ -82,6 +82,25 @@
     </div>
     {{/if}}
 
+    <fieldset class="aiimg-output">
+      <legend>{{localize "AIIMG.Config.Output"}}</legend>
+      <div class="form-group">
+        <label>{{localize "AIIMG.Config.OutMaxEdge"}}</label>
+        <select name="outMaxEdge" {{#unless isGM}}disabled{{/unless}}>
+          {{#each outEdges}}<option value="{{value}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>{{localize "AIIMG.Config.OutFormat"}}</label>
+        <select name="outFormat" {{#unless isGM}}disabled{{/unless}}>
+          {{#each outFormats}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+        </select>
+        <input type="number" name="outQualityPct" value="{{outQualityPct}}" min="50" max="100" step="5" {{#unless isGM}}disabled{{/unless}} aria-label="{{localize 'AIIMG.Config.OutQuality'}}">
+        <span>%</span>
+      </div>
+      <p class="hint">{{localize "AIIMG.Config.OutHint"}} {{#if outOn}}<em>{{outVia}}</em>{{else}}<strong>{{localize "AIIMG.Config.OutOff"}}</strong>{{/if}}</p>
+    </fieldset>
+
     <div class="form-group stacked">
       <label>{{localize "AIIMG.Config.Prompt"}}</label>
       <textarea name="promptTemplate" rows="5">{{cfg.promptTemplate}}</textarea>

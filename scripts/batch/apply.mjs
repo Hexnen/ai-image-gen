@@ -1,7 +1,9 @@
 // Zastosowanie jednego wyniku batcha: zapis pliku + podpięcie pod dokument.
 // Koszt NIE jest tu księgowany: robi to ingest.mjs dopiero po zapisaniu markera postępu
 // (inaczej crash między kosztem a markerem liczył koszt drugi raz po wznowieniu).
-import { saveImageBlob, applyImage } from "../save-image.mjs";
+import { saveImageBlobEx, applyImage } from "../save-image.mjs";
+import { getConfig } from "../config-store.mjs";
+import { outputOptsFromConfig } from "../optimize.mjs";
 
 /** Katalog kandydatów batcha z wieloma wersjami (Foundry nie pozwala modułowi kasować plików). */
 export const candidateDir = (batchId) => `ai-image-gen/_candidates/${batchId}`;
@@ -18,23 +20,28 @@ export const isPermanentApplyError = (e) => /Document not found/i.test(String(e?
  * @returns {Promise<{ok:boolean, error?:string, path?:string, candidate?:boolean, permanent?:boolean}>}
  */
 export async function applyBatchItem(item, blob, rec, savedPath) {
-  let path = savedPath;
+  let path = savedPath, stats = null;
   try {
     if (!path) {
-      path = rec?.pick
-        ? await saveImageBlob(blob, { name: item.meta?.name ?? item.id, dir: candidateDir(rec.id) })
-        : await saveImageBlob(blob, {
+      // Zapisujemy to, co zapisałby Fast: rozmiar/format z konfiguracji typu (Output).
+      const optimize = outputOptsFromConfig(item.meta?.typeKey ? getConfig(item.meta.typeKey) : {});
+      const r = rec?.pick
+        ? await saveImageBlobEx(blob, { name: item.meta?.name ?? item.id, dir: candidateDir(rec.id), optimize })
+        : await saveImageBlobEx(blob, {
             system: item.meta?.system,
             docType: item.meta?.docType,
             name: item.meta?.name ?? item.id,
+            optimize
           });
+      path = r.path;
+      stats = r.stats;
     }
-    if (rec?.pick) return { ok: true, path, candidate: true };
+    if (rec?.pick) return { ok: true, path, candidate: true, stats };
     await applyImage(item.target.uuid, path, item.target.field ?? "img");
   } catch (e) {
     return { ok: false, error: String(e?.message ?? e), path, permanent: isPermanentApplyError(e) };
   }
-  return { ok: true, path };
+  return { ok: true, path, stats };
 }
 
 /**

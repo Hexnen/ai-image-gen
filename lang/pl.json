@@ -226,5 +226,21 @@
   "AIIMG.Batches.AbandonTitle": "Porzuć batch",
   "AIIMG.Batches.AbandonBody": "Przestać śledzić ten batch? Zostanie anulowany u dostawcy, jeśli to możliwe, a jego wyniki nie będą już pobierane.",
   "AIIMG.Batches.GMOnly": "Tylko GM może zarządzać batchami.",
-  "AIIMG.Pick.AlreadyDecided": "Ten batch został już rozstrzygnięty w innym oknie."
+  "AIIMG.Pick.AlreadyDecided": "Ten batch został już rozstrzygnięty w innym oknie.",
+  "AIIMG.Settings.OptimizeImages.Name": "Optymalizuj obrazy AI",
+  "AIIMG.Settings.OptimizeImages.Hint": "Zmniejsza i koduje ponownie wygenerowane obrazy przed zapisem (limit i format per typ obrazka w ustawieniach typu). Używa Media Optimizer (Local), gdy jest aktywny. Żądanie wysyłane do AI nigdy się nie zmienia.",
+  "AIIMG.Config.Output": "Zapisywany plik (output)",
+  "AIIMG.Config.OutMaxEdge": "Dłuższy bok",
+  "AIIMG.Config.OutNoResize": "Bez zmniejszania",
+  "AIIMG.Config.OutFormat": "Format i jakość",
+  "AIIMG.Config.OutQuality": "Jakość w procentach",
+  "AIIMG.Config.OutHint": "Dotyczy zapisywanego pliku, nie żądania. Nigdy nie powiększa; oryginał zostaje, gdy nie jest mniejszy.",
+  "AIIMG.Config.OutViaLmo": "Koduje Media Optimizer (Local) {v}.",
+  "AIIMG.Config.OutViaBuiltin": "Wbudowany koder (zainstaluj Media Optimizer (Local) 1.1+, by dzielić jego ustawienia).",
+  "AIIMG.Config.OutOff": "Optymalizacja jest wyłączona w ustawieniach modułu.",
+  "AIIMG.Gen.SavedAs": "Zapis jako",
+  "AIIMG.Gen.OutputOff": "oryginał (optymalizacja wyłączona)",
+  "AIIMG.Gen.DoneSized": "Obraz dla {name} zapisany ({before} → {after}).",
+  "AIIMG.Pick.SizeTip": "Rozmiar pliku: oryginał → tak, jak zostanie zapisany",
+  "AIIMG.Log.Optimized": "Rozmiar pliku (przed → po)"
 }

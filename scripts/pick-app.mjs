@@ -3,6 +3,8 @@ import { commitCandidate } from "./generate-flow.mjs";
 import { applyImage } from "./save-image.mjs";
 import { getBatch, patchBatch } from "./batch/record.mjs";
 import { safeMessage } from "./redact.mjs";
+import { getConfig } from "./config-store.mjs";
+import { optimizeForSave, optimizeEnabled, outputOptsFromConfig, fmtBytes } from "./optimize.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin, DialogV2 } = foundry.applications.api;
 const t = (k, d) => game.i18n.format(k, d ?? {});
@@ -84,7 +86,8 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
     return {
       cands: this.cands.map((c) => ({
         uid: c.uid, index: c.index, src: c.src,
-        cost: c.cost != null && c.cost > 0 ? `$${Number(c.cost).toFixed(3)}` : ""
+        cost: c.cost != null && c.cost > 0 ? `$${Number(c.cost).toFixed(3)}` : "",
+        size: PickApp.#sizeText(c)
       })),
       memory: this.source === "memory",
       canRegenerate: this.source === "memory" && !!this.regenerate,
@@ -95,8 +98,30 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
     };
   }
 
+  /** Rozmiar pliku: oryginał, a po zmierzeniu optymalizacji „przed → po” (tak zapisze się wybrany obraz). */
+  static #sizeText(c) {
+    if (!c.blob) return "";
+    if (c.opt?.changed) return `${fmtBytes(c.opt.bytesBefore)} → ${fmtBytes(c.opt.bytesAfter)}`;
+    return fmtBytes(c.blob.size);
+  }
+
+  /** Zmierz optymalizację kandydatów w tle (wynik jest użyty przy zapisie, bez ponownego kodowania). */
+  async #measure() {
+    if (this.source !== "memory" || !optimizeEnabled()) return;
+    const opts = outputOptsFromConfig(this.meta?.typeKey ? getConfig(this.meta.typeKey) : {});
+    for (const c of this.cands) {
+      if (this.#closed) return;
+      if (c.opt || c.measuring || !c.blob) continue;
+      c.measuring = true;
+      try { c.opt = await optimizeForSave(c.blob, opts); } finally { c.measuring = false; }
+      const el = this.element?.querySelector(`[data-role=size][data-uid="${c.uid}"]`);
+      if (el) el.textContent = PickApp.#sizeText(c);
+    }
+  }
+
   _onRender(context, options) {
     super._onRender?.(context, options);
+    this.#measure();
     this.element.querySelector("input[name=keep]")
       ?.addEventListener("change", (ev) => { this.#keep = ev.target.checked; });
   }

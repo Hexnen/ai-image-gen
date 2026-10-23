@@ -1,4 +1,5 @@
 import { MODULE_ID } from "./constants.mjs";
+import { fmtBytes } from "./optimize.mjs";
 import { PROVIDERS } from "./providers/index.mjs";
 import { readLog, clearLog, toCSV, toJSON } from "./call-log.mjs";
 
@@ -146,6 +147,7 @@ export class LogApp extends HandlebarsApplicationMixin(ApplicationV2) {
           ["AIIMG.Log.Route", e.route], ["AIIMG.Log.Size", e.size], ["AIIMG.Config.Quality", e.quality],
           ["AIIMG.Log.ImageSize", e.imageSize], ["AIIMG.Log.Thinking", e.thinkingLevel],
           ["AIIMG.Log.Refs", e.refsCount], ["AIIMG.Log.Tokens", e.tokens ? `${e.tokens.in} → ${e.tokens.out}` : ""],
+          ["AIIMG.Log.Optimized", e.bytesBefore != null ? `${fmtBytes(e.bytesBefore)} → ${fmtBytes(e.bytesAfter)} (${e.optimizedVia ?? "?"})` : ""],
           ["AIIMG.Log.Description", e.description], ["AIIMG.Log.Type", e.typeKey], ["AIIMG.Log.Batch", e.batchId],
           ["AIIMG.Log.Uuid", e.docUuid], ["AIIMG.Log.User", e.user]
         ].filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => ({ label: loc(k), value: String(v) }))

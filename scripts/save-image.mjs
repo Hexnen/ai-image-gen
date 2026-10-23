@@ -1,5 +1,6 @@
 // Zapis wygenerowanego obrazu do Data/ i podpięcie go pod dokument (wspólne dla fast i batch).
 import { MODULE_ID } from "./constants.mjs";
+import { optimizeForSave, optimizeEnabled, REF_OUTPUT, fmtBytes } from "./optimize.mjs";
 
 const FP = () => foundry.applications.apps.FilePicker.implementation;
 
@@ -55,18 +56,33 @@ export async function ensureDir(path) {
 
 /**
  * Upload a blob to `ai-image-gen/<system>/<docType>/` in the user Data folder (or to `dir` when given).
- * @returns {Promise<string>} path usable as `img`
+ * With `optimize` ({maxEdge, quality, format}) the image is shrunk/re-encoded first (see optimize.mjs; skipped when
+ * the world setting "Optimize AI images" is off, then the old plain WebP re-encode applies). `preOptimized` is an
+ * earlier optimizeForSave result for this same blob (the picker measures candidates up front).
+ * @returns {Promise<{path:string, stats:object}>} stored path and the optimization stats (bytes before/after, via)
  */
-export async function saveImageBlob(blob, { system = "core", docType = "Document", name = "image", webp = true, dir: dirOverride } = {}) {
-  const data = webp ? await blobToWebp(blob) : blob;
+export async function saveImageBlobEx(blob, { system = "core", docType = "Document", name = "image", webp = true, dir: dirOverride, optimize, preOptimized } = {}) {
+  let data, stats = null;
+  if (preOptimized && preOptimized.via !== "error") { stats = preOptimized; data = stats.blob; }
+  else if (optimize && optimizeEnabled()) { stats = await optimizeForSave(blob, optimize); data = stats.blob; }
+  else data = webp ? await blobToWebp(blob) : blob;
   const type = (await sniffBlob(data)) ?? (data.type || "image/png");
   const dir = dirOverride ?? `${MODULE_ID}/${slug(system, "core")}/${slug(docType, "doc")}`;
   await ensureDir(dir);
   const filename = `${slug(name)}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}.${EXT[type] ?? "png"}`;
   const file = new File([data], filename, { type });
-  const res = await FP().upload("data", dir, file, {}, { notify: false });
+  // `optimized: true` tells local-media-optimizer's upload hook not to encode the file a second time.
+  const res = await FP().upload("data", dir, file, {}, { notify: false, ...(stats && stats.via !== "error" ? { optimized: true } : {}) });
   if (!res?.path) throw new Error(`Upload failed for ${dir}/${filename}`);
-  return res.path;
+  return {
+    path: res.path,
+    stats: stats ?? { changed: data !== blob, bytesBefore: blob.size, bytesAfter: data.size, via: "off", blob: data }
+  };
+}
+
+/** Like saveImageBlobEx, path only (older call sites). */
+export async function saveImageBlob(blob, opts) {
+  return (await saveImageBlobEx(blob, opts)).path;
 }
 
 export const MAX_REF_BYTES = 20 * 1024 * 1024;
@@ -85,9 +101,14 @@ export function testsDirFor(typeKey) {
   return `${MODULE_ID}/_tests/${slug(system, "core")}/${slug(rest.join("-"), "type")}`;
 }
 
-/** Save one test-drawer result (only on the user's explicit click). @returns {Promise<string>} stored path */
-export function saveTestExample(blob, typeKey, name = "test") {
-  return saveImageBlob(blob, { dir: testsDirFor(typeKey), name });
+/** Save one test-drawer result (only on the user's explicit click). @returns {Promise<{path:string, stats:object}>} */
+export function saveTestExampleEx(blob, typeKey, name = "test", optimize) {
+  return saveImageBlobEx(blob, { dir: testsDirFor(typeKey), name, optimize });
+}
+
+/** Save one test-drawer result, path only. */
+export async function saveTestExample(blob, typeKey, name = "test", optimize) {
+  return (await saveTestExampleEx(blob, typeKey, name, optimize)).path;
 }
 
 /**
@@ -104,8 +125,18 @@ export async function saveRefFile(file, typeKey) {
   const dir = refsDirFor(typeKey);
   await ensureDir(dir);
   const base = (file.name ?? "").replace(/\.[^.]+$/, "");
-  const filename = `${slug(base, "ref")}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}.${REF_EXT[type]}`;
-  const res = await FP().upload("data", dir, new File([file], filename, { type }), {}, { notify: false });
+  // Oversized references only cost upload bandwidth and tokens: shrink them (never enlarge; keep the original when not smaller).
+  let data = file, outType = type, flag = false;
+  if (optimizeEnabled()) {
+    const stats = await optimizeForSave(file, { ...REF_OUTPUT, kind: "ref" });
+    if (stats.via !== "error") flag = true;
+    if (stats.changed) {
+      const t = (await sniffBlob(stats.blob)) ?? stats.blob.type;
+      if (REF_EXT[t]) { data = stats.blob; outType = t; }
+    }
+  }
+  const filename = `${slug(base, "ref")}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}.${REF_EXT[outType]}`;
+  const res = await FP().upload("data", dir, new File([data], filename, { type: outType }), {}, { notify: false, ...(flag ? { optimized: true } : {}) });
   if (!res?.path) throw new Error(`Upload failed for ${dir}/${filename}`);
   return res.path;
 }

@@ -226,5 +226,21 @@
   "AIIMG.Batches.AbandonTitle": "Abandon batch",
   "AIIMG.Batches.AbandonBody": "Stop tracking this batch? It is cancelled at the provider when possible, and its results will no longer be collected.",
   "AIIMG.Batches.GMOnly": "Only the GM can manage batches.",
-  "AIIMG.Pick.AlreadyDecided": "This batch was already decided in another window."
+  "AIIMG.Pick.AlreadyDecided": "This batch was already decided in another window.",
+  "AIIMG.Settings.OptimizeImages.Name": "Optimize AI images",
+  "AIIMG.Settings.OptimizeImages.Hint": "Shrink and re-encode generated images before saving (limit and format per image type in the type settings). Uses Media Optimizer (Local) when it is active. The request sent to the AI is never changed.",
+  "AIIMG.Config.Output": "Saved file (output)",
+  "AIIMG.Config.OutMaxEdge": "Longest side",
+  "AIIMG.Config.OutNoResize": "No resizing",
+  "AIIMG.Config.OutFormat": "Format and quality",
+  "AIIMG.Config.OutQuality": "Quality in percent",
+  "AIIMG.Config.OutHint": "Applies to the file we save, not to the request. Never enlarges; the original is kept when it is not smaller.",
+  "AIIMG.Config.OutViaLmo": "Encoded by Media Optimizer (Local) {v}.",
+  "AIIMG.Config.OutViaBuiltin": "Built-in encoder (install Media Optimizer (Local) 1.1+ to share its settings).",
+  "AIIMG.Config.OutOff": "Optimization is switched off in the module settings.",
+  "AIIMG.Gen.SavedAs": "Saved as",
+  "AIIMG.Gen.OutputOff": "original (optimization off)",
+  "AIIMG.Gen.DoneSized": "Image for {name} saved ({before} → {after}).",
+  "AIIMG.Pick.SizeTip": "File size: original → as it will be saved",
+  "AIIMG.Log.Optimized": "File size (before → after)"
 }

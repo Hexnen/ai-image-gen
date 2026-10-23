@@ -15,7 +15,8 @@ const DIR = `${MODULE_ID}/_log`;
 export const LOG_FIELDS = [
   "id", "ts", "durationMs", "kind", "status", "provider", "model", "route", "prompt", "description",
   "size", "quality", "imageSize", "thinkingLevel", "refsCount", "cost", "costKind", "tokens",
-  "docUuid", "docName", "typeKey", "batchId", "itemId", "error", "user"
+  "docUuid", "docName", "typeKey", "batchId", "itemId", "error", "user",
+  "bytesBefore", "bytesAfter", "optimizedVia"
 ];
 
 const months = new Map();   // "YYYY-MM" -> entry[]
@@ -231,7 +232,7 @@ export function findSubmitEntry(batchId, itemId) {
 }
 
 /** Wpis „batch-result" dla jednego itemu (sukces albo błąd). */
-export function logBatchResult(rec, itemId, { ok, error, cost = 0, tokens = null } = {}) {
+export function logBatchResult(rec, itemId, { ok, error, cost = 0, tokens = null, bytesBefore, bytesAfter, optimizedVia } = {}) {
   // wznowiony ingest / ponowne czytanie pliku błędów nie dubluje wpisów
   for (const arr of months.values()) {
     if (arr.some((x) => x.kind === "batch-result" && x.batchId === rec.id && x.itemId === itemId)) return Promise.resolve(null);
@@ -250,6 +251,7 @@ export function logBatchResult(rec, itemId, { ok, error, cost = 0, tokens = null
     refsCount: sub?.refsCount,
     cost, costKind: "actual",
     tokens: tokens ?? undefined,
+    bytesBefore, bytesAfter, optimizedVia,
     // czas oczekiwania na wynik (od wysyłki), nie czas jednego żądania
     durationMs: rec.createdAt ? Date.now() - rec.createdAt : undefined,
     docUuid: item?.target?.uuid,
@@ -264,7 +266,7 @@ export function logBatchResult(rec, itemId, { ok, error, cost = 0, tokens = null
 
 export const CSV_COLUMNS = ["ts", "kind", "status", "provider", "model", "route", "durationMs", "cost", "costKind",
   "tokensIn", "tokensOut", "size", "quality", "imageSize", "thinkingLevel", "refsCount", "docName", "docUuid",
-  "typeKey", "batchId", "user", "description", "prompt", "error"];
+  "typeKey", "batchId", "bytesBefore", "bytesAfter", "optimizedVia", "user", "description", "prompt", "error"];
 
 const csvCell = (v) => {
   let s = v == null ? "" : String(v);

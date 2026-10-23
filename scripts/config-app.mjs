@@ -1,10 +1,11 @@
 import { MODULE_ID } from "./constants.mjs";
+import { MAX_EDGES, FORMATS, OPTIMIZER_ID, optimizeEnabled, optimizerApi, outputOptsFromConfig, fmtBytes } from "./optimize.mjs";
 import { safeMessage } from "./redact.mjs";
 import { detectImageTypes } from "./image-types.mjs";
 import { getConfig, setConfig, resetConfig, isConfigured, sizePresetsFor, fitConfig } from "./config-store.mjs";
 import * as providers from "./providers/index.mjs";
 import { getUsage } from "./limits.mjs";
-import { saveRefFile, saveTestExample } from "./save-image.mjs";
+import { saveRefFile, saveTestExampleEx } from "./save-image.mjs";
 import { getKey } from "./settings.mjs";
 import { buildTestPrompt, fitTestConfig, estimateTest, generateTest } from "./generate-flow.mjs";
 import { TestDrawerApp } from "./test-drawer-app.mjs";
@@ -242,6 +243,11 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
         label: L(`AIIMG.Thinking.${v}`) + (v === caps.defaultThinking ? ` (${L("AIIMG.Thinking.default")})` : "")
       })),
       batchWarn: cfg.defaultMode === "batch" && !supportsBatch,
+      outEdges: MAX_EDGES.map((v) => ({ value: v, selected: v === cfg.outMaxEdge, label: v ? `${v} px` : game.i18n.localize("AIIMG.Config.OutNoResize") })),
+      outFormats: FORMATS.map((v) => ({ id: v, selected: v === cfg.outFormat, label: v.toUpperCase() })),
+      outQualityPct: Math.round((cfg.outQuality ?? 0.85) * 100),
+      outOn: optimizeEnabled(),
+      outVia: optimizerApi() ? game.i18n.format("AIIMG.Config.OutViaLmo", { v: game.modules.get(OPTIMIZER_ID)?.version ?? "" }) : game.i18n.localize("AIIMG.Config.OutViaBuiltin"),
       refs: cfg.refs.map((path, index) => ({ path, index })),
       usage: { day: usage.day.toFixed(2), month: usage.month.toFixed(2) },
       isGM: game.user.isGM
@@ -261,6 +267,9 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     d.quality = fd.quality ?? d.quality;
     d.imageSize = fd.imageSize ?? d.imageSize;
     d.thinkingLevel = fd.thinkingLevel ?? d.thinkingLevel;
+    if (fd.outMaxEdge !== undefined) d.outMaxEdge = Number(fd.outMaxEdge);
+    d.outFormat = fd.outFormat ?? d.outFormat;
+    if (fd.outQualityPct !== undefined && fd.outQualityPct !== "") d.outQuality = Number(fd.outQualityPct) / 100;
     if (fd.size && fd.size !== "custom") {
       const [w, h] = fd.size.split("x").map(Number);
       d.width = w;
@@ -307,7 +316,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     });
     // Quality / image size / thinking / custom width+height only change the draft and the live estimate
     // (no re-render, so focus and caret survive). Provider, model, size preset and mode re-render above.
-    for (const n of ["quality", "imageSize", "thinkingLevel", "width", "height"]) {
+    for (const n of ["quality", "imageSize", "thinkingLevel", "width", "height", "outMaxEdge", "outFormat", "outQualityPct"]) {
       const f = el.querySelector(`[name=${n}]`);
       f?.addEventListener(f.tagName === "SELECT" ? "change" : "input", () => this.#onDraftInput());
     }
@@ -498,8 +507,9 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const item = this.#currentRun()?.items[index];
     if (!item) return;
     try {
-      const path = await saveTestExample(item.blob, this.selectedKey, this.test.name || "test");
-      ui.notifications.info(game.i18n.format("AIIMG.Test.Saved", { path: esc(path) }));
+      const { path, stats } = await saveTestExampleEx(item.blob, this.selectedKey, this.test.name || "test", outputOptsFromConfig(this.#testConfig(), "test"));
+      const size = stats?.changed ? ` (${fmtBytes(stats.bytesBefore)} → ${fmtBytes(stats.bytesAfter)})` : "";
+      ui.notifications.info(game.i18n.format("AIIMG.Test.Saved", { path: esc(path) }) + size);
     } catch (e) {
       ui.notifications.error(game.i18n.format("AIIMG.Test.SaveFailed", { error: safeMessage(e.message) }));
     }

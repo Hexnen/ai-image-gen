@@ -1,4 +1,5 @@
 import { MODULE_ID } from "./constants.mjs";
+import { optimizeEnabled, outputOptsFromConfig, fmtBytes } from "./optimize.mjs";
 import { safeMessage } from "./redact.mjs";
 import {
   readiness, runFast, runBatch, generateCandidates, estimateTotal, buildPrompt, MAX_VERSIONS, MAX_EXTRA_REF_BYTES
@@ -21,6 +22,14 @@ const savePrefs = (p) => {
 
 const esc = (s) => foundry.utils.escapeHTML(String(s ?? ""));
 const money = (v) => (v > 0 ? `~$${v.toFixed(v < 0.1 ? 3 : 2)}` : "?");
+
+/** Jak zapiszemy wynik (Output z konfiguracji typu): format, limit boku, jakość. */
+function outputSummary(cfg) {
+  if (!optimizeEnabled()) return game.i18n.localize("AIIMG.Gen.OutputOff");
+  const o = outputOptsFromConfig(cfg);
+  const edge = o.maxEdge ? `≤ ${o.maxEdge} px` : game.i18n.localize("AIIMG.Config.OutNoResize");
+  return `${o.format.toUpperCase()} · ${edge} · ${Math.round(o.quality * 100)}%`;
+}
 
 /** Modal: opis, dodatkowe referencje, liczba wersji + Fast / Batch dla jednego dokumentu. */
 export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
@@ -115,6 +124,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       showPreview: this.count === 1,
       estFast: money(fast),
       estBatch: r.canBatch ? money(batch) : "",
+      outputSummary: outputSummary(r.cfg),
       maxMb: MAX_EXTRA_REF_BYTES / 1048576,
       canSaveRef: game.user.isGM && !!resolveTypeKey(this.document) && this.extraRefs.length > 0,
       saveRef: this.saveRef
@@ -234,8 +244,11 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     try {
       if (mode === "fast") {
         if (count === 1 && !this.preview) {
-          await runFast(this.document, this.description, { extraRefs: refs });
-          ui.notifications.info(game.i18n.format("AIIMG.Gen.Done", { name: esc(this.document.name) }));
+          let saved = null;
+          await runFast(this.document, this.description, { extraRefs: refs, onSaved: (st) => { saved = st; } });
+          ui.notifications.info(saved?.changed
+            ? game.i18n.format("AIIMG.Gen.DoneSized", { name: esc(this.document.name), before: fmtBytes(saved.bytesBefore), after: fmtBytes(saved.bytesAfter) })
+            : game.i18n.format("AIIMG.Gen.Done", { name: esc(this.document.name) }));
         } else {
           const description = this.description;
           const res = await generateCandidates(this.document, description, { count, extraRefs: refs });

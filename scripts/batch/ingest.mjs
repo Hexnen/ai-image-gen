@@ -4,6 +4,7 @@ import { b64ToBlob } from "../providers/util.mjs";
 import { redact } from "../redact.mjs";
 import { recordCost } from "../limits.mjs";
 import { logBatchResult } from "../call-log.mjs";
+import { statsPatch } from "../optimize.mjs";
 import { claimLease, releaseLease, markIngested, patchBatch } from "./record.mjs";
 import { applyBatchItem, finishPatch } from "./apply.mjs";
 
@@ -39,14 +40,14 @@ const persist = (rec, st) =>
   markIngested(rec.id, st.done, st.cost, st.failed, st.candidates, { attempts: st.attempts, saved: st.saved });
 
 /** Pozycja ma ostateczny wynik: marker najpierw, koszt dopiero potem (crash = niedoliczenie, nie podwójne). */
-async function settle(rec, st, id, { ok, error, cost = 0, tokens, path, candidate }) {
+async function settle(rec, st, id, { ok, error, cost = 0, tokens, path, candidate, stats }) {
   st.done.add(id);
   if (!ok) st.failed.push({ id, error: redact(error ?? "error") });
   else if (candidate) st.candidates.push({ id, path, cost });
   st.cost += cost;
   delete st.attempts[id];
   delete st.saved[id];
-  await logBatchResult(rec, id, { ok, error, cost, tokens });
+  await logBatchResult(rec, id, { ok, error, cost, tokens, ...statsPatch(stats) });
   const marked = await persist(rec, st);
   await recordCost(cost);
   return marked;
@@ -58,7 +59,7 @@ async function handleRow(rec, st, item, row) {
     return settle(rec, st, id, { ok: false, error: row.error || "No image in the batch response", cost: row.cost ?? 0, tokens: row.tokens });
   }
   const r = await applyBatchItem(item, b64ToBlob(row.b64, row.mime || "image/png"), rec, st.saved[id]);
-  if (r.ok) return settle(rec, st, id, { ok: true, path: r.path, candidate: r.candidate, cost: row.cost ?? 0, tokens: row.tokens });
+  if (r.ok) return settle(rec, st, id, { ok: true, path: r.path, candidate: r.candidate, cost: row.cost ?? 0, tokens: row.tokens, stats: r.stats });
   if (r.path) st.saved[id] = r.path;
   const n = (st.attempts[id] ?? 0) + 1;
   st.attempts[id] = n;
