@@ -25,7 +25,7 @@ function warnNoKey(rec) {
   warnedNoKey.add(rec.provider);
   console.warn(`ai-image-gen | batch ${rec.id}: no ${rec.provider} API key on this client, results are not collected here`);
   try {
-    ui.notifications?.warn(game.i18n.format("AIIMG.Batch.NoKey", { provider: foundry.utils.escapeHTML(String(rec.provider)) }));
+    ui.notifications?.warn(game.i18n.format("AIIMG.BatchNoKey", { provider: foundry.utils.escapeHTML(String(rec.provider)) }));
   } catch { /* UI jeszcze niegotowe */ }
 }
 

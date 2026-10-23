@@ -216,7 +216,7 @@
   "AIIMG.Test.Discarded": "Okno zamknięto lub zmieniono typ przed końcem testu; {n} opłaconych obrazów odrzucono.",
   "AIIMG.Pick.BusyClose": "Poczekaj na koniec generacji przed zamknięciem (inaczej nowe obrazy przepadną).",
   "AIIMG.Gen.Unsaved": "Najpierw zapisz ten dokument: wygenerowany obraz potrzebuje zapisanego dokumentu.",
-  "AIIMG.Batch.NoKey": "Batch czeka na wyniki, ale ta przeglądarka nie ma klucza API {provider}, więc wyniki nie są tu pobierane. Dodaj klucz w ustawieniach modułu.",
+  "AIIMG.BatchNoKey": "Batch czeka na wyniki, ale ta przeglądarka nie ma klucza API {provider}, więc wyniki nie są tu pobierane. Dodaj klucz w ustawieniach modułu.",
   "AIIMG.Settings.Limit.daily.HintV2": "USD na dobę. 0 = BEZ LIMITU (brak zabezpieczenia).",
   "AIIMG.Settings.Limit.monthly.HintV2": "USD na miesiąc. 0 = BEZ LIMITU (brak zabezpieczenia).",
   "AIIMG.Settings.Limit.perRequest.HintV2": "Maks. szacowany koszt jednego żądania w USD. 0 = BEZ LIMITU (brak zabezpieczenia).",

@@ -216,7 +216,7 @@
   "AIIMG.Test.Discarded": "The window was closed or the type changed before the test finished; {n} paid image(s) were discarded.",
   "AIIMG.Pick.BusyClose": "Wait for the generation to finish before closing (or the new images would be lost).",
   "AIIMG.Gen.Unsaved": "Save this document first: a generated image needs a saved document to be applied to.",
-  "AIIMG.Batch.NoKey": "A batch is waiting for results, but this browser has no {provider} API key, so results are not collected here. Add the key in Module Settings.",
+  "AIIMG.BatchNoKey": "A batch is waiting for results, but this browser has no {provider} API key, so results are not collected here. Add the key in Module Settings.",
   "AIIMG.Settings.Limit.daily.HintV2": "USD per day. 0 = NO LIMIT (no protection).",
   "AIIMG.Settings.Limit.monthly.HintV2": "USD per month. 0 = NO LIMIT (no protection).",
   "AIIMG.Settings.Limit.perRequest.HintV2": "Max estimated cost of one request in USD. 0 = NO LIMIT (no protection).",
