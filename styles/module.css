@@ -166,3 +166,14 @@ button.link:focus-visible { outline: 2px solid var(--color-warm-2, #c9593f); out
 .aiimg-output legend { padding: 0 6px; font-weight: bold; }
 .aiimg-output input[name="outQualityPct"] { max-width: 4.5em; }
 .aiimg-size { opacity: 0.85; white-space: nowrap; }
+
+/* Resolution row: narrow preset select, width×height inputs and a live aspect preview */
+.aiimg-res-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.aiimg-res-row select.aiimg-size-select { flex: 0 0 auto; width: auto; min-width: 0; max-width: 9.5em; }
+.aiimg-wh { display: inline-flex; align-items: center; gap: 4px; }
+.aiimg-wh input[type=number] { width: 5.5em; max-width: 5.5em; }
+.aiimg-aspect { display: inline-flex; align-items: center; gap: 8px; }
+.aiimg-aspect-box { flex: 0 0 56px; width: 56px; height: 56px; display: flex; align-items: center; justify-content: center; box-sizing: border-box; border: 1px dashed var(--color-border-dark-4, #555); border-radius: 3px; background: rgba(0, 0, 0, .25); }
+.aiimg-aspect-box i { display: block; background: var(--color-warm-2, #ff6400); border-radius: 1px; box-shadow: 0 0 0 1px rgba(255, 255, 255, .25); }
+.aiimg-aspect-text { display: flex; flex-direction: column; line-height: 1.2; white-space: nowrap; }
+.aiimg-aspect-text small { opacity: .65; font-size: var(--font-size-12); }

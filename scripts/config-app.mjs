@@ -9,6 +9,7 @@ import { saveRefFile, saveTestExampleEx } from "./save-image.mjs";
 import { getKey } from "./settings.mjs";
 import { buildTestPrompt, fitTestConfig, estimateTest, generateTest } from "./generate-flow.mjs";
 import { TestDrawerApp } from "./test-drawer-app.mjs";
+import { aspectInfo } from "./aspect.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin, DialogV2 } = foundry.applications.api;
 const MAX_TEST_VERSIONS = 4;
@@ -224,6 +225,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       models,
       sizes,
       customSize,
+      aspect: this.#aspectContext(cfg.width, cfg.height),
       isFast: cfg.defaultMode === "fast",
       isBatch: cfg.defaultMode === "batch",
       supportsBatch,
@@ -342,6 +344,29 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     this.#readForm();
     this.#readTest();
     this.#updateTestPreview();
+    this.#updateAspect();
+  }
+
+  /** Aspect data for the Resolution row (reduced ratio, decimal, rectangle size in px, aria text). */
+  #aspectContext(width, height) {
+    const a = aspectInfo(width, height);
+    if (!a) return null;
+    return { ...a, aria: game.i18n.format("AIIMG.Config.AspectAria", { ratio: a.text, dec: a.decText, w: a.w, h: a.h }) };
+  }
+
+  /** Refresh the ratio text and rectangle in place (no re-render, so the width/height caret survives). */
+  #updateAspect() {
+    const root = this.element?.querySelector("[data-role=aspect]");
+    if (!root || !this.draft) return;
+    const a = this.#aspectContext(this.draft.width, this.draft.height);
+    if (!a) return;
+    root.setAttribute("aria-label", a.aria);
+    const rect = root.querySelector("[data-role=aspectRect]");
+    if (rect) { rect.style.width = `${a.pw}px`; rect.style.height = `${a.ph}px`; }
+    const t = root.querySelector("[data-role=aspectText]");
+    if (t) t.textContent = a.text;
+    const d = root.querySelector("[data-role=aspectDec]");
+    if (d) d.textContent = a.decText;
   }
 
   /** Called by the drawer after each of its renders: hook its inputs up to the live preview. */

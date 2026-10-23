@@ -40,17 +40,27 @@
       </select>
     </div>
 
-    <div class="form-group">
+    <div class="form-group aiimg-res">
       <label>{{localize "AIIMG.Config.Resolution"}}</label>
-      <select name="size">
-        {{#each sizes}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
-        {{#if allowCustomSize}}<option value="custom" {{#if customSize}}selected{{/if}}>{{localize "AIIMG.Config.Custom"}}</option>{{/if}}
-      </select>
-      {{#if customSize}}
-      <input type="number" name="width" value="{{cfg.width}}" min="64" max="{{sizeMax}}" step="{{sizeStep}}">
-      <span>×</span>
-      <input type="number" name="height" value="{{cfg.height}}" min="64" max="{{sizeMax}}" step="{{sizeStep}}">
-      {{/if}}
+      <div class="form-fields aiimg-res-row">
+        <select name="size" class="aiimg-size-select">
+          {{#each sizes}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+          {{#if allowCustomSize}}<option value="custom" {{#if customSize}}selected{{/if}}>{{localize "AIIMG.Config.Custom"}}</option>{{/if}}
+        </select>
+        {{#if customSize}}
+        <span class="aiimg-wh">
+          <input type="number" name="width" value="{{cfg.width}}" min="64" max="{{sizeMax}}" step="{{sizeStep}}" aria-label="{{localize 'AIIMG.Config.Width'}}">
+          <span>×</span>
+          <input type="number" name="height" value="{{cfg.height}}" min="64" max="{{sizeMax}}" step="{{sizeStep}}" aria-label="{{localize 'AIIMG.Config.Height'}}">
+        </span>
+        {{/if}}
+        {{#if aspect}}
+        <div class="aiimg-aspect" data-role="aspect" role="img" aria-label="{{aspect.aria}}">
+          <span class="aiimg-aspect-box"><i data-role="aspectRect" style="width:{{aspect.pw}}px;height:{{aspect.ph}}px"></i></span>
+          <span class="aiimg-aspect-text"><strong data-role="aspectText">{{aspect.text}}</strong><small data-role="aspectDec">{{aspect.decText}}</small></span>
+        </div>
+        {{/if}}
+      </div>
       {{#if exactSize}}<p class="hint">{{localize "AIIMG.Config.SizeRules"}}</p>{{/if}}
     </div>
 
