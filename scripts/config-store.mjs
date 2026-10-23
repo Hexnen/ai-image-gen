@@ -19,12 +19,16 @@ export const SIZE_PRESETS = [
 
 const all = () => game.settings.get(MODULE_ID, "imageTypes") ?? {};
 
+// Type keys contain dots ("dnd5e.Actor.npc"); Foundry expands dotted keys inside an
+// ObjectField into nested objects, so store them with a dot-free key.
+const sk = (key) => String(key).replaceAll(".", "|");
+
 /** Has the user saved anything for this type? */
-export const isConfigured = (key) => key in all();
+export const isConfigured = (key) => sk(key) in all();
 
 /** Config for a type key, merged over defaults (so unconfigured types still work). */
 export function getConfig(key) {
-  const saved = all()[key] ?? {};
+  const saved = all()[sk(key)] ?? {};
   const cfg = { ...DEFAULT_CONFIG, ...saved, refs: [...(saved.refs ?? [])] };
   // Heal a model that no longer belongs to the provider.
   const models = providers.listModels(cfg.provider);
@@ -51,14 +55,14 @@ export async function setConfig(key, data) {
     refs: (data.refs ?? []).filter(Boolean).map(String),
     defaultMode: data.defaultMode === "batch" ? "batch" : "fast"
   };
-  await game.settings.set(MODULE_ID, "imageTypes", { ...all(), [key]: clean });
+  await game.settings.set(MODULE_ID, "imageTypes", { ...all(), [sk(key)]: clean });
   return clean;
 }
 
 export async function resetConfig(key) {
   assertGM();
   const next = { ...all() };
-  delete next[key];
+  delete next[sk(key)];
   await game.settings.set(MODULE_ID, "imageTypes", next);
 }
 

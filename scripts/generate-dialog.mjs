@@ -24,7 +24,8 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
 
   /** Open (or focus) the dialog for a document. */
   static open(document) {
-    const id = `${MODULE_ID}-generate-${document.uuid.replace(/[^A-Za-z0-9]/g, "-")}`;
+    const key = document.uuid ?? `unsaved-${document.documentName}-${document.id ?? document.name}`;
+    const id = `${MODULE_ID}-generate-${key.replace(/[^A-Za-z0-9]/g, "-")}`;
     const existing = foundry.applications.instances.get(id);
     if (existing) { existing.bringToFront?.(); return existing; }
     const app = new this({ id, document });

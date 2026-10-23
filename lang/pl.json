@@ -55,7 +55,7 @@
   "AIIMG.Batches.Empty": "Brak batchy.",
   "AIIMG.Batches.Created": "Utworzono",
   "AIIMG.Batches.Items": "Elementy",
-  "AIIMG.Batches.Status": "Status",
+  "AIIMG.Batches.StatusColumn": "Status",
   "AIIMG.Batches.Cost": "Koszt",
   "AIIMG.Batches.CostReal": "Koszt rzeczywisty",
   "AIIMG.Batches.CostEstimate": "Koszt szacowany",

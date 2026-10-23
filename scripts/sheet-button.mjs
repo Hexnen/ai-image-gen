@@ -71,14 +71,26 @@ function inject(app, html) {
   });
   anchor.after(btn);
 
-  // Dolny prawy róg obrazka, liczony względem wspólnego offsetParent.
+  // Dolny prawy róg obrazka. Liczone z prostokątów względem offsetParent przycisku, bo
+  // offsetLeft/Top obrazka bywa nieaktualne, gdy karta (tab) jest ukryta lub animowana.
   const place = () => {
-    btn.style.left = `${anchor.offsetLeft + anchor.offsetWidth - btn.offsetWidth - 2}px`;
-    btn.style.top = `${anchor.offsetTop + anchor.offsetHeight - btn.offsetHeight - 2}px`;
+    const op = btn.offsetParent;
+    if (!op || !anchor.offsetWidth) return;
+    const a = anchor.getBoundingClientRect();
+    const o = op.getBoundingClientRect();
+    btn.style.left = `${a.right - o.left + op.scrollLeft - op.clientLeft - btn.offsetWidth - 2}px`;
+    btn.style.top = `${a.bottom - o.top + op.scrollTop - op.clientTop - btn.offsetHeight - 2}px`;
+  };
+  // Po zmianie widoczności (przełączenie karty, animacja wejścia) ustawiaj aż układ się ustali.
+  const settle = () => {
+    const until = performance.now() + 700;
+    const tick = () => { place(); if (performance.now() < until) requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
   };
   place();
-  anchor.addEventListener("load", place);
-  if (typeof ResizeObserver === "function") new ResizeObserver(place).observe(anchor);
+  anchor.addEventListener("load", settle);
+  if (typeof ResizeObserver === "function") new ResizeObserver(settle).observe(anchor);
+  if (typeof IntersectionObserver === "function") new IntersectionObserver(settle).observe(anchor);
 }
 
 export function registerSheetButtons() {
