@@ -90,7 +90,7 @@ export const isConfigured = (key) => sk(key) in all();
 export function getConfig(key) {
   const store = all();
   const saved = store[sk(key)] ?? {};
-  // A type with no saved configuration gets the saved-file limit that fits its kind (Actor 512, Item 256, Macro 128);
+  // A type with no saved configuration gets the saved-file limit that fits its kind (Actor 1024, Item 256, Macro 128);
   // an existing save keeps whatever it has (old saves without the field stay at the general default).
   const base = sk(key) in store ? DEFAULT_CONFIG : { ...DEFAULT_CONFIG, outMaxEdge: defaultEdgeForKey(key) };
   const cfg = { ...base, ...saved, refs: cleanRefs(saved.refs) };
