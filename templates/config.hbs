@@ -10,7 +10,7 @@
       <li>
         <button type="button" data-action="selectType" data-key="{{key}}" class="{{#if active}}active{{/if}}">
           <span class="aiimg-type-label">{{label}}</span>
-          <small>{{group}}</small>
+          {{#if @root.showGroup}}<small>{{group}}</small>{{/if}}
           {{#if configured}}<i class="fa-solid fa-check" data-tooltip="AIIMG.Config.Configured" role="img" aria-label="{{localize 'AIIMG.Config.Configured'}}"></i>{{/if}}
         </button>
       </li>
@@ -139,7 +139,7 @@
               <input type="radio" name="defaultMode" value="fast" {{#if isFast}}checked{{/if}} {{#unless isGM}}disabled{{/unless}}>
               <span>{{localize "AIIMG.Fast"}}</span>
             </label>
-            <label class="aiimg-seg-item{{#unless supportsBatch}} is-off{{/unless}}" {{#unless supportsBatch}}data-tooltip="AIIMG.Config.NoBatch"{{/unless}}>
+            <label class="aiimg-seg-item{{#unless supportsBatch}} is-off{{/unless}}">
               <input type="radio" name="defaultMode" value="batch" {{#if isBatch}}checked{{/if}} {{#unless supportsBatch}}disabled{{/unless}} {{#unless isGM}}disabled{{/unless}}>
               <span>{{localize "AIIMG.Batch"}}</span>
             </label>

@@ -34,7 +34,7 @@
           <td class="nowrap">{{duration}}</td>
           <td class="nowrap">{{cost}}</td>
           <td>{{doc}}</td>
-          <td class="aiimg-log-prompt">{{short}}</td>
+          <td class="aiimg-log-prompt"><span class="aiimg-log-short">{{short}}</span></td>
           <td class="aiimg-batch-actions">{{#if prompt}}<button type="button" data-action="copyPrompt" data-id="{{id}}" aria-label="{{localize 'AIIMG.Log.CopyPrompt'}}" data-tooltip="AIIMG.Log.CopyPrompt"><i class="fa-solid fa-copy"></i></button>{{/if}}</td>
         </tr>
         <tr class="aiimg-log-detail" data-for="{{id}}" {{#unless open}}hidden{{/unless}}>

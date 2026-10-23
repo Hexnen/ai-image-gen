@@ -95,8 +95,8 @@ export const MODELS = {
     },
   ],
   openrouter: [
-    { id: "google/gemini-3.1-flash-lite-image", label: "Nano Banana 2 Lite (OpenRouter)" },
-    { id: "openai/gpt-5.4-image-2", label: "GPT Image 2 (OpenRouter, chat)" },
+    { id: "google/gemini-3.1-flash-lite-image", label: "Nano Banana 2 Lite" },
+    { id: "openai/gpt-5.4-image-2", label: "GPT Image 2 (via chat)" },
   ],
 };
 

@@ -219,7 +219,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const cfg = (this.draft ??= getConfig(this.selectedKey));
 
     const providerList = Object.entries(providers.PROVIDERS).map(([id, p]) => ({
-      id, label: p.label, selected: id === cfg.provider, noBatch: !p.supportsBatch
+      id, label: p.label, selected: id === cfg.provider, noBatch: !p.supportsBatch && id !== cfg.provider
     }));
     const L = (k) => game.i18n.localize(k);
     const models = providers.listModels(cfg.provider).map((m) => ({
@@ -246,6 +246,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       })),
       types: visible.map((t) => ({ ...t, active: t.key === this.selectedKey, configured: isConfigured(t.key) })),
       selected,
+      showGroup: this.groupFilter === "all",
       cfg,
       providerList,
       models,

@@ -48,7 +48,6 @@
     <pre class="aiimg-prompt-text">{{prompt}}</pre>
     <p class="aiimg-warn aiimg-prompt-empty" {{#unless promptEmpty}}hidden{{/unless}}><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Gen.EmptyPrompt"}}</p>
     <div class="aiimg-prompt-meta">
-      <span>{{#if promptFromConfig}}{{localize "AIIMG.Gen.PromptTplConfig"}}{{else}}{{localize "AIIMG.Gen.PromptTplDefault"}}{{/if}} · {{localize "AIIMG.Gen.PromptRefs" n=refsExtraSeparate}}</span>
       <button type="button" data-action="copyPrompt"><i class="fa-solid fa-copy"></i> {{localize "AIIMG.Gen.Copy"}}</button>
     </div>
   </details>
