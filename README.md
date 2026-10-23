@@ -4,6 +4,27 @@ Generate images for actors, items and macros with OpenAI, Gemini or OpenRouter, 
 Per image type (system + document + subtype) you configure the model, size, quality, prompt template and
 reference images. The plan and status live in [PLAN.md](PLAN.md).
 
+## API for other modules
+
+`game.modules.get("ai-image-gen").api` (GM only for anything that spends money; `apiVersion: 1`). Modules that start
+earlier than this one can wait for the `aiImageGen.ready` hook (it passes the API).
+
+- `registerImageType({ key, label, group, owner, requiresRef?, defaults? })`: adds an image type of your own
+  (key `<your-module-id>.<name>`; it must not look like a document type). It appears in the config window under its own
+  group with the usual provider, model, size, quality, prompt and reference settings. `defaults` is the starting
+  configuration: `promptTemplate`, `width`, `height`, `refs`, `quality`, `provider`, `model` and
+  `output: { maxEdge, format, quality }`. Registrations live in memory: register again at every start.
+  `unregisterImageType(key)` removes it, `listImageTypes()` lists everything.
+- `estimateGeneration({ typeKey, count?, refsCount?, width?, height?, aspectRatio? })`: estimated cost, model, size,
+  whether a key is set, whether the type needs a reference. No network call.
+- `generateImage({ typeKey, description?, name?, refs?, width?, height?, aspectRatio?, count?, pick?, saveTo?, output?, caller?, signal?, title? })`
+  → `{ paths, path, cost, candidates, failed, prompt, picked }`. It uses the same core as Fast mode (budget
+  reservation and limits, the call log with a `caller` column, optimization on save, `optimized: true` uploads) and
+  never touches a document. `refs` are extra reference images for this call (Blobs or Data paths) on top of the type's own.
+  `saveTo: { dir, name }` chooses the folder inside Data and the file name stem; `output: { maxEdge, quality, format }`
+  overrides the saved-file settings. With `pick: true` the picker window opens and the promise resolves with the chosen
+  version (rejects with `Error("cancelled")` if the window is closed without choosing).
+
 ## Privacy & limits
 
 These are properties of Foundry itself, not something the module can work around:

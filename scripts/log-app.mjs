@@ -149,7 +149,7 @@ export class LogApp extends HandlebarsApplicationMixin(ApplicationV2) {
           ["AIIMG.Log.Refs", e.refsCount], ["AIIMG.Log.Tokens", e.tokens ? `${e.tokens.in} → ${e.tokens.out}` : ""],
           ["AIIMG.Log.Optimized", e.bytesBefore != null ? `${fmtBytes(e.bytesBefore)} → ${fmtBytes(e.bytesAfter)} (${e.optimizedVia ?? "?"})` : ""],
           ["AIIMG.Log.Description", e.description && e.description !== e.prompt ? e.description : ""], ["AIIMG.Log.Type", e.typeKey], ["AIIMG.Log.Batch", e.batchId],
-          ["AIIMG.Log.Uuid", e.docUuid], ["AIIMG.Log.User", e.user]
+          ["AIIMG.Log.Uuid", e.docUuid], ["AIIMG.Log.Caller", e.caller], ["AIIMG.Log.User", e.user]
         ].filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => ({ label: loc(k), value: String(v) }))
       }));
     }

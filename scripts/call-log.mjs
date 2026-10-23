@@ -16,7 +16,7 @@ export const LOG_FIELDS = [
   "id", "ts", "durationMs", "kind", "status", "provider", "model", "route", "prompt", "description",
   "size", "quality", "imageSize", "thinkingLevel", "refsCount", "cost", "costKind", "tokens",
   "docUuid", "docName", "typeKey", "batchId", "itemId", "error", "user",
-  "bytesBefore", "bytesAfter", "optimizedVia"
+  "bytesBefore", "bytesAfter", "optimizedVia", "caller"
 ];
 
 const months = new Map();   // "YYYY-MM" -> entry[]
@@ -48,7 +48,7 @@ export function tokensFrom(obj) {
 }
 
 /** Limity długości pól tekstowych (plik miesiąca jest przepisywany w całości przy każdym wpisie). */
-const FIELD_MAX = { prompt: 8000, description: 2000, docName: 200, docUuid: 200, typeKey: 200, route: 200, model: 120 };
+const FIELD_MAX = { prompt: 8000, description: 2000, docName: 200, docUuid: 200, typeKey: 200, route: 200, model: 120, caller: 64 };
 
 function clean(entry) {
   const e = {};
@@ -266,7 +266,7 @@ export function logBatchResult(rec, itemId, { ok, error, cost = 0, tokens = null
 
 export const CSV_COLUMNS = ["ts", "kind", "status", "provider", "model", "route", "durationMs", "cost", "costKind",
   "tokensIn", "tokensOut", "size", "quality", "imageSize", "thinkingLevel", "refsCount", "docName", "docUuid",
-  "typeKey", "batchId", "bytesBefore", "bytesAfter", "optimizedVia", "user", "description", "prompt", "error"];
+  "typeKey", "batchId", "bytesBefore", "bytesAfter", "optimizedVia", "caller", "user", "description", "prompt", "error"];
 
 const csvCell = (v) => {
   let s = v == null ? "" : String(v);

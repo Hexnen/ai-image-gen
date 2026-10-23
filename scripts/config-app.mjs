@@ -1,7 +1,7 @@
 import { MODULE_ID } from "./constants.mjs";
 import { MAX_EDGES, FORMATS, OPTIMIZER_ID, optimizeEnabled, optimizerApi, outputOptsFromConfig, fmtBytes } from "./optimize.mjs";
 import { safeMessage } from "./redact.mjs";
-import { detectImageTypes } from "./image-types.mjs";
+import { detectImageTypes, virtualGroups } from "./image-types.mjs";
 import { getConfig, setConfig, resetConfig, isConfigured, sizePresetsFor, fitConfig, clampCount } from "./config-store.mjs";
 import * as providers from "./providers/index.mjs";
 import { getUsage } from "./limits.mjs";
@@ -240,10 +240,11 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const usage = getUsage();
 
     return {
-      filters: ["all", "Actor", "Item", "Macro"].map((g) => ({
+      filters: ["all", "Actor", "Item", "Macro", ...virtualGroups()].map((g) => ({
         id: g,
         active: this.groupFilter === g,
-        label: g === "all" ? game.i18n.localize("AIIMG.Config.All") : game.i18n.localize(`DOCUMENT.${g}`)
+        // document groups are localized; groups added by other modules are already display names
+        label: g === "all" ? game.i18n.localize("AIIMG.Config.All") : game.i18n.has(`DOCUMENT.${g}`) ? game.i18n.localize(`DOCUMENT.${g}`) : g
       })),
       types: visible.map((t) => ({ ...t, active: t.key === this.selectedKey, configured: isConfigured(t.key) })),
       selected,

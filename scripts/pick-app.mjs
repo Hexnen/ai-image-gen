@@ -42,11 +42,11 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
    * @param {string} [p.batchId]         rekord batcha (source "disk")
    * @param {() => Promise<{candidates:object[]}>} [p.regenerate]  dogenerowanie kolejnych wersji (Fast)
    */
-  static open({ document, candidates, meta, source = "memory", batchId, regenerate }) {
+  static open({ document, candidates, meta, source = "memory", batchId, regenerate, commit, onPicked, onCancel, outOpts, title }) {
     const id = `${MODULE_ID}-pick-${batchId ?? foundry.utils.randomID()}`;
     const existing = foundry.applications.instances.get(id);
     if (existing) { existing.bringToFront?.(); return existing; }
-    const app = new this({ id, document, candidates, meta, source, batchId, regenerate });
+    const app = new this({ id, document, candidates, meta, source, batchId, regenerate, commit, onPicked, onCancel, outOpts, title });
     app.render({ force: true });
     return app;
   }
@@ -58,8 +58,14 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
   #error = "";
   #closed = false;
 
-  constructor({ document, candidates, meta, source, batchId, regenerate, ...options }) {
+  constructor({ document, candidates, meta, source, batchId, regenerate, commit, onPicked, onCancel, outOpts, title, ...options }) {
     super(options);
+    this.outOpts = outOpts ?? null; // saved-file settings of the caller (handoff mode); measured and used at commit
+    this.customTitle = title ?? "";
+    // "Handoff" mode (module API): no document; the caller saves the chosen blob (commit) and learns the result.
+    this.commitFn = commit ?? null;
+    this.onPicked = onPicked ?? null;
+    this.onCancel = onCancel ?? null;
     this.document = document;
     this.meta = meta;
     this.source = source;
@@ -79,7 +85,7 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   get title() {
-    return t("AIIMG.Pick.TitleFor", { name: this.document?.name ?? "" });
+    return this.customTitle || t("AIIMG.Pick.TitleFor", { name: this.document?.name ?? this.meta?.name ?? "" });
   }
 
   async _prepareContext() {
@@ -108,7 +114,7 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
   /** Zmierz optymalizację kandydatów w tle (wynik jest użyty przy zapisie, bez ponownego kodowania). */
   async #measure() {
     if (this.source !== "memory" || !optimizeEnabled()) return;
-    const opts = outputOptsFromConfig(this.meta?.typeKey ? getConfig(this.meta.typeKey) : {});
+    const opts = this.outOpts ?? outputOptsFromConfig(this.meta?.typeKey ? getConfig(this.meta.typeKey) : {});
     for (const c of this.cands) {
       if (this.#closed) return;
       if (c.opt || c.measuring || !c.blob) continue;
@@ -137,6 +143,11 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
     if (this.#busy && !options.force) {
       ui.notifications.warn(t("AIIMG.Pick.BusyClose"));
       return this;
+    }
+    if (this.commitFn && !this.#decided) {
+      // Closed without choosing: the caller that asked for the image is told it was cancelled.
+      this.#decided = true;
+      this.onCancel?.();
     }
     if (this.source === "memory" && !this.#decided && this.cands.length && !options.force) {
       const choice = await DialogV2.wait({
@@ -169,7 +180,9 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   async #saveCandidates(list, { apply }) {
-    for (const c of list) await commitCandidate(this.document, c, this.meta, { apply });
+    const paths = [];
+    for (const c of list) paths.push(this.commitFn ? await this.commitFn(c) : await commitCandidate(this.document, c, this.meta, { apply }));
+    return paths;
   }
 
   async #finishBatch(patch) {
@@ -184,6 +197,13 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
     this.#error = "";
     await this.render();
     try {
+      if (this.commitFn) {
+        const path = await this.commitFn(chosen);
+        const others = this.#keep ? await this.#saveCandidates(this.cands.filter((c) => c !== chosen), { apply: false }) : [];
+        this.#decided = true;
+        this.onPicked?.({ path, others, candidate: chosen });
+        return this.close({ force: true });
+      }
       if (this.source === "memory") {
         await commitCandidate(this.document, chosen, this.meta, { apply: true });
         if (this.#keep) await this.#saveCandidates(this.cands.filter((c) => c !== chosen), { apply: false });
@@ -217,6 +237,7 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
       await this.#finishBatch({ status: "done", picked: null, discarded: true });
       ui.notifications.info(t("AIIMG.Pick.DiscardedDisk", { folder: `ai-image-gen/_candidates/${this.batchId}` }));
     }
+    if (this.commitFn && !this.#decided) { this.#decided = true; this.onCancel?.(); }
     this.#decided = true;
     return this.close({ force: true });
   }

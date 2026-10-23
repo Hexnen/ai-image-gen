@@ -47,7 +47,7 @@ async function sniffImage(blob) {
  * Referencja musi być png/jpeg/webp WEDŁUG ZAWARTOŚCI (deklarowany typ bywa kłamliwy): inne rozpoznane
  * formaty konwertujemy do PNG przez canvas albo odrzucamy z czytelnym błędem.
  */
-async function normalizeRef(blob, label) {
+export async function normalizeRef(blob, label) {
   const sniffed = await sniffImage(blob);
   if (sniffed && sniffed !== "other") return blob.type === sniffed ? blob : new Blob([blob], { type: sniffed });
   if (!sniffed && REF_TYPES.includes(blob.type)) return blob; // nieznana zawartość, ale deklarowany typ jest dozwolony
@@ -129,7 +129,7 @@ function describe(document, description) {
 }
 
 /** Szacunek kosztu pojedynczego żądania (sync; OpenRouter: stała ostrożna kwota). Nigdy 0 przy błędzie wyliczenia. */
-function estimateFast(cfg, refCount) {
+export function estimateFast(cfg, refCount) {
   try {
     return estimateSyncCost(cfg.provider, cfg.model, [{
       refs: new Array(refCount), width: cfg.width, height: cfg.height, quality: cfg.quality, imageSize: cfg.imageSize
@@ -150,7 +150,7 @@ export function estimateTotal(document, { count = 1, extraRefs = 0, mode = "fast
 }
 
 /** Walidacja liczby wersji i referencji (rzuca czytelny błąd). @returns {number} łączna liczba referencji */
-function validateRun(cfg, count, extraRefs) {
+export function validateRun(cfg, count, extraRefs) {
   if (!Number.isInteger(count) || count < 1 || count > MAX_VERSIONS) {
     throw new Error(`Versions must be between 1 and ${MAX_VERSIONS}.`);
   }
@@ -224,10 +224,11 @@ export async function generateCandidates(document, description, { count = 1, ext
 }
 
 /** Wspólny rdzeń generacji (dokument albo próba z szuflady testu): limity, wywołanie providera, log, koszt. */
-async function executeGeneration({ doc: document, description, key, cfg, prompt, meta, count, extraRefs, signal, runKind }) {
+export async function executeGeneration({ doc: document, description, key, cfg, prompt, meta, count, extraRefs, signal, runKind, caller }) {
   const ts = new Date().toISOString();
   let refsTotal = (cfg.refs?.length ?? 0) + extraRefs.length;
   const base = logBase(document, description, key, cfg, prompt, runKind, refsTotal);
+  if (caller) base.caller = String(caller).slice(0, 64); // module that asked (API), shown in the log
   const preFail = async (e, kind = runKind, status = "error", cost = 0, costKind = "actual") => {
     await logCall({ ...base, ts, kind, status, cost, costKind, error: e.message, durationMs: 0 });
     e.aiimgLogged = true;

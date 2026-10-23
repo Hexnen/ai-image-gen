@@ -139,6 +139,7 @@
   "AIIMG.Log.Batch": "Batch",
   "AIIMG.Log.Uuid": "UUID",
   "AIIMG.Log.User": "User",
+  "AIIMG.Log.Caller": "Requested by",
   "AIIMG.Log.Kind.fast": "Fast",
   "AIIMG.Log.Kind.batch-submit": "Batch submit",
   "AIIMG.Log.Kind.batch-result": "Batch result",

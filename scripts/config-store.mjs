@@ -2,6 +2,7 @@ import { MODULE_ID, PROVIDER_IDS } from "./constants.mjs";
 import * as providers from "./providers/index.mjs";
 import { DEFAULT_OUTPUT, MAX_EDGES, FORMATS } from "./optimize.mjs";
 import { defaultEdgeForKey } from "./output-preview.mjs";
+import { virtualDefaults } from "./image-types.mjs";
 
 export const DEFAULT_CONFIG = Object.freeze({
   provider: "openai",
@@ -93,8 +94,11 @@ export function getConfig(key) {
   const saved = store[sk(key)] ?? {};
   // A type with no saved configuration gets the saved-file limit that fits its kind (Actor 1024, Item 256, Macro 128);
   // an existing save keeps whatever it has (old saves without the field stay at the general default).
-  const base = sk(key) in store ? DEFAULT_CONFIG : { ...DEFAULT_CONFIG, outMaxEdge: defaultEdgeForKey(key) };
-  const cfg = { ...base, ...saved, refs: cleanRefs(saved.refs) };
+  // Types registered by other modules bring their own starting configuration (prompt, size, output…).
+  const vd = virtualDefaults(key);
+  const dflt = vd ? { ...DEFAULT_CONFIG, ...vd, refs: cleanRefs(vd.refs) } : DEFAULT_CONFIG;
+  const base = sk(key) in store ? dflt : { ...dflt, outMaxEdge: vd?.outMaxEdge ?? defaultEdgeForKey(key) };
+  const cfg = { ...base, ...saved, refs: cleanRefs(saved.refs ?? (vd ? dflt.refs : undefined)) };
   // Zapis z nieznanym dostawcą (usunięty/przemianowany) psułby każde renderowanie okien: wróć do domyślnego.
   if (!PROVIDER_IDS.includes(cfg.provider)) { cfg.provider = DEFAULT_CONFIG.provider; cfg.model = DEFAULT_CONFIG.model; }
   if (!QUALITIES.includes(cfg.quality)) cfg.quality = DEFAULT_CONFIG.quality; // old saves lack it

@@ -15,6 +15,7 @@ import { registerContextMenus } from "./context-menu.mjs";
 import { openPickForBatch } from "./pick-app.mjs";
 import { runMigrations } from "./migrate.mjs";
 import { syncOptimizerProfile } from "./optimize.mjs";
+import { generateImage, estimateGeneration } from "./api.mjs";
 
 /** GM-owe powiadomienie: batch z wieloma wersjami czeka na wybór (klik w powiadomienie otwiera okno). */
 function notifyPick(rec) {
@@ -37,11 +38,19 @@ Hooks.once("ready", async () => {
     openBatches: () => BatchesApp.open(),
     openLog: () => LogApp.open(),
     generate: (document) => GenerateDialog.open(document),
-    openPick: (batchId) => openPickForBatch(batchId)
+    openPick: (batchId) => openPickForBatch(batchId),
+    // For other modules: own image types (shown in the config window) and headless generation, see README.
+    apiVersion: 1,
+    registerImageType: imageTypes.registerImageType,
+    unregisterImageType: imageTypes.unregisterImageType,
+    listImageTypes: () => imageTypes.detectImageTypes(),
+    estimateGeneration,
+    generateImage
   };
   // Log (prompty, koszty) i silnik batcha tylko dla GM-a: gracz nie ma ich ani przez API modułu.
   if (game.user.isGM) Object.assign(api, { batch, callLog });
   game.modules.get(MODULE_ID).api = api;
+  Hooks.callAll("aiImageGen.ready", api); // modules that started earlier can now register their types
   // local-media-optimizer (jeśli jest): profil folderu ai-image-gen/ z naszymi domyślnymi limitami.
   syncOptimizerProfile();
   if (game.user.isGM) {

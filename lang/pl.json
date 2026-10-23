@@ -139,6 +139,7 @@
   "AIIMG.Log.Batch": "Batch",
   "AIIMG.Log.Uuid": "UUID",
   "AIIMG.Log.User": "Użytkownik",
+  "AIIMG.Log.Caller": "Zlecił moduł",
   "AIIMG.Log.Kind.fast": "Fast",
   "AIIMG.Log.Kind.batch-submit": "Wysyłka batcha",
   "AIIMG.Log.Kind.batch-result": "Wynik batcha",
