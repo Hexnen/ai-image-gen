@@ -179,3 +179,43 @@ button.link:focus-visible { outline: 2px solid var(--color-warm-2, #c9593f); out
 .aiimg-aspect-text small { opacity: .65; font-size: var(--font-size-12); }
 
 .aiimg-size-note { flex: 1 1 100%; font-size: var(--font-size-12, 12px); color: var(--color-warm-2, #ff6400); }
+
+/* ---- Type editor: cards, two columns, segmented controls ---- */
+.aiimg-form { container-type: inline-size; container-name: aiimgform; }
+.aiimg-cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
+@container aiimgform (min-width: 640px) { .aiimg-cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.aiimg-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.aiimg-card { border: 1px solid var(--color-border-dark-4, #333); border-radius: 8px; background: rgba(0, 0, 0, .22); padding: 8px 12px 12px; min-width: 0; }
+.aiimg-card > h3 { margin: 0 0 8px; padding: 0; border: 0; font-size: var(--font-size-14, 14px); letter-spacing: .02em; opacity: .9; }
+.aiimg-card.aiimg-output { border-radius: 8px; margin: 0; padding: 8px 12px 12px; }
+.aiimg-field { display: flex; flex-direction: column; gap: 4px; margin: 0 0 10px; min-width: 0; }
+.aiimg-field:last-child { margin-bottom: 0; }
+.aiimg-lbl { font-size: var(--font-size-12, 12px); opacity: .75; font-weight: 600; text-transform: none; }
+.aiimg-card select { width: 100%; }
+.aiimg-card .hint { margin: 2px 0 0; font-size: var(--font-size-11, 11px); opacity: .7; }
+.aiimg-model-info { margin: 2px 0 0; font-size: var(--font-size-12, 12px); opacity: .8; }
+
+.aiimg-seg { display: flex; align-items: stretch; gap: 0; border: 1px solid var(--color-border-dark-4, #444); border-radius: 6px; overflow: hidden; background: rgba(0, 0, 0, .25); }
+.aiimg-seg.wrap { flex-wrap: wrap; gap: 4px; border: 0; background: none; border-radius: 0; overflow: visible; }
+.aiimg-seg-item { position: relative; flex: 1 1 auto; display: flex; align-items: center; justify-content: center; margin: 0; padding: 0; cursor: pointer; text-align: center; }
+.aiimg-seg-item input { position: absolute; opacity: 0; inset: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.aiimg-seg-item span { display: block; width: 100%; padding: 4px 10px; line-height: 1.3; font-size: var(--font-size-12, 12px); white-space: nowrap; user-select: none; }
+.aiimg-seg:not(.wrap) .aiimg-seg-item + .aiimg-seg-item { border-left: 1px solid var(--color-border-dark-4, #444); }
+.aiimg-seg.wrap .aiimg-seg-item { flex: 0 0 auto; border: 1px solid var(--color-border-dark-4, #444); border-radius: 6px; background: rgba(0, 0, 0, .25); }
+.aiimg-seg-item:hover span { background: rgba(255, 255, 255, .07); }
+.aiimg-seg-item:has(input:checked) span { background: var(--color-warm-2, #ff6400); color: #fff; font-weight: 600; }
+.aiimg-seg-item:has(input:focus-visible) { outline: 2px solid var(--color-warm-1, #fff); outline-offset: -2px; z-index: 1; }
+.aiimg-seg-item.is-off { cursor: not-allowed; }
+.aiimg-seg-item.is-off input { cursor: not-allowed; }
+.aiimg-seg-item.is-off span { opacity: .35; text-decoration: line-through; text-decoration-thickness: 1px; }
+.aiimg-seg-item.is-off:hover span { background: none; }
+.aiimg-seg-item:has(input:disabled:not(:checked)) { cursor: not-allowed; }
+.aiimg-tag { font-style: normal; font-size: var(--font-size-10, 10px); padding: 0 4px; margin-left: 2px; border-radius: 3px; background: rgba(0, 0, 0, .35); opacity: .9; }
+.aiimg-seg-item:has(input:checked) .aiimg-tag { background: rgba(0, 0, 0, .3); }
+
+.aiimg-res-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+.aiimg-est { margin: 4px 0 0; padding-top: 8px; border-top: 1px dashed var(--color-border-dark-4, #444); font-size: var(--font-size-12, 12px); opacity: .9; display: flex; align-items: center; gap: 6px; }
+.aiimg-range-row { display: flex; align-items: center; gap: 10px; }
+.aiimg-range-row input[type=range] { flex: 1 1 auto; min-width: 0; }
+.aiimg-range-row output { flex: 0 0 3.2em; text-align: right; font-variant-numeric: tabular-nums; }
+.aiimg-card textarea { width: 100%; }

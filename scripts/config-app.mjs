@@ -14,6 +14,9 @@ import { aspectInfo } from "./aspect.mjs";
 const { ApplicationV2, HandlebarsApplicationMixin, DialogV2 } = foundry.applications.api;
 const MAX_TEST_VERSIONS = 4;
 const MAX_RUNS = 10;
+const ALL_QUALITIES = ["low", "medium", "high", "xhigh", "max", "auto"];
+const ALL_IMAGE_SIZES = ["0.5K", "1K", "2K", "4K"];
+const ALL_THINKING = ["minimal", "medium", "high"];
 const filePicker = () => foundry.applications.apps.FilePicker.implementation;
 const esc = (s) => foundry.utils.escapeHTML(String(s ?? ""));
 
@@ -23,7 +26,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     classes: ["aiimg-config"],
     tag: "div",
     window: { title: "AIIMG.Config.Title", icon: "fa-solid fa-wand-magic-sparkles", resizable: true },
-    position: { width: 860, height: 640 },
+    position: { width: 980, height: 680 },
     actions: {
       selectType: ImageConfigApp.#onSelectType,
       filter: ImageConfigApp.#onFilter,
@@ -49,6 +52,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   selectedKey = null;
+  /** Name of the radio group to re-focus after the next render (keyboard users keep their place). */
+  #focusAfterRender = null;
   /** {draft, text}: size adjusted by the last provider/model change (shown only while that draft is open). */
   sizeNote = null;
   groupFilter = "all";
@@ -184,6 +189,25 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     return { open: this.test.open, test: this.#testContext(cfg, selected) };
   }
 
+  /** One-line model description: its note plus the catalogue price (never invented; OpenRouter is a rough guess). */
+  #modelInfo(cfg, caps) {
+    const L = (k) => game.i18n.localize(k);
+    const m = providers.listModels(cfg.provider).find((x) => x.id === cfg.model);
+    const parts = [];
+    if (m?.note) parts.push(L(`AIIMG.ModelNote.${m.note}`));
+    const price = caps?.price ? caps.price[cfg.imageSize] ?? Object.values(caps.price)[0] : null;
+    if (price != null) parts.push(game.i18n.format("AIIMG.Config.ModelFrom", { cost: String(Number(price)) }));
+    else if (cfg.provider === "openrouter") parts.push(L("AIIMG.Config.ModelPriceRough"));
+    return parts.join(" · ");
+  }
+
+  /** "≈ $0.053 / image (estimate)" for the current draft, same estimator as the test drawer. */
+  #estPer(cfg) {
+    let cost = 0;
+    try { cost = estimateTest(fitTestConfig(cfg), 1); } catch { /* unknown model: no estimate */ }
+    return game.i18n.format("AIIMG.Config.EstPerImage", { cost: Number(cost || 0).toFixed(3) });
+  }
+
   async _prepareContext() {
     const types = detectImageTypes();
     if (!this.selectedKey || !types.some((t) => t.key === this.selectedKey)) {
@@ -195,12 +219,12 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const cfg = (this.draft ??= getConfig(this.selectedKey));
 
     const providerList = Object.entries(providers.PROVIDERS).map(([id, p]) => ({
-      id, label: p.label, selected: id === cfg.provider
+      id, label: p.label, selected: id === cfg.provider, noBatch: !p.supportsBatch
     }));
     const L = (k) => game.i18n.localize(k);
     const models = providers.listModels(cfg.provider).map((m) => ({
       id: m.id,
-      label: m.note ? `${m.label} — ${L(`AIIMG.ModelNote.${m.note}`)}` : m.label,
+      label: m.label,
       selected: m.id === cfg.model
     }));
     const caps = providers.modelCaps(cfg.provider, cfg.model);
@@ -238,15 +262,22 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       sizeStep: exactSize ? 16 : 64,
       sizeMax: exactSize ? 3840 : 4096,
       exactSize,
-      qualities: (caps?.qualities ?? providers.OPENAI_QUALITIES_OLD).map((q) => ({
-        id: q, selected: q === cfg.quality, label: L(`AIIMG.Quality.${q}`)
+      qualities: ALL_QUALITIES.map((q) => {
+        const ok = (caps?.qualities ?? providers.OPENAI_QUALITIES_OLD).includes(q);
+        return { id: q, selected: q === cfg.quality, label: L(`AIIMG.Quality.${q}`), disabled: !ok };
+      }),
+      imageSizes: ALL_IMAGE_SIZES.filter((v) => (caps?.sizes ?? []).includes(v) || v !== "0.5K").map((v) => ({
+        id: v, label: v, selected: v === cfg.imageSize, disabled: !(caps?.sizes ?? []).includes(v)
       })),
-      imageSizes: (caps?.sizes ?? []).map((v) => ({ id: v, label: v, selected: v === cfg.imageSize })),
       hasThinking: !!caps?.thinking?.length,
-      thinkingLevels: (caps?.thinking ?? []).map((v) => ({
-        id: v, selected: v === (cfg.thinkingLevel || caps.defaultThinking),
-        label: L(`AIIMG.Thinking.${v}`) + (v === caps.defaultThinking ? ` (${L("AIIMG.Thinking.default")})` : "")
+      thinkingLevels: ALL_THINKING.map((v) => ({
+        id: v, selected: v === (cfg.thinkingLevel || caps?.defaultThinking),
+        label: L(`AIIMG.Thinking.${v}`) + (v === caps?.defaultThinking ? ` (${L("AIIMG.Thinking.default")})` : ""),
+        disabled: !(caps?.thinking ?? []).includes(v)
       })),
+      modelInfo: this.#modelInfo(cfg, caps),
+      estPer: this.#estPer(cfg),
+      outLossless: cfg.outFormat === "png",
       batchWarn: cfg.defaultMode === "batch" && !supportsBatch,
       outEdges: MAX_EDGES.map((v) => ({ value: v, selected: v === cfg.outMaxEdge, label: v ? `${v} px` : game.i18n.localize("AIIMG.Config.OutNoResize") })),
       outFormats: FORMATS.map((v) => ({ id: v, selected: v === cfg.outFormat, label: v.toUpperCase() })),
@@ -289,7 +320,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     super._onRender?.(context, options);
     const el = this.element;
     // Provider change: fall back to that provider's first model (and Fast if no batch).
-    el.querySelector("select[name=provider]")?.addEventListener("change", () => {
+    el.querySelectorAll("input[name=provider]").forEach((r) => r.addEventListener("change", () => {
+      this.#focusAfterRender = "provider";
       this.#readForm();
       const prev = { w: this.draft.width, h: this.draft.height };
       const models = providers.listModels(this.draft.provider);
@@ -299,7 +331,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       this.draft.custom = false;
       this.#noteSizeFit(prev);
       this.render();
-    });
+    }));
     // Model change: re-clamp quality / size / thinking to what the new model supports.
     el.querySelector("select[name=model]")?.addEventListener("change", () => {
       this.#readForm();
@@ -310,7 +342,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       this.render();
     });
     // Switching to "custom" must keep the current numbers; switching away applies the preset.
-    el.querySelector("select[name=size]")?.addEventListener("change", (ev) => {
+    el.querySelectorAll("[name=size]").forEach((r) => r.addEventListener("change", (ev) => {
+      this.#focusAfterRender = "size";
       const v = ev.target.value;
       if (v === "custom") {
         this.draft.custom = true; // keep the current numbers, just reveal the inputs
@@ -322,15 +355,20 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       }
       this.#readFormExceptSize();
       this.render();
-    });
+    }));
     // Quality / image size / thinking / custom width+height only change the draft and the live estimate
     // (no re-render, so focus and caret survive). Provider, model, size preset and mode re-render above.
     for (const n of ["size", "width", "height"]) {
-      el.querySelector(`[name=${n}]`)?.addEventListener(n === "size" ? "change" : "input", () => { this.sizeNote = null; el.querySelector("[data-role=sizeNote]")?.remove(); });
+      el.querySelectorAll(`[name=${n}]`).forEach((f) => f.addEventListener(n === "size" ? "change" : "input", () => { this.sizeNote = null; el.querySelector("[data-role=sizeNote]")?.remove(); }));
     }
     for (const n of ["quality", "imageSize", "thinkingLevel", "width", "height", "outMaxEdge", "outFormat", "outQualityPct"]) {
-      const f = el.querySelector(`[name=${n}]`);
-      f?.addEventListener(f.tagName === "SELECT" ? "change" : "input", () => this.#onDraftInput());
+      el.querySelectorAll(`[name=${n}]`).forEach((f) =>
+        f.addEventListener(f.tagName === "SELECT" || f.type === "radio" ? "change" : "input", () => this.#onDraftInput()));
+    }
+    // Radio groups re-render the window on provider/size changes; keep keyboard focus on the checked radio.
+    if (this.#focusAfterRender) {
+      el.querySelector(`input[name=${this.#focusAfterRender}]:checked`)?.focus();
+      this.#focusAfterRender = null;
     }
     this.#wireRefZone(el.querySelector(".aiimg-refs"));
     el.querySelector("textarea[name=promptTemplate]")?.addEventListener("input", () => this.#onDraftInput());
@@ -355,6 +393,19 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     this.#readTest();
     this.#updateTestPreview();
     this.#updateAspect();
+    this.#updateForm();
+  }
+
+  /** Live bits of the form that depend on the draft: cost estimate, output quality readout, lossless state. */
+  #updateForm() {
+    const el = this.element;
+    if (!el || !this.draft) return;
+    const est = el.querySelector("[data-role=estPer]");
+    if (est) est.textContent = this.#estPer(this.draft);
+    const q = el.querySelector("input[name=outQualityPct]");
+    const val = el.querySelector("[data-role=outQualityVal]");
+    if (val && q) val.textContent = `${q.value}%`;
+    if (q && game.user.isGM) q.disabled = this.draft.outFormat === "png";
   }
 
   /** Remember (for this draft only) that the model change adjusted the size, so the row can say so. */

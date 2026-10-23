@@ -26,125 +26,189 @@
     {{#if selected}}
     <h2>{{selected.label}} <small>{{selected.group}}</small></h2>
 
-    <div class="form-group">
-      <label>{{localize "AIIMG.Config.Provider"}}</label>
-      <select name="provider" {{#unless isGM}}disabled{{/unless}}>
-        {{#each providerList}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
-      </select>
-    </div>
+    <div class="aiimg-cols">
+      <div class="aiimg-col">
+        <section class="aiimg-card" aria-labelledby="aiimg-c-model">
+          <h3 id="aiimg-c-model">{{localize "AIIMG.Config.CardModel"}}</h3>
 
-    <div class="form-group">
-      <label>{{localize "AIIMG.Config.Model"}}</label>
-      <select name="model" {{#unless isGM}}disabled{{/unless}}>
-        {{#each models}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
-      </select>
-    </div>
+          <div class="aiimg-field">
+            <span class="aiimg-lbl" id="aiimg-l-provider">{{localize "AIIMG.Config.Provider"}}</span>
+            <div class="aiimg-seg" role="radiogroup" aria-labelledby="aiimg-l-provider">
+              {{#each providerList}}
+              <label class="aiimg-seg-item">
+                <input type="radio" name="provider" value="{{id}}" {{#if selected}}checked{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
+                <span>{{label}}{{#if noBatch}} <em class="aiimg-tag">{{localize "AIIMG.Config.NoBatchTag"}}</em>{{/if}}</span>
+              </label>
+              {{/each}}
+            </div>
+          </div>
 
-    <div class="form-group aiimg-res">
-      <label>{{localize "AIIMG.Config.Resolution"}}</label>
-      <div class="form-fields aiimg-res-row">
-        <select name="size" class="aiimg-size-select">
-          {{#each sizes}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
-          {{#if allowCustomSize}}<option value="custom" {{#if customSize}}selected{{/if}}>{{localize "AIIMG.Config.Custom"}}</option>{{/if}}
-        </select>
-        {{#if customSize}}
-        <span class="aiimg-wh">
-          <input type="number" name="width" value="{{cfg.width}}" min="64" max="{{sizeMax}}" step="{{sizeStep}}" aria-label="{{localize 'AIIMG.Config.Width'}}">
-          <span>×</span>
-          <input type="number" name="height" value="{{cfg.height}}" min="64" max="{{sizeMax}}" step="{{sizeStep}}" aria-label="{{localize 'AIIMG.Config.Height'}}">
-        </span>
-        {{/if}}
-        {{#if aspect}}
-        <div class="aiimg-aspect" data-role="aspect" role="img" aria-label="{{aspect.aria}}">
-          <span class="aiimg-aspect-box"><i data-role="aspectRect" style="width:{{aspect.pw}}px;height:{{aspect.ph}}px"></i></span>
-          <span class="aiimg-aspect-text"><strong data-role="aspectText">{{aspect.text}}</strong><small data-role="aspectDec">{{aspect.decText}}</small></span>
-        </div>
-        {{/if}}
-        {{#if sizeNote}}<span class="aiimg-size-note" data-role="sizeNote" role="status">{{sizeNote}}</span>{{/if}}
+          <div class="aiimg-field">
+            <label class="aiimg-lbl" for="aiimg-model">{{localize "AIIMG.Config.Model"}}</label>
+            <select id="aiimg-model" name="model" {{#unless isGM}}disabled{{/unless}}>
+              {{#each models}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+            </select>
+            {{#if modelInfo}}<p class="aiimg-model-info" data-role="modelInfo">{{modelInfo}}</p>{{/if}}
+          </div>
+
+          <div class="aiimg-field aiimg-res">
+            <span class="aiimg-lbl" id="aiimg-l-size">{{localize "AIIMG.Config.Resolution"}}</span>
+            <div class="aiimg-seg wrap" role="radiogroup" aria-labelledby="aiimg-l-size">
+              {{#each sizes}}
+              <label class="aiimg-seg-item">
+                <input type="radio" name="size" value="{{id}}" {{#if selected}}checked{{/if}}>
+                <span>{{label}}</span>
+              </label>
+              {{/each}}
+              {{#if allowCustomSize}}
+              <label class="aiimg-seg-item">
+                <input type="radio" name="size" value="custom" {{#if customSize}}checked{{/if}}>
+                <span>{{localize "AIIMG.Config.Custom"}}</span>
+              </label>
+              {{/if}}
+            </div>
+            <div class="aiimg-res-row">
+              {{#if customSize}}
+              <span class="aiimg-wh">
+                <input type="number" name="width" value="{{cfg.width}}" min="64" max="{{sizeMax}}" step="{{sizeStep}}" aria-label="{{localize 'AIIMG.Config.Width'}}">
+                <span>×</span>
+                <input type="number" name="height" value="{{cfg.height}}" min="64" max="{{sizeMax}}" step="{{sizeStep}}" aria-label="{{localize 'AIIMG.Config.Height'}}">
+              </span>
+              {{/if}}
+              {{#if aspect}}
+              <div class="aiimg-aspect" data-role="aspect" role="img" aria-label="{{aspect.aria}}">
+                <span class="aiimg-aspect-box"><i data-role="aspectRect" style="width:{{aspect.pw}}px;height:{{aspect.ph}}px"></i></span>
+                <span class="aiimg-aspect-text"><strong data-role="aspectText">{{aspect.text}}</strong><small data-role="aspectDec">{{aspect.decText}}</small></span>
+              </div>
+              {{/if}}
+              {{#if sizeNote}}<span class="aiimg-size-note" data-role="sizeNote" role="status">{{sizeNote}}</span>{{/if}}
+            </div>
+            {{#if exactSize}}<p class="hint">{{localize "AIIMG.Config.SizeRules"}}</p>{{/if}}
+          </div>
+
+          {{#if isOpenAI}}
+          <div class="aiimg-field">
+            <span class="aiimg-lbl" id="aiimg-l-quality">{{localize "AIIMG.Config.Quality"}}</span>
+            <div class="aiimg-seg wrap" role="radiogroup" aria-labelledby="aiimg-l-quality">
+              {{#each qualities}}
+              <label class="aiimg-seg-item{{#if disabled}} is-off{{/if}}" {{#if disabled}}data-tooltip="AIIMG.Config.NotForModel"{{/if}}>
+                <input type="radio" name="quality" value="{{id}}" {{#if selected}}checked{{/if}} {{#if disabled}}disabled{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
+                <span>{{label}}</span>
+              </label>
+              {{/each}}
+            </div>
+          </div>
+          {{/if}}
+
+          {{#if isGemini}}
+          <div class="aiimg-field">
+            <span class="aiimg-lbl" id="aiimg-l-isize">{{localize "AIIMG.Config.ImageSize"}}</span>
+            <div class="aiimg-seg" role="radiogroup" aria-labelledby="aiimg-l-isize">
+              {{#each imageSizes}}
+              <label class="aiimg-seg-item{{#if disabled}} is-off{{/if}}" {{#if disabled}}data-tooltip="AIIMG.Config.NotForModel"{{/if}}>
+                <input type="radio" name="imageSize" value="{{id}}" {{#if selected}}checked{{/if}} {{#if disabled}}disabled{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
+                <span>{{label}}</span>
+              </label>
+              {{/each}}
+            </div>
+          </div>
+          <div class="aiimg-field">
+            <span class="aiimg-lbl" id="aiimg-l-think">{{localize "AIIMG.Config.Thinking"}}</span>
+            {{#if hasThinking}}
+            <div class="aiimg-seg" role="radiogroup" aria-labelledby="aiimg-l-think">
+              {{#each thinkingLevels}}
+              <label class="aiimg-seg-item{{#if disabled}} is-off{{/if}}" {{#if disabled}}data-tooltip="AIIMG.Config.NotForModel"{{/if}}>
+                <input type="radio" name="thinkingLevel" value="{{id}}" {{#if selected}}checked{{/if}} {{#if disabled}}disabled{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
+                <span>{{label}}</span>
+              </label>
+              {{/each}}
+            </div>
+            {{else}}
+            <p class="hint">{{localize "AIIMG.Config.ThinkingFixed"}}</p>
+            {{/if}}
+          </div>
+          {{/if}}
+
+          <p class="aiimg-est" role="status"><i class="fa-solid fa-coins" aria-hidden="true"></i> <span data-role="estPer">{{estPer}}</span></p>
+        </section>
+
+        <section class="aiimg-card" aria-labelledby="aiimg-c-mode">
+          <h3 id="aiimg-c-mode">{{localize "AIIMG.Config.Mode"}}</h3>
+          <div class="aiimg-seg" role="radiogroup" aria-labelledby="aiimg-c-mode">
+            <label class="aiimg-seg-item">
+              <input type="radio" name="defaultMode" value="fast" {{#if isFast}}checked{{/if}} {{#unless isGM}}disabled{{/unless}}>
+              <span>{{localize "AIIMG.Fast"}}</span>
+            </label>
+            <label class="aiimg-seg-item{{#unless supportsBatch}} is-off{{/unless}}" {{#unless supportsBatch}}data-tooltip="AIIMG.Config.NoBatch"{{/unless}}>
+              <input type="radio" name="defaultMode" value="batch" {{#if isBatch}}checked{{/if}} {{#unless supportsBatch}}disabled{{/unless}} {{#unless isGM}}disabled{{/unless}}>
+              <span>{{localize "AIIMG.Batch"}}</span>
+            </label>
+          </div>
+          {{#unless supportsBatch}}<p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Config.NoBatch"}}</p>{{/unless}}
+          {{#if batchWarn}}<p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Config.BatchFallback"}}</p>{{/if}}
+        </section>
       </div>
-      {{#if exactSize}}<p class="hint">{{localize "AIIMG.Config.SizeRules"}}</p>{{/if}}
-    </div>
 
-    {{#if isOpenAI}}
-    <div class="form-group">
-      <label>{{localize "AIIMG.Config.Quality"}}</label>
-      <select name="quality" {{#unless isGM}}disabled{{/unless}}>
-        {{#each qualities}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
-      </select>
-    </div>
-    {{/if}}
+      <div class="aiimg-col">
+        <section class="aiimg-card aiimg-output" aria-labelledby="aiimg-c-out">
+          <h3 id="aiimg-c-out">{{localize "AIIMG.Config.Output"}}</h3>
+          <div class="aiimg-field">
+            <span class="aiimg-lbl" id="aiimg-l-edge">{{localize "AIIMG.Config.OutMaxEdge"}}</span>
+            <div class="aiimg-seg wrap" role="radiogroup" aria-labelledby="aiimg-l-edge">
+              {{#each outEdges}}
+              <label class="aiimg-seg-item">
+                <input type="radio" name="outMaxEdge" value="{{value}}" {{#if selected}}checked{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
+                <span>{{label}}</span>
+              </label>
+              {{/each}}
+            </div>
+          </div>
+          <div class="aiimg-field">
+            <span class="aiimg-lbl" id="aiimg-l-fmt">{{localize "AIIMG.Config.OutFormat"}}</span>
+            <div class="aiimg-seg" role="radiogroup" aria-labelledby="aiimg-l-fmt">
+              {{#each outFormats}}
+              <label class="aiimg-seg-item">
+                <input type="radio" name="outFormat" value="{{id}}" {{#if selected}}checked{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
+                <span>{{label}}</span>
+              </label>
+              {{/each}}
+            </div>
+          </div>
+          <div class="aiimg-field aiimg-range">
+            <label class="aiimg-lbl" for="aiimg-outq">{{localize "AIIMG.Config.OutQuality"}}</label>
+            <div class="aiimg-range-row">
+              <input id="aiimg-outq" type="range" name="outQualityPct" value="{{outQualityPct}}" min="50" max="100" step="5" {{#unless isGM}}disabled{{/unless}} {{#if outLossless}}disabled{{/if}}>
+              <output data-role="outQualityVal" for="aiimg-outq">{{outQualityPct}}%</output>
+            </div>
+          </div>
+          <p class="hint">{{localize "AIIMG.Config.OutHint"}} {{#if outOn}}<em>{{outVia}}</em>{{else}}<strong>{{localize "AIIMG.Config.OutOff"}}</strong>{{/if}}</p>
+        </section>
 
-    {{#if isGemini}}
-    <div class="form-group">
-      <label>{{localize "AIIMG.Config.ImageSize"}}</label>
-      <select name="imageSize" {{#unless isGM}}disabled{{/unless}}>
-        {{#each imageSizes}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
-      </select>
-    </div>
-    <div class="form-group">
-      <label>{{localize "AIIMG.Config.Thinking"}}</label>
-      {{#if hasThinking}}
-      <select name="thinkingLevel" {{#unless isGM}}disabled{{/unless}}>
-        {{#each thinkingLevels}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
-      </select>
-      {{else}}
-      <span class="hint">{{localize "AIIMG.Config.ThinkingFixed"}}</span>
-      {{/if}}
-    </div>
-    {{/if}}
+        <section class="aiimg-card" aria-labelledby="aiimg-c-prompt">
+          <h3 id="aiimg-c-prompt">{{localize "AIIMG.Config.Prompt"}}</h3>
+          <textarea name="promptTemplate" rows="5" aria-labelledby="aiimg-c-prompt">{{cfg.promptTemplate}}</textarea>
+          <p class="hint">{{localize "AIIMG.Config.PromptHint"}}</p>
+        </section>
 
-    <fieldset class="aiimg-output">
-      <legend>{{localize "AIIMG.Config.Output"}}</legend>
-      <div class="form-group">
-        <label>{{localize "AIIMG.Config.OutMaxEdge"}}</label>
-        <select name="outMaxEdge" {{#unless isGM}}disabled{{/unless}}>
-          {{#each outEdges}}<option value="{{value}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
-        </select>
-      </div>
-      <div class="form-group">
-        <label>{{localize "AIIMG.Config.OutFormat"}}</label>
-        <select name="outFormat" {{#unless isGM}}disabled{{/unless}}>
-          {{#each outFormats}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
-        </select>
-        <input type="number" name="outQualityPct" value="{{outQualityPct}}" min="50" max="100" step="5" {{#unless isGM}}disabled{{/unless}} aria-label="{{localize 'AIIMG.Config.OutQuality'}}">
-        <span>%</span>
-      </div>
-      <p class="hint">{{localize "AIIMG.Config.OutHint"}} {{#if outOn}}<em>{{outVia}}</em>{{else}}<strong>{{localize "AIIMG.Config.OutOff"}}</strong>{{/if}}</p>
-    </fieldset>
-
-    <div class="form-group stacked">
-      <label>{{localize "AIIMG.Config.Prompt"}}</label>
-      <textarea name="promptTemplate" rows="5">{{cfg.promptTemplate}}</textarea>
-      <p class="hint">{{localize "AIIMG.Config.PromptHint"}}</p>
-    </div>
-
-    <div class="form-group stacked">
-      <label>{{localize "AIIMG.Config.Refs"}}</label>
-      <div class="aiimg-refs" tabindex="0">
-        {{#each refs}}
-        <figure>
-          <img src="{{path}}" alt="">
-          <button type="button" data-action="removeRef" data-index="{{index}}" aria-label="{{localize 'AIIMG.Config.RemoveRef'}}" data-tooltip="AIIMG.Config.RemoveRef"><i class="fa-solid fa-xmark"></i></button>
-        </figure>
-        {{/each}}
-        <button type="button" class="aiimg-add" data-action="addRef" aria-label="{{localize 'AIIMG.Config.AddRef'}}" data-tooltip="AIIMG.Config.AddRef"><i class="fa-solid fa-plus"></i></button>
-        {{#if isGM}}
-        <button type="button" class="aiimg-add" data-action="uploadRefs" aria-label="{{localize 'AIIMG.Config.UploadRefsTip'}}" data-tooltip="AIIMG.Config.UploadRefsTip"><i class="fa-solid fa-upload"></i></button>
-        <input type="file" name="refUpload" accept="image/*" multiple hidden>
-        {{/if}}
-      </div>
-      {{#if isGM}}<p class="hint">{{localize "AIIMG.Config.RefsUploadHint"}}</p>{{/if}}
-    </div>
-
-    <div class="form-group">
-      <label>{{localize "AIIMG.Config.Mode"}}</label>
-      <div class="aiimg-mode">
-        <label><input type="radio" name="defaultMode" value="fast" {{#if isFast}}checked{{/if}}> {{localize "AIIMG.Fast"}}</label>
-        <label {{#unless supportsBatch}}class="disabled" data-tooltip="AIIMG.Config.NoBatch"{{/unless}}><input type="radio" name="defaultMode" value="batch" {{#if isBatch}}checked{{/if}} {{#unless supportsBatch}}disabled{{/unless}}> {{localize "AIIMG.Batch"}}</label>
+        <section class="aiimg-card" aria-labelledby="aiimg-c-refs">
+          <h3 id="aiimg-c-refs">{{localize "AIIMG.Config.Refs"}}</h3>
+          <div class="aiimg-refs" tabindex="0">
+            {{#each refs}}
+            <figure>
+              <img src="{{path}}" alt="">
+              <button type="button" data-action="removeRef" data-index="{{index}}" aria-label="{{localize 'AIIMG.Config.RemoveRef'}}" data-tooltip="AIIMG.Config.RemoveRef"><i class="fa-solid fa-xmark"></i></button>
+            </figure>
+            {{/each}}
+            <button type="button" class="aiimg-add" data-action="addRef" aria-label="{{localize 'AIIMG.Config.AddRef'}}" data-tooltip="AIIMG.Config.AddRef"><i class="fa-solid fa-plus"></i></button>
+            {{#if isGM}}
+            <button type="button" class="aiimg-add" data-action="uploadRefs" aria-label="{{localize 'AIIMG.Config.UploadRefsTip'}}" data-tooltip="AIIMG.Config.UploadRefsTip"><i class="fa-solid fa-upload"></i></button>
+            <input type="file" name="refUpload" accept="image/*" multiple hidden>
+            {{/if}}
+          </div>
+          {{#if isGM}}<p class="hint">{{localize "AIIMG.Config.RefsUploadHint"}}</p>{{/if}}
+        </section>
       </div>
     </div>
-    {{#unless supportsBatch}}<p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Config.NoBatch"}}</p>{{/unless}}
-    {{#if batchWarn}}<p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Config.BatchFallback"}}</p>{{/if}}
 
     {{#if isGM}}
     <footer class="aiimg-footer">
