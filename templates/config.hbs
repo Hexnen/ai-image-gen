@@ -154,14 +154,16 @@
           <h3 id="aiimg-c-out">{{localize "AIIMG.Config.Output"}}</h3>
           <div class="aiimg-field">
             <span class="aiimg-lbl" id="aiimg-l-edge">{{localize "AIIMG.Config.OutMaxEdge"}}</span>
+            <p class="hint">{{localize "AIIMG.Config.OutMaxEdgeHint"}}</p>
             <div class="aiimg-seg wrap" role="radiogroup" aria-labelledby="aiimg-l-edge">
               {{#each outEdges}}
-              <label class="aiimg-seg-item">
+              <label class="aiimg-seg-item{{#if noop}} is-noop{{/if}}" {{#if noop}}data-tooltip="AIIMG.Config.OutNoEffect"{{/if}}>
                 <input type="radio" name="outMaxEdge" value="{{value}}" {{#if selected}}checked{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
                 <span>{{label}}</span>
               </label>
               {{/each}}
             </div>
+            <p class="aiimg-out-prev" data-role="outPrev" data-state="{{outPrev.state}}" role="status">{{outPrev.text}}</p>
           </div>
           <div class="aiimg-field">
             <span class="aiimg-lbl" id="aiimg-l-fmt">{{localize "AIIMG.Config.OutFormat"}}</span>
@@ -181,7 +183,7 @@
               <output data-role="outQualityVal" for="aiimg-outq">{{outQualityPct}}%</output>
             </div>
           </div>
-          <p class="hint">{{localize "AIIMG.Config.OutHint"}} {{#if outOn}}<em>{{outVia}}</em>{{else}}<strong>{{localize "AIIMG.Config.OutOff"}}</strong>{{/if}}</p>
+          <p class="hint">{{#if outOn}}<em>{{outVia}}</em>{{else}}<strong>{{localize "AIIMG.Config.OutOff"}}</strong>{{/if}}</p>
         </section>
 
         <section class="aiimg-card" aria-labelledby="aiimg-c-prompt">

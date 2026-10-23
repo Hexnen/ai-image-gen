@@ -223,3 +223,10 @@ button.link:focus-visible { outline: 2px solid var(--color-warm-2, #c9593f); out
 /* An open log row shows the full prompt below, so the truncated copy in the row is hidden. */
 .aiimg-log-row.open .aiimg-log-short { visibility: hidden; }
 .aiimg-prompt-meta:has(> button:only-child) { justify-content: flex-end; }
+
+/* Saved file: what the max-size limit does, and chips that change nothing for the current generation size. */
+.aiimg-out-prev { margin: 6px 0 0; font-size: var(--font-size-12, 12px); line-height: 1.4; color: var(--color-text-light-6, #bbb); }
+.aiimg-out-prev[data-state="reduce"] { color: var(--color-text-light-1, #eee); }
+.aiimg-seg-item.is-noop span { opacity: .55; }
+.aiimg-seg.wrap .aiimg-seg-item.is-noop { border-style: dashed; }
+.aiimg-seg-item.is-noop:has(input:checked) span { opacity: 1; }

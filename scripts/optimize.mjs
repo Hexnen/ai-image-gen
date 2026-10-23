@@ -13,10 +13,13 @@ export const PROFILE_ID = "ai-image-gen";
 export const MIN_OPTIMIZER_VERSION = "1.1.0";
 
 export const DEFAULT_OUTPUT = Object.freeze({ maxEdge: 1536, quality: 0.85, format: "webp" });
+/** Upper safety cap of the folder profile registered in local-media-optimizer: it only applies to uploads that
+ *  did not go through our own flow (those carry the per-type limit and `optimized: true`). */
+export const PROFILE_EDGE = 2048;
 /** Referencje wgrywane do _refs/ trzymamy trochę większe: to materiał wejściowy dla modelu. */
 export const REF_OUTPUT = Object.freeze({ maxEdge: 2048, quality: 0.9, format: "webp" });
 /** Wartości z listy w konfiguracji typu; 0 = bez zmniejszania. */
-export const MAX_EDGES = Object.freeze([0, 512, 768, 1024, 1536, 2048, 3072]);
+export const MAX_EDGES = Object.freeze([0, 128, 256, 512, 768, 1024, 1536, 2048, 3072]);
 export const FORMATS = Object.freeze(["webp", "jpeg", "png"]);
 
 const MIME = { webp: "image/webp", jpeg: "image/jpeg", png: "image/png" };
@@ -140,7 +143,8 @@ export async function optimizeForSave(blob, opts = {}) {
 
 /**
  * Zarejestruj (albo zdejmij) profil folderu `ai-image-gen/` w local-media-optimizer: uploady do tego folderu, których
- * sami nie optymalizowaliśmy (np. ręcznie z file pickera), dostają te same limity. Wołać w ready i przy zmianie ustawienia.
+ * sami nie optymalizowaliśmy (np. ręcznie z file pickera), dostają ostrożny górny limit (PROFILE_EDGE). Limit per typ
+ * stosujemy sami w optimizeForSave i wgrywamy z `optimized: true`. Wołać w ready i przy zmianie ustawienia.
  */
 export function syncOptimizerProfile() {
   try {
@@ -149,7 +153,7 @@ export function syncOptimizerProfile() {
     if (!optimizeEnabled()) { api.unregisterProfile?.(PROFILE_ID); return false; }
     api.registerProfile(PROFILE_ID, {
       label: "AI Image Gen", prefix: `${MODULE_ID}/`,
-      maxEdge: DEFAULT_OUTPUT.maxEdge, quality: DEFAULT_OUTPUT.quality, format: DEFAULT_OUTPUT.format
+      maxEdge: PROFILE_EDGE, quality: DEFAULT_OUTPUT.quality, format: DEFAULT_OUTPUT.format
     });
     return true;
   } catch (e) {

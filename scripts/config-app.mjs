@@ -10,6 +10,7 @@ import { getKey } from "./settings.mjs";
 import { buildTestPrompt, fitTestConfig, estimateTest, generateTest } from "./generate-flow.mjs";
 import { TestDrawerApp } from "./test-drawer-app.mjs";
 import { aspectInfo } from "./aspect.mjs";
+import { generatedSize, outputPreview, edgeIsNoop } from "./output-preview.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin, DialogV2 } = foundry.applications.api;
 const MAX_TEST_VERSIONS = 4;
@@ -280,7 +281,11 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       estPer: this.#estPer(cfg),
       outLossless: cfg.outFormat === "png",
       batchWarn: cfg.defaultMode === "batch" && !supportsBatch,
-      outEdges: MAX_EDGES.map((v) => ({ value: v, selected: v === cfg.outMaxEdge, label: v ? `${v} px` : game.i18n.localize("AIIMG.Config.OutNoResize") })),
+      outEdges: MAX_EDGES.map((v) => ({
+        value: v, selected: v === cfg.outMaxEdge, label: v ? `${v} px` : game.i18n.localize("AIIMG.Config.OutNoResize"),
+        noop: edgeIsNoop(generatedSize(cfg), v)
+      })),
+      outPrev: this.#outPreview(cfg),
       outFormats: FORMATS.map((v) => ({ id: v, selected: v === cfg.outFormat, label: v.toUpperCase() })),
       outQualityPct: Math.round((cfg.outQuality ?? 0.85) * 100),
       outOn: optimizeEnabled(),
@@ -397,10 +402,44 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     this.#updateForm();
   }
 
+  /** Text under the max-size chips: what the limit does to the image this draft generates. */
+  #outPreview(cfg) {
+    const gen = generatedSize(cfg);
+    const p = outputPreview(gen, cfg.outMaxEdge);
+    if (!p) return { state: "none", text: "" };
+    const mark = (box) => `${p.approx ? "≈ " : ""}${box.w}×${box.h}`;
+    const L = game.i18n;
+    if (p.state === "none") return { state: p.state, text: L.localize("AIIMG.Config.OutPrevNone") };
+    if (p.state === "same") return { state: p.state, text: L.format("AIIMG.Config.OutPrevSame", { size: mark(p.from) }) };
+    return { state: p.state, text: L.format("AIIMG.Config.OutPrevReduce", { from: mark(p.from), to: mark(p.to), pct: p.pct }) };
+  }
+
+  /** Refresh the max-size readout and mark chips that would change nothing (no re-render: focus survives). */
+  #updateOutput() {
+    const el = this.element;
+    if (!el || !this.draft) return;
+    const gen = generatedSize(this.draft);
+    const prev = el.querySelector("[data-role=outPrev]");
+    if (prev) {
+      const o = this.#outPreview(this.draft);
+      prev.textContent = o.text;
+      prev.dataset.state = o.state;
+    }
+    for (const input of el.querySelectorAll("input[name=outMaxEdge]")) {
+      const item = input.closest(".aiimg-seg-item");
+      if (!item) continue;
+      const noop = edgeIsNoop(gen, input.value);
+      item.classList.toggle("is-noop", noop);
+      if (noop) item.dataset.tooltip = "AIIMG.Config.OutNoEffect";
+      else delete item.dataset.tooltip;
+    }
+  }
+
   /** Live bits of the form that depend on the draft: cost estimate, output quality readout, lossless state. */
   #updateForm() {
     const el = this.element;
     if (!el || !this.draft) return;
+    this.#updateOutput();
     const est = el.querySelector("[data-role=estPer]");
     if (est) est.textContent = this.#estPer(this.draft);
     const q = el.querySelector("input[name=outQualityPct]");
