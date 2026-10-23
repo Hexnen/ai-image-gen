@@ -8,6 +8,7 @@ const DOCS = ["Actor", "Item"];
  * key: "<owner-id>.<name>" (must not look like a document key), group: its own filter in the config window.
  */
 const VIRTUAL = new Map();
+const RESERVED_GROUPS = ["all", "actor", "item", "macro"];
 const KEY_RE = /^[a-z0-9][a-z0-9_-]{0,63}\.[A-Za-z0-9_-]{1,64}$/;
 
 /**
@@ -23,6 +24,10 @@ const KEY_RE = /^[a-z0-9][a-z0-9_-]{0,63}\.[A-Za-z0-9_-]{1,64}$/;
 export function registerImageType({ key, label, group, owner = "", requiresRef = false, defaults = {} } = {}) {
   if (!KEY_RE.test(String(key ?? ""))) throw new Error(`Invalid image type key: ${key}`);
   if (!label || !group) throw new Error("An image type needs a label and a group.");
+  // "all" and the document groups are the built-in filter chips: a same-named group would duplicate a chip (and break "all").
+  if (RESERVED_GROUPS.includes(loc(String(group)).trim().toLowerCase()) || RESERVED_GROUPS.includes(String(group).trim().toLowerCase())) {
+    throw new Error(`"${group}" is a reserved group name (all, Actor, Item, Macro).`);
+  }
   const system = key.split(".")[0];
   if (system === game.system?.id || system === "core") throw new Error(`Image type key "${key}" would collide with a document type.`);
   VIRTUAL.set(key, { key, label: String(label), group: String(group), owner: String(owner), requiresRef: !!requiresRef, defaults: foundry.utils.deepClone(defaults) });

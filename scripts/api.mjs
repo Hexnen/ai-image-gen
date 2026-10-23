@@ -13,6 +13,7 @@ import { executeGeneration, estimateFast, loadRefs, normalizeRef, maxRefsFor, MA
 import { saveImageBlobEx, slug } from "./save-image.mjs";
 import { outputOptsFromConfig, statsPatch } from "./optimize.mjs";
 import { updateCall } from "./call-log.mjs";
+import { redact } from "./redact.mjs";
 import { PickApp } from "./pick-app.mjs";
 
 const round16 = (v) => Math.max(64, Math.round(v / 16) * 16);
@@ -55,6 +56,7 @@ const cancelled = () => Object.assign(new Error("cancelled"), { name: "AbortErro
  *   width:number, height:number, hasKey:boolean, configured:boolean, requiresRef:boolean, maxRefs:number, estimated:true}}
  */
 export function estimateGeneration({ typeKey, count = 1, refsCount = 0, width, height, aspectRatio } = {}) {
+  assertGM();
   const cfg = configFor(typeKey, { width, height, aspectRatio });
   const perImage = estimateFast(cfg, (cfg.refs?.length ?? 0) + Math.max(0, Number(refsCount) || 0));
   return {
@@ -134,16 +136,32 @@ export async function generateImage(o = {}) {
     if (cand.logId) await updateCall(cand.logId, statsPatch(stats));
     return path;
   };
-  const summary = (paths, picked, cands) => ({
+  const summary = (paths, picked, cands, extraFailed = []) => ({
     paths, path: paths[0], cost, prompt, picked,
     candidates: cands.map((c) => ({ index: c.index, path: c.path, cost: c.cost })),
-    failed: res.failed
+    failed: [...res.failed, ...extraFailed]
   });
 
   if (!pick) {
-    const paths = [];
-    for (const c of res.candidates) paths.push(await commit(c));
-    return summary(paths, false, res.candidates);
+    // The images are already paid for: one failed save must not lose the others (or the paths already saved).
+    const paths = [], saved = [], failedSaves = [];
+    for (const c of res.candidates) {
+      try {
+        paths.push(await commit(c));
+        saved.push(c);
+      } catch (e) {
+        const error = `Could not save the image: ${redact(e?.message ?? String(e))}`;
+        failedSaves.push({ index: c.index, error });
+        if (c.logId) await updateCall(c.logId, { status: "error", error: `After generation: ${error}` }).catch(() => {});
+      }
+    }
+    if (!paths.length) {
+      const e = new Error(failedSaves[0]?.error ?? "Could not save the generated images.");
+      e.candidates = res.candidates; // paid for: the caller can still try to save them itself
+      e.cost = cost;
+      throw e;
+    }
+    return summary(paths, false, saved, failedSaves);
   }
 
   return new Promise((resolve, reject) => {

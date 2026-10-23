@@ -34,12 +34,26 @@ export function sizePresetsFor(provider, model) {
   return (caps?.presets ?? ["1024x1024", "1536x1024", "1024x1536", "1536x864"]).map(toPreset);
 }
 
+/** Wartość spoza listy (np. 1280 z typu zarejestrowanego przez inny moduł) → najbliższa z MAX_EDGES (remis: większa). 0/niepoprawna → domyślna. */
+function nearestEdge(edge) {
+  if (!Number.isFinite(edge)) return DEFAULT_OUTPUT.maxEdge;
+  if (edge <= 0) return 0;
+  const e = Math.round(edge);
+  if (MAX_EDGES.includes(e)) return e;
+  let best = null;
+  for (const c of MAX_EDGES) {
+    if (c <= 0) continue;
+    if (best === null || Math.abs(c - e) < Math.abs(best - e) || (Math.abs(c - e) === Math.abs(best - e) && c > best)) best = c;
+  }
+  return best ?? DEFAULT_OUTPUT.maxEdge;
+}
+
 /** Pola „Output” z wartościami w dozwolonym zakresie (stare zapisy bez nich dostają domyślne). */
 export function normalizeOutput(cfg = {}) {
   const edge = Number(cfg.outMaxEdge);
   const q = Number(cfg.outQuality);
   return {
-    outMaxEdge: Number.isFinite(edge) && MAX_EDGES.includes(Math.round(edge)) ? Math.round(edge) : DEFAULT_OUTPUT.maxEdge,
+    outMaxEdge: nearestEdge(edge),
     outFormat: FORMATS.includes(cfg.outFormat) ? cfg.outFormat : DEFAULT_OUTPUT.format,
     outQuality: Number.isFinite(q) ? Math.min(1, Math.max(0.5, Math.round(q * 100) / 100)) : DEFAULT_OUTPUT.quality
   };

@@ -32,23 +32,27 @@ Hooks.once("init", () => {
 });
 
 Hooks.once("ready", async () => {
+  // Every client: only what is needed to register image types (harmless; the registry lives in memory).
   const api = {
-    providers, limits, getKey, imageTypes, configStore,
-    openConfig: () => ImageConfigApp.open(),
-    openBatches: () => BatchesApp.open(),
-    openLog: () => LogApp.open(),
-    generate: (document) => GenerateDialog.open(document),
-    openPick: (batchId) => openPickForBatch(batchId),
-    // For other modules: own image types (shown in the config window) and headless generation, see README.
     apiVersion: 1,
     registerImageType: imageTypes.registerImageType,
-    unregisterImageType: imageTypes.unregisterImageType,
-    listImageTypes: () => imageTypes.detectImageTypes(),
-    estimateGeneration,
-    generateImage
+    unregisterImageType: imageTypes.unregisterImageType
   };
-  // Log (prompty, koszty) i silnik batcha tylko dla GM-a: gracz nie ma ich ani przez API modułu.
-  if (game.user.isGM) Object.assign(api, { batch, callLog });
+  // Everything else (settings access, estimates, generation, log, batch engine) is GM-only: a player gets none of it.
+  if (game.user.isGM) {
+    Object.assign(api, {
+      providers, limits, getKey, imageTypes, configStore,
+      openConfig: () => ImageConfigApp.open(),
+      openBatches: () => BatchesApp.open(),
+      openLog: () => LogApp.open(),
+      generate: (document) => GenerateDialog.open(document),
+      openPick: (batchId) => openPickForBatch(batchId),
+      listImageTypes: () => imageTypes.detectImageTypes(),
+      estimateGeneration,
+      generateImage,
+      batch, callLog
+    });
+  }
   game.modules.get(MODULE_ID).api = api;
   Hooks.callAll("aiImageGen.ready", api); // modules that started earlier can now register their types
   // local-media-optimizer (jeśli jest): profil folderu ai-image-gen/ z naszymi domyślnymi limitami.
