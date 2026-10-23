@@ -11,6 +11,14 @@ import { LogApp } from "./log-app.mjs";
 import * as callLog from "./call-log.mjs";
 import { GenerateDialog } from "./generate-dialog.mjs";
 import { registerSheetButtons } from "./sheet-button.mjs";
+import { openPickForBatch } from "./pick-app.mjs";
+
+/** GM-owe powiadomienie: batch z wieloma wersjami czeka na wybór (klik w powiadomienie otwiera okno). */
+function notifyPick(rec) {
+  const name = rec.items?.[0]?.meta?.name ?? "";
+  const n = ui.notifications.info(game.i18n.format("AIIMG.Pick.Ready", { name }), { permanent: true, console: false });
+  try { n?.element?.addEventListener?.("click", () => openPickForBatch(rec.id)); } catch { /* best effort */ }
+}
 
 Hooks.once("init", () => {
   registerSettings();
@@ -23,11 +31,20 @@ Hooks.once("ready", () => {
     openConfig: () => ImageConfigApp.open(),
     openBatches: () => BatchesApp.open(),
     openLog: () => LogApp.open(),
-    generate: (document) => GenerateDialog.open(document)
+    generate: (document) => GenerateDialog.open(document),
+    openPick: (batchId) => openPickForBatch(batchId)
   };
   if (game.user.isGM) {
     callLog.initLog();
     batch.startPoller();
+    const seen = new Set();
+    const announce = (rec) => {
+      if (rec?.status !== "awaiting-pick" || !rec.candidates?.length || seen.has(rec.id)) return;
+      seen.add(rec.id);
+      notifyPick(rec);
+    };
+    batch.listBatches().forEach(announce); // po restarcie: przypomnij o czekających wyborach
+    Hooks.on("aiImageGen.batchUpdate", announce);
   }
   console.log(`${MODULE_ID} | ready`);
 });

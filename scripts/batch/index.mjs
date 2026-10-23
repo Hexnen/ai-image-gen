@@ -23,7 +23,7 @@ const SUBMIT = { openai: submitOpenAI, gemini: submitGemini };
  *          target:{uuid:string, field?:string}, meta?:{system?:string, docType?:string, name?:string}}[]} p.items
  * @returns {Promise<object>} zapisany rekord batcha
  */
-export async function submitBatch({ provider, model, items }) {
+export async function submitBatch({ provider, model, items, pick = false }) {
   if (!PROVIDERS[provider]?.supportsBatch || !SUBMIT[provider]) {
     throw new Error(`Provider "${provider}" nie obsługuje batcha (OpenRouter: brak Batch API).`);
   }
@@ -68,6 +68,7 @@ export async function submitBatch({ provider, model, items }) {
     estimatedCost,
     // Blobów nie trzymamy w ustawieniach — tylko to, czego potrzebuje ingest.
     items: items.map(({ id, target, meta }) => ({ id, target: { field: "img", ...target }, meta: meta ?? {} })),
+    ...(pick ? { pick: true } : {}),
   };
   const saved = await putBatch(rec);
   await logItems({ kind: "batch-submit", status: "pending", route: endpoint, batchId: rec.id, durationMs: performance.now() - t0 },

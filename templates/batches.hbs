@@ -25,6 +25,9 @@
         <td class="aiimg-status aiimg-status-{{status}}">{{statusLabel}}{{#if error}}<br><small class="aiimg-error">{{error}}</small>{{/if}}</td>
         <td data-tooltip="{{#if costReal}}AIIMG.Batches.CostReal{{else}}AIIMG.Batches.CostEstimate{{/if}}">{{cost}}</td>
         <td class="aiimg-batch-actions">
+          {{#if awaitingPick}}
+          <button type="button" class="primary" data-action="pick" data-id="{{id}}" data-tooltip="AIIMG.Pick.Open"><i class="fa-solid fa-images"></i></button>
+          {{/if}}
           {{#if active}}
           <button type="button" data-action="cancel" data-id="{{id}}" {{#if cancelling}}disabled{{/if}} data-tooltip="AIIMG.Batches.Cancel"><i class="fa-solid fa-ban"></i></button>
           {{else}}

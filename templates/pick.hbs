@@ -1,0 +1,37 @@
+<section class="aiimg-pick-body">
+  <p class="aiimg-pick-hint">{{localize "AIIMG.Pick.Hint"}}</p>
+  <div class="aiimg-pick-grid">
+    {{#each cands}}
+    <figure class="aiimg-pick-card">
+      <button type="button" class="aiimg-pick-thumb" data-action="zoom" data-uid="{{uid}}" data-tooltip="AIIMG.Pick.Zoom">
+        <img src="{{src}}" alt="#{{index}}">
+      </button>
+      <figcaption>
+        <span>#{{index}}{{#if cost}} · {{cost}}{{/if}}</span>
+        <button type="button" class="primary" data-action="use" data-uid="{{uid}}" {{#if ../busy}}disabled{{/if}}>
+          <i class="fa-solid fa-check"></i> {{localize "AIIMG.Pick.Use"}}
+        </button>
+      </figcaption>
+    </figure>
+    {{/each}}
+  </div>
+
+  {{#if error}}<p class="aiimg-error"><i class="fa-solid fa-circle-xmark"></i> {{error}}</p>{{/if}}
+  {{#unless memory}}
+  <p class="notes"><i class="fa-solid fa-circle-info"></i> {{localize "AIIMG.Pick.DiskNote"}} <code>{{folder}}</code></p>
+  {{/unless}}
+
+  <footer class="aiimg-footer aiimg-pick-footer">
+    {{#if memory}}
+    <label class="aiimg-keep"><input type="checkbox" name="keep" {{#if keep}}checked{{/if}}> {{localize "AIIMG.Pick.Keep"}}</label>
+    {{/if}}
+    {{#if canRegenerate}}
+    <button type="button" data-action="regenerate" {{#if busy}}disabled{{/if}}>
+      <i class="fa-solid {{#if busy}}fa-spinner fa-spin{{else}}fa-rotate{{/if}}"></i> {{localize "AIIMG.Pick.Regenerate"}}
+    </button>
+    {{/if}}
+    <button type="button" data-action="discardAll" {{#if busy}}disabled{{/if}}>
+      <i class="fa-solid fa-trash"></i> {{localize "AIIMG.Pick.DiscardAll"}}
+    </button>
+  </footer>
+</section>

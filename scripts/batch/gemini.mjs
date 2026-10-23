@@ -6,7 +6,7 @@ import { getModel, fitGeminiSize, fitGeminiThinking } from "../providers/models.
 import { UPLOAD_TIMEOUT_MS, DOWNLOAD_TIMEOUT_MS, readError, jsonl, parseJsonl, uniqueRefs } from "./util.mjs";
 import { geminiBatchCost } from "./cost.mjs";
 import { patchBatch, markIngested } from "./record.mjs";
-import { applyBatchItem } from "./apply.mjs";
+import { applyBatchItem, finishPatch } from "./apply.mjs";
 import { logBatchResult, tokensFrom } from "../call-log.mjs";
 
 export const GEMINI_BASE = "https://generativelanguage.googleapis.com";
@@ -95,7 +95,7 @@ export async function submitGemini({ apiKey, model, items }) {
 async function ingest(apiKey, rec, op) {
   const done = new Set(rec.ingest?.ids ?? []);
   const applyFailed = [...(rec.ingest?.failed ?? [])];
-  const out = { applied: done.size - applyFailed.length, failed: [...applyFailed], cost: rec.ingest?.cost ?? 0 };
+  const out = { applied: done.size - applyFailed.length, failed: [...applyFailed], cost: rec.ingest?.cost ?? 0, candidates: [...(rec.ingest?.candidates ?? [])] };
   const respFile =
     op?.response?.responsesFile || op?.response?.responses_file ||
     op?.metadata?.output?.responsesFile || op?.response?.dest?.fileName || op?.response?.dest?.file_name;
@@ -126,13 +126,14 @@ async function ingest(apiKey, rec, op) {
     }
     const mime = img?.inlineData?.mimeType || img?.inline_data?.mime_type || "image/png";
     const cost = geminiBatchCost(resp?.usageMetadata ?? resp?.usage_metadata, rec.model);
-    const r = await applyBatchItem(item, b64ToBlob(b64, mime), cost);
+    const r = await applyBatchItem(item, b64ToBlob(b64, mime), cost, rec);
+    if (r.candidate && r.ok) out.candidates.push({ id, path: r.path, cost });
     await logBatchResult(rec, id, { ok: r.ok, error: r.error, cost, tokens: tokensFrom(resp) });
     out.cost += cost;
     done.add(id); // przetworzony (koszt już naliczony) — nie powtarzamy po wznowieniu
     if (!r.ok) { applyFailed.push({ id, error: r.error }); out.failed.push({ id, error: r.error }); }
     out.applied = done.size - applyFailed.length;
-    if (!(await markIngested(rec.id, done, out.cost, applyFailed))) break;
+    if (!(await markIngested(rec.id, done, out.cost, applyFailed, out.candidates))) break;
   }
   return out;
 }
@@ -146,9 +147,7 @@ export async function checkGemini(apiKey, rec) {
   const state = String(op?.metadata?.state ?? op?.state ?? "");
   if (state.endsWith("SUCCEEDED")) {
     const r = await ingest(apiKey, rec, op);
-    await patchBatch(rec.id, {
-      status: "done", completedAt: Date.now(), applied: r.applied, failed: r.failed, cost: r.cost, ingest: undefined,
-    }, { onlyActive: true });
+    await patchBatch(rec.id, finishPatch(rec, r), { onlyActive: true });
   } else if (/FAILED|CANCELLED|EXPIRED/.test(state)) {
     await patchBatch(rec.id, {
       status: state.endsWith("CANCELLED") ? "cancelled" : "error",

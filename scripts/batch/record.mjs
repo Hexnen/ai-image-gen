@@ -58,7 +58,7 @@ export function patchBatch(id, patch, { onlyActive = false } = {}) {
 }
 
 /** Marker postępu ingestu (wznowienie po restarcie nie dubluje plików ani kosztu). */
-export async function markIngested(id, doneIds, cost, failed = []) {
-  const saved = await patchBatch(id, { ingest: { ids: [...doneIds], cost, failed } }, { onlyActive: true });
+export async function markIngested(id, doneIds, cost, failed = [], candidates = []) {
+  const saved = await patchBatch(id, { ingest: { ids: [...doneIds], cost, failed, candidates } }, { onlyActive: true });
   return !!saved && isActive(saved);
 }

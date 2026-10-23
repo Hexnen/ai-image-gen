@@ -1,5 +1,6 @@
 import { MODULE_ID } from "./constants.mjs";
 import { PROVIDERS } from "./providers/index.mjs";
+import { openPickForBatch } from "./pick-app.mjs";
 import { listBatches, removeBatch, isActive, checkBatches, cancelBatch } from "./batch/index.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
@@ -15,7 +16,8 @@ export class BatchesApp extends HandlebarsApplicationMixin(ApplicationV2) {
     actions: {
       refresh: BatchesApp.#onRefresh,
       cancel: BatchesApp.#onCancel,
-      remove: BatchesApp.#onRemove
+      remove: BatchesApp.#onRemove,
+      pick: BatchesApp.#onPick
     }
   };
 
@@ -60,7 +62,8 @@ export class BatchesApp extends HandlebarsApplicationMixin(ApplicationV2) {
         costReal: cost != null,
         error: rec.error ?? (rec.failed?.length ? game.i18n.format("AIIMG.Batches.Failed", { n: rec.failed.length }) : ""),
         active: isActive(rec),
-        cancelling: rec.status === "cancelling"
+        cancelling: rec.status === "cancelling",
+        awaitingPick: rec.status === "awaiting-pick" && !!rec.candidates?.length
       };
     });
     return { batches, empty: batches.length === 0 };
@@ -76,6 +79,11 @@ export class BatchesApp extends HandlebarsApplicationMixin(ApplicationV2) {
     try { await cancelBatch(target.dataset.id); }
     catch (e) { ui.notifications.error(e.message); }
     this.render();
+  }
+
+  static async #onPick(event, target) {
+    try { await openPickForBatch(target.dataset.id); }
+    catch (e) { ui.notifications.error(e.message); }
   }
 
   static async #onRemove(event, target) {

@@ -5,7 +5,7 @@ import { UPLOAD_TIMEOUT_MS, DOWNLOAD_TIMEOUT_MS, readError, jsonl, parseJsonl, u
 import { openaiBatchCost } from "./cost.mjs";
 import { openaiSizeFor, fitOpenAIQuality } from "../providers/models.mjs";
 import { patchBatch, markIngested } from "./record.mjs";
-import { applyBatchItem } from "./apply.mjs";
+import { applyBatchItem, finishPatch } from "./apply.mjs";
 import { logBatchResult, tokensFrom } from "../call-log.mjs";
 
 export const OPENAI_BASE = "https://api.openai.com/v1";
@@ -101,7 +101,7 @@ async function getRemote(apiKey, remoteId) {
 async function ingest(apiKey, rec, batch) {
   const done = new Set(rec.ingest?.ids ?? []);
   const applyFailed = [...(rec.ingest?.failed ?? [])];
-  const out = { applied: done.size - applyFailed.length, failed: [...applyFailed], cost: rec.ingest?.cost ?? 0 };
+  const out = { applied: done.size - applyFailed.length, failed: [...applyFailed], cost: rec.ingest?.cost ?? 0, candidates: [...(rec.ingest?.candidates ?? [])] };
   const byId = new Map(rec.items.map((i) => [i.id, i]));
   if (batch.output_file_id) {
     for (const row of parseJsonl(await fileContent(apiKey, batch.output_file_id))) {
@@ -116,13 +116,14 @@ async function ingest(apiKey, rec, batch) {
         continue;
       }
       const cost = openaiBatchCost(body?.usage);
-      const r = await applyBatchItem(item, b64ToBlob(b64, "image/png"), cost);
+      const r = await applyBatchItem(item, b64ToBlob(b64, "image/png"), cost, rec);
+      if (r.candidate && r.ok) out.candidates.push({ id, path: r.path, cost });
       await logBatchResult(rec, id, { ok: r.ok, error: r.error, cost, tokens: tokensFrom(body) });
       out.cost += cost;
       done.add(id); // przetworzony (koszt już naliczony) — nie powtarzamy po wznowieniu
       if (!r.ok) { applyFailed.push({ id, error: r.error }); out.failed.push({ id, error: r.error }); }
       out.applied = done.size - applyFailed.length;
-      if (!(await markIngested(rec.id, done, out.cost, applyFailed))) break;
+      if (!(await markIngested(rec.id, done, out.cost, applyFailed, out.candidates))) break;
     }
   }
   if (batch.error_file_id) {
@@ -155,12 +156,14 @@ export async function checkOpenAI(apiKey, rec) {
       }
       throw e; // błąd przejściowy: zostaje pending, kolejna próba w następnym ticku
     }
-    await patchBatch(rec.id, {
-      status: "done", completedAt: Date.now(), applied: r.applied, failed: r.failed, cost: r.cost, ingest: undefined,
-    }, { onlyActive: true });
+    await patchBatch(rec.id, finishPatch(rec, r), { onlyActive: true });
   } else if (["failed", "expired", "cancelled"].includes(status)) {
     // expired/cancelled: część mogła się policzyć — zbierz, co jest.
     const r = batch?.output_file_id ? await ingest(apiKey, rec, batch).catch(() => null) : null;
+    if (rec.pick && r?.candidates?.length) {
+      await patchBatch(rec.id, { ...finishPatch(rec, r), error: status }, { onlyActive: true });
+      return;
+    }
     await patchBatch(rec.id, {
       status: status === "cancelled" ? "cancelled" : "error",
       error: status === "failed" ? JSON.stringify(batch?.errors ?? {}).slice(0, 300) : status,

@@ -18,8 +18,9 @@ const PRICES = {
 /** Zachowane dla zgodności: rozmiar-koszyk (starsze modele). */
 export const pickSize = ({ width, height, aspectRatio }) => bucketOpenAISize(width, height, aspectRatio);
 
-export async function generate({ apiKey, model, prompt, refs = [], width, height, aspectRatio, quality = "medium", signal }) {
+export async function generate({ apiKey, model, prompt, refs = [], width, height, aspectRatio, quality = "medium", n = 1, signal }) {
   quality = fitOpenAIQuality(model, quality);
+  n = Math.max(1, Math.min(10, Math.floor(Number(n)) || 1));
   if (refs.length > EDIT_REF_LIMIT) {
     throw new Error(`OpenAI ${model}: ${refs.length} referencji przekracza limit /images/edits (${EDIT_REF_LIMIT}).`);
   }
@@ -33,6 +34,7 @@ export async function generate({ apiKey, model, prompt, refs = [], width, height
     form.set("prompt", prompt);
     form.set("size", size);
     form.set("quality", quality);
+    if (n > 1) form.set("n", String(n));
     let i = 0;
     for (const blob of refs) {
       const mime = await mimeOf(blob);
@@ -49,22 +51,23 @@ export async function generate({ apiKey, model, prompt, refs = [], width, height
     res = await fetch(`${OPENAI_BASE}/images/generations`, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model, prompt, size, quality, n: 1 }),
+      body: JSON.stringify({ model, prompt, size, quality, n }),
       signal: withTimeout(GPT_IMAGE_TIMEOUT_MS, signal),
     });
   }
   if (!res.ok) throw await httpError(`OpenAI ${model}`, res);
   const json = await res.json();
-  const b64 = json?.data?.[0]?.b64_json;
-  if (!b64) throw new Error(`OpenAI: brak b64_json w odpowiedzi (${JSON.stringify(json).slice(0, 300)})`);
-  return { blob: b64ToBlob(b64, "image/png"), cost: costOf(json, quality, size), raw: json, route };
+  const blobs = (json?.data ?? []).map((d) => d?.b64_json).filter(Boolean).map((b64) => b64ToBlob(b64, "image/png"));
+  if (!blobs.length) throw new Error(`OpenAI: brak b64_json w odpowiedzi (${JSON.stringify(json).slice(0, 300)})`);
+  // usage obejmuje wszystkie obrazy żądania: cost = koszt CAŁEGO żądania (n obrazów).
+  return { blob: blobs[0], blobs, cost: costOf(json, quality, size, blobs.length), raw: json, route };
 }
 
-function costOf(json, quality, size) {
+function costOf(json, quality, size, count = 1) {
   const inTok = Number(json?.usage?.input_tokens), outTok = Number(json?.usage?.output_tokens);
   const det = json?.usage?.input_tokens_details;
   const img = Number(det?.image_tokens), txt = Number(det?.text_tokens);
   const inCost = isFinite(img) && isFinite(txt) && img + txt > 0 ? img * IMG_IN + txt * TXT_IN : (inTok || 0) * IMG_IN;
   if (isFinite(inTok) && isFinite(outTok) && inTok + outTok > 0) return inCost + outTok * IMG_OUT;
-  return PRICES[quality]?.[size] ?? 0;
+  return (PRICES[quality]?.[size] ?? 0) * count;
 }

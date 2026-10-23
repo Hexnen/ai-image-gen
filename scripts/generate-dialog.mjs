@@ -1,10 +1,23 @@
 import { MODULE_ID } from "./constants.mjs";
-import { readiness, runFast, runBatch } from "./generate-flow.mjs";
+import {
+  readiness, runFast, runBatch, generateCandidates, estimateTotal, MAX_VERSIONS, MAX_EXTRA_REF_BYTES
+} from "./generate-flow.mjs";
 import { ImageConfigApp } from "./config-app.mjs";
+import { PickApp } from "./pick-app.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
-/** Modal: opis + Fast / Batch dla jednego dokumentu. */
+const PREFS_KEY = `${MODULE_ID}.dialogPrefs`;
+const loadPrefs = () => {
+  try { return JSON.parse(localStorage.getItem(PREFS_KEY)) ?? {}; } catch { return {}; }
+};
+const savePrefs = (p) => {
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch { /* storage unavailable */ }
+};
+
+const money = (v) => (v > 0 ? `~$${v.toFixed(v < 0.1 ? 3 : 2)}` : "?");
+
+/** Modal: opis, dodatkowe referencje, liczba wersji + Fast / Batch dla jednego dokumentu. */
 export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
   static DEFAULT_OPTIONS = {
     classes: ["aiimg-generate"],
@@ -14,7 +27,9 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     actions: {
       runFast: GenerateDialog.#onFast,
       runBatch: GenerateDialog.#onBatch,
-      openConfig: GenerateDialog.#onOpenConfig
+      openConfig: GenerateDialog.#onOpenConfig,
+      addRefs: GenerateDialog.#onAddRefs,
+      removeRef: GenerateDialog.#onRemoveRef
     }
   };
 
@@ -33,12 +48,18 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     return app;
   }
 
+  /** @type {{uid:string, blob:Blob, name:string, url:string}[]} dodatkowe referencje tylko na to wywołanie */
+  extraRefs = [];
+
   constructor({ document, ...options }) {
     super(options);
     this.document = document;
     this.description = "";
     this.busy = null; // "fast" | "batch" | null
     this.error = "";
+    const prefs = loadPrefs();
+    this.count = Math.min(MAX_VERSIONS, Math.max(1, Math.floor(Number(prefs.count)) || 1));
+    this.preview = !!prefs.preview;
   }
 
   get title() {
@@ -47,6 +68,9 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
 
   async _prepareContext() {
     const r = readiness(this.document);
+    const refsTotal = (r.cfg.refs?.length ?? 0) + this.extraRefs.length;
+    const fast = estimateTotal(this.document, { count: this.count, extraRefs: this.extraRefs.length, mode: "fast" });
+    const batch = estimateTotal(this.document, { count: this.count, extraRefs: this.extraRefs.length, mode: "batch" });
     return {
       description: this.description,
       cfg: r.cfg,
@@ -61,14 +85,86 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       batchDisabled: !r.canBatch || !!this.busy,
       fastDefault: r.cfg.defaultMode === "fast",
       batchDefault: r.cfg.defaultMode === "batch" && r.canBatch,
-      error: this.error
+      error: this.error,
+      extraRefs: this.extraRefs.map(({ uid, url, name }) => ({ uid, url, name })),
+      refsTotal,
+      maxRefs: r.maxRefs,
+      refsOver: refsTotal > r.maxRefs,
+      count: this.count,
+      maxVersions: MAX_VERSIONS,
+      preview: this.preview,
+      showPreview: this.count === 1,
+      estFast: money(fast),
+      estBatch: r.canBatch ? money(batch) : "",
+      maxMb: MAX_EXTRA_REF_BYTES / 1048576
     };
+  }
+
+  #paste = (ev) => {
+    const active = document.activeElement;
+    if (active && active !== document.body && !this.element?.contains(active)) return;
+    const files = [...(ev.clipboardData?.files ?? [])].filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    ev.preventDefault();
+    this.#addFiles(files);
+  };
+
+  _onFirstRender(context, options) {
+    super._onFirstRender?.(context, options);
+    document.addEventListener("paste", this.#paste);
+    const el = this.element;
+    el.addEventListener("dragover", (ev) => {
+      if ([...(ev.dataTransfer?.types ?? [])].includes("Files")) { ev.preventDefault(); el.classList.add("aiimg-dragging"); }
+    });
+    el.addEventListener("dragleave", (ev) => {
+      if (ev.target === el || !el.contains(ev.relatedTarget)) el.classList.remove("aiimg-dragging");
+    });
+    el.addEventListener("drop", (ev) => {
+      el.classList.remove("aiimg-dragging");
+      const files = [...(ev.dataTransfer?.files ?? [])].filter((f) => f.type.startsWith("image/"));
+      if (!files.length) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.#addFiles(files);
+    });
+  }
+
+  _onClose(options) {
+    super._onClose?.(options);
+    document.removeEventListener("paste", this.#paste);
+    for (const r of this.extraRefs) URL.revokeObjectURL(r.url);
   }
 
   _onRender(context, options) {
     super._onRender?.(context, options);
-    this.element.querySelector("textarea[name=description]")
+    const el = this.element;
+    el.querySelector("textarea[name=description]")
       ?.addEventListener("input", (ev) => { this.description = ev.target.value; });
+    el.querySelector("input[name=count]")?.addEventListener("change", (ev) => {
+      this.count = Math.min(MAX_VERSIONS, Math.max(1, Math.floor(Number(ev.target.value)) || 1));
+      savePrefs({ count: this.count, preview: this.preview });
+      this.render();
+    });
+    el.querySelector("input[name=preview]")?.addEventListener("change", (ev) => {
+      this.preview = ev.target.checked;
+      savePrefs({ count: this.count, preview: this.preview });
+    });
+    el.querySelector("input[name=refFiles]")?.addEventListener("change", (ev) => {
+      this.#addFiles([...ev.target.files]);
+      ev.target.value = "";
+    });
+  }
+
+  #addFiles(files) {
+    const maxBytes = MAX_EXTRA_REF_BYTES;
+    const rejected = [];
+    for (const f of files) {
+      if (!f.type.startsWith("image/")) { rejected.push(f.name); continue; }
+      if (f.size > maxBytes) { rejected.push(`${f.name} (>${maxBytes / 1048576} MB)`); continue; }
+      this.extraRefs.push({ uid: foundry.utils.randomID(), blob: f, name: f.name || "pasted", url: URL.createObjectURL(f) });
+    }
+    if (rejected.length) ui.notifications.warn(game.i18n.format("AIIMG.Gen.RefsRejected", { files: rejected.join(", ") }));
+    return this.render();
   }
 
   async #run(mode) {
@@ -78,16 +174,31 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       this.error = game.i18n.localize("AIIMG.Gen.NeedDescription");
       return this.render();
     }
+    const refs = this.extraRefs.map((r) => r.blob);
+    const count = this.count;
     this.busy = mode;
     await this.render();
     try {
       if (mode === "fast") {
-        await runFast(this.document, this.description);
-        ui.notifications.info(game.i18n.format("AIIMG.Gen.Done", { name: this.document.name }));
+        if (count === 1 && !this.preview) {
+          await runFast(this.document, this.description, { extraRefs: refs });
+          ui.notifications.info(game.i18n.format("AIIMG.Gen.Done", { name: this.document.name }));
+        } else {
+          const description = this.description;
+          const res = await generateCandidates(this.document, description, { count, extraRefs: refs });
+          if (res.failed.length) {
+            ui.notifications.warn(game.i18n.format("AIIMG.Gen.SomeFailed", { failed: res.failed.length, total: count, error: res.failed[0].error }));
+          }
+          PickApp.open({
+            document: this.document, candidates: res.candidates, meta: res.meta, source: "memory",
+            regenerate: () => generateCandidates(this.document, description, { count, extraRefs: refs })
+          });
+        }
       } else {
-        await runBatch(this.document, this.description);
-        ui.notifications.info(game.i18n.format("AIIMG.Gen.Queued", { name: this.document.name }));
+        await runBatch(this.document, this.description, { count, extraRefs: refs });
+        ui.notifications.info(game.i18n.format(count > 1 ? "AIIMG.Gen.QueuedMany" : "AIIMG.Gen.Queued", { name: this.document.name, n: count }));
       }
+      savePrefs({ count: this.count, preview: this.preview });
       return this.close();
     } catch (e) {
       console.error(`${MODULE_ID} |`, e);
@@ -101,4 +212,12 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
   static #onFast() { return this.#run("fast"); }
   static #onBatch() { return this.#run("batch"); }
   static #onOpenConfig() { ImageConfigApp.open(); }
+  static #onAddRefs() { this.element.querySelector("input[name=refFiles]")?.click(); }
+  static #onRemoveRef(event, target) {
+    const i = this.extraRefs.findIndex((r) => r.uid === target.dataset.uid);
+    if (i < 0) return;
+    URL.revokeObjectURL(this.extraRefs[i].url);
+    this.extraRefs.splice(i, 1);
+    return this.render();
+  }
 }

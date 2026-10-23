@@ -35,13 +35,13 @@ export async function ensureDir(path) {
 }
 
 /**
- * Upload a blob to `ai-image-gen/<system>/<docType>/` in the user Data folder.
+ * Upload a blob to `ai-image-gen/<system>/<docType>/` in the user Data folder (or to `dir` when given).
  * @returns {Promise<string>} path usable as `img`
  */
-export async function saveImageBlob(blob, { system = "core", docType = "Document", name = "image", webp = true } = {}) {
+export async function saveImageBlob(blob, { system = "core", docType = "Document", name = "image", webp = true, dir: dirOverride } = {}) {
   const data = webp ? await blobToWebp(blob) : blob;
   const type = data.type || "image/png";
-  const dir = `${MODULE_ID}/${slug(system, "core")}/${slug(docType, "doc")}`;
+  const dir = dirOverride ?? `${MODULE_ID}/${slug(system, "core")}/${slug(docType, "doc")}`;
   await ensureDir(dir);
   const filename = `${slug(name)}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}.${EXT[type] ?? "png"}`;
   const file = new File([data], filename, { type });
