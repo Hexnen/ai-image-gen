@@ -73,8 +73,25 @@ function mergeInto(key, arr) {
 
 const fileUrl = (key) => `${foundry.utils.getRoute(`${DIR}/${key}.json`)}?t=${Date.now()}`;
 
-/** Odczyt pliku miesiąca: "ok" | "missing" (404: wolno utworzyć) | "corrupt" (zła zawartość) | "error" (nie wiemy). */
-async function readMonthFile(key) {
+/** Klucze miesięcy, dla których plik istnieje według listingu katalogu; null gdy listing się nie udał (katalog może nie istnieć). */
+async function listedMonths() {
+  try {
+    const keys = new Set();
+    for (const f of (await FP().browse("data", DIR)).files ?? []) {
+      const m = /(\d{4}-\d{2})\.json$/.exec(f);
+      if (m) keys.add(m[1]);
+    }
+    return keys;
+  } catch (e) {
+    // Katalog jeszcze nie istnieje (pierwsze uruchomienie): na pewno nie ma plików, nie pytamy o nie (brak 404 w konsoli).
+    return /does not exist|not accessible|ENOENT/i.test(String(e?.message ?? e)) ? new Set() : null;
+  }
+}
+
+/** Odczyt pliku miesiąca: "ok" | "missing" (wolno utworzyć) | "corrupt" (zła zawartość) | "error" (nie wiemy).
+ *  `listed` (z listedMonths) pozwala nie pytać o plik, którego na pewno nie ma (bez błędu 404 w konsoli). */
+async function readMonthFile(key, listed = null) {
+  if (listed && !listed.has(key)) return { state: "missing" };
   let res;
   try { res = await fetch(fileUrl(key), { cache: "no-store" }); }
   catch (e) { return { state: "error", error: e }; }
@@ -94,14 +111,11 @@ async function doLoad() {
   lastLoadTry = Date.now();
   needsReload = false;
   const keys = new Set([monthOf(new Date().toISOString())]);
-  try {
-    for (const f of (await FP().browse("data", DIR)).files ?? []) {
-      const m = /(\d{4}-\d{2})\.json$/.exec(f);
-      if (m) keys.add(m[1]);
-    }
-  } catch { needsReload = true; /* brak katalogu albo błąd listowania: niepewne, spróbujemy ponownie */ }
+  const listed = await listedMonths();
+  if (listed) for (const k of listed) keys.add(k);
+  else needsReload = true; // brak katalogu albo błąd listowania: niepewne, spróbujemy ponownie
   for (const key of keys) {
-    const r = await readMonthFile(key);
+    const r = await readMonthFile(key, listed);
     if (r.state === "ok") mergeInto(key, r.arr);
     else if (r.state !== "missing") {
       needsReload = true;
@@ -131,7 +145,7 @@ async function uploadText(name, text) {
 
 async function writeMonth(key) {
   // Świeża zawartość pliku: wpisy dopisane przez innego GM-a nie mogą zniknąć, a niepewny odczyt blokuje zapis.
-  const cur = await readMonthFile(key);
+  const cur = await readMonthFile(key, await listedMonths());
   if (cur.state === "error") throw new Error(`log: cannot read ${key}.json, refusing to overwrite it (${cur.error?.message ?? "?"})`);
   if (cur.state === "corrupt") await uploadText(`${key}.corrupt-${Date.now()}.json`, cur.text);
   if (cur.state === "ok") {
