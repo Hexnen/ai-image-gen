@@ -4,6 +4,7 @@ import { reserveBudget } from "../limits.mjs";
 import { PROVIDERS } from "../providers/index.mjs";
 import { estimateBatchCost } from "./cost.mjs";
 import { newBatchId } from "./util.mjs";
+import { normalizeError } from "../providers/util.mjs";
 import { putBatch, patchBatch, removeBatch } from "./record.mjs";
 import { submitOpenAI, cancelOpenAI } from "./openai.mjs";
 import { submitGemini, cancelGemini } from "./gemini.mjs";
@@ -83,8 +84,9 @@ export async function submitBatch({ provider, model, items, pick = false }) {
       submitted = await SUBMIT[provider]({ apiKey, model, items });
     } catch (e) {
       await removeBatch(id).catch(() => {});
-      await logItems({ kind: "batch-submit", status: "error", error: e.message, durationMs: performance.now() - t0 }, 0);
-      throw e;
+      const err = normalizeError(e);
+      await logItems({ kind: "batch-submit", status: "error", error: err.message, durationMs: performance.now() - t0 }, 0);
+      throw err;
     }
     const { remoteId, endpoint, files } = submitted;
 

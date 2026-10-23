@@ -38,6 +38,16 @@ export function normalizeError(e) {
     x.name = "AbortError";
     return x;
   }
+  // fetch() odrzucone bez odpowiedzi (TypeError: Failed to fetch): offline/zablokowane ALBO dostawca odrzucił
+  // żądanie bez nagłówków CORS — OpenAI tak odpowiada na dobrze sformatowany, ale nieistniejący klucz (sk-proj-...).
+  if (e instanceof TypeError && /failed to fetch|networkerror|load failed/i.test(String(e.message))) {
+    const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+    const x = new Error(offline
+      ? "No network connection."
+      : "Could not read the provider's response (network error, or the provider rejected the request without CORS headers). Check the API key and your connection.");
+    x.name = "NetworkError";
+    return x;
+  }
   return e;
 }
 

@@ -80,7 +80,10 @@ export function buildInteractionsBody({ model, prompt, parts, aspect, size, thin
     // domyślnie Interactions zapisuje prompt i referencje po stronie Google (store=true); wyłączamy
     store: false,
     input: parts.length ? [...parts, { type: "text", text: prompt }] : prompt,
-    response_format: { type: "image", mime_type: "image/png", aspect_ratio: aspect, image_size: size },
+    // Schemat OpenAPI (ImageResponseFormat): mime_type dopuszcza TYLKO "image/jpeg" (przykład w dokumentacji
+    // ma png, sprzeczny ze schematem), więc go nie wysyłamy — serwer wybiera domyślny, a odpowiedź niesie własny mime.
+    // image_size: enum "512" | "1K" | "2K" | "4K" ("0.5K" z katalogu to w Interactions "512").
+    response_format: { type: "image", delivery: "inline", aspect_ratio: aspect, image_size: size === "0.5K" ? "512" : size },
     ...(think ? { generation_config: { thinking_level: think } } : {}),
   };
 }
