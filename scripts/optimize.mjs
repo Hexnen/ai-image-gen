@@ -12,7 +12,7 @@ export const OPTIMIZER_ID = "local-media-optimizer";
 export const PROFILE_ID = "ai-image-gen";
 export const MIN_OPTIMIZER_VERSION = "1.1.0";
 
-export const DEFAULT_OUTPUT = Object.freeze({ maxEdge: 1536, quality: 0.85, format: "webp" });
+export const DEFAULT_OUTPUT = Object.freeze({ maxEdge: 0, quality: 0.85, format: "webp" });
 /** Upper safety cap of the folder profile registered in local-media-optimizer: it only applies to uploads that
  *  did not go through our own flow (those carry the per-type limit and `optimized: true`). */
 export const PROFILE_EDGE = 2048;

@@ -1,9 +1,9 @@
 // What the "Max size of saved file" setting will do, from the generation size (pure, no Foundry globals).
 // The saved file is only ever shrunk: the generation itself is whatever the model/size settings above ask for.
 
-/** Default max edge of the saved file by document kind, used when a type has no saved configuration yet. */
-export const EDGE_BY_DOC = Object.freeze({ Actor: 1024, Item: 256, Macro: 128 });
-export const FALLBACK_EDGE = 1536;
+/** Default max edge of the saved file (0 = no resizing; per-kind overrides go in EDGE_BY_DOC), used when a type has no saved configuration yet. */
+export const EDGE_BY_DOC = Object.freeze({}); // no per-kind shrinking by default: WebP + quality already save most of the bytes
+export const FALLBACK_EDGE = 0; // 0 = no resizing
 
 /** Type keys look like "<system>.<Document>.<type>" (macros: "core.Macro"). */
 export function defaultEdgeForKey(key) {
