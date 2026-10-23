@@ -26,7 +26,7 @@
       </thead>
       <tbody>
         {{#each rows}}
-        <tr class="aiimg-log-row" data-action="toggle" data-id="{{id}}">
+        <tr class="aiimg-log-row{{#if open}} open{{/if}}" data-action="toggle" data-id="{{id}}" tabindex="0" role="button" aria-expanded="{{#if open}}true{{else}}false{{/if}}">
           <td class="nowrap">{{time}}</td>
           <td class="nowrap">{{kindLabel}}</td>
           <td>{{provider}}<br><small>{{model}}</small></td>
@@ -35,9 +35,9 @@
           <td class="nowrap">{{cost}}</td>
           <td>{{doc}}</td>
           <td class="aiimg-log-prompt">{{short}}</td>
-          <td class="aiimg-batch-actions">{{#if prompt}}<button type="button" data-action="copyPrompt" data-id="{{id}}" data-tooltip="AIIMG.Log.CopyPrompt"><i class="fa-solid fa-copy"></i></button>{{/if}}</td>
+          <td class="aiimg-batch-actions">{{#if prompt}}<button type="button" data-action="copyPrompt" data-id="{{id}}" aria-label="{{localize 'AIIMG.Log.CopyPrompt'}}" data-tooltip="AIIMG.Log.CopyPrompt"><i class="fa-solid fa-copy"></i></button>{{/if}}</td>
         </tr>
-        <tr class="aiimg-log-detail" data-for="{{id}}" hidden>
+        <tr class="aiimg-log-detail" data-for="{{id}}" {{#unless open}}hidden{{/unless}}>
           <td colspan="9">
             {{#if prompt}}<pre class="aiimg-log-fullprompt">{{prompt}}</pre>{{/if}}
             {{#if error}}<p class="aiimg-error">{{error}}</p>{{/if}}

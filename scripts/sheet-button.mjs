@@ -2,6 +2,7 @@
 import { MODULE_ID } from "./constants.mjs";
 import { resolveTypeKey } from "./image-types.mjs";
 import { GenerateDialog } from "./generate-dialog.mjs";
+import { assertCanApply } from "./generate-flow.mjs";
 
 /** Selektory obrazka profilu — od najbardziej do najmniej pewnych. */
 const DEFAULT_SELECTORS = [
@@ -44,8 +45,9 @@ function findAnchor(root) {
 }
 
 function canGenerate(doc) {
-  if (!game.user.isGM || !resolveTypeKey(doc)) return false;
-  if (doc.pack && doc.collection?.locked) return false;
+  if (!game.user.isGM || !resolveTypeKey(doc) || !doc.id) return false;
+  // Unsaved, not editable or in a locked compendium (embedded included): the image could not be applied after paying.
+  try { assertCanApply(doc); } catch { return false; }
   return true;
 }
 
@@ -55,7 +57,9 @@ function inject(app, html) {
   const root = rootOf(html, app);
   if (!root) return;
   const anchor = findAnchor(root);
-  if (!anchor || anchor.nextElementSibling?.classList.contains("aiimg-btn")) return;
+  const host = anchor?.parentElement;
+  // One button per image holder; other modules may insert siblings next to the image, so look in the parent.
+  if (!anchor || !host || host.querySelector(":scope > .aiimg-btn")) return;
 
   const btn = document.createElement("button");
   btn.type = "button";
@@ -71,9 +75,10 @@ function inject(app, html) {
   });
   anchor.after(btn);
 
-  // Dolny prawy róg obrazka. Liczone z prostokątów względem offsetParent przycisku, bo
-  // offsetLeft/Top obrazka bywa nieaktualne, gdy karta (tab) jest ukryta lub animowana.
+  // Bottom-right corner of the image, measured against the button's offset parent. The image can move
+  // without changing its own size (flex header, window resize, tab switch), so everything around it is watched.
   const place = () => {
+    if (!btn.isConnected) return;
     const op = btn.offsetParent;
     if (!op || !anchor.offsetWidth) return;
     const a = anchor.getBoundingClientRect();
@@ -81,16 +86,20 @@ function inject(app, html) {
     btn.style.left = `${a.right - o.left + op.scrollLeft - op.clientLeft - btn.offsetWidth - 2}px`;
     btn.style.top = `${a.bottom - o.top + op.scrollTop - op.clientTop - btn.offsetHeight - 2}px`;
   };
-  // Po zmianie widoczności (przełączenie karty, animacja wejścia) ustawiaj aż układ się ustali.
   const settle = () => {
     const until = performance.now() + 700;
-    const tick = () => { place(); if (performance.now() < until) requestAnimationFrame(tick); };
+    const tick = () => { place(); if (btn.isConnected && performance.now() < until) requestAnimationFrame(tick); };
     requestAnimationFrame(tick);
   };
   place();
   anchor.addEventListener("load", settle);
-  if (typeof ResizeObserver === "function") new ResizeObserver(settle).observe(anchor);
+  if (typeof ResizeObserver === "function") {
+    const ro = new ResizeObserver(settle);
+    for (const el of new Set([anchor, host, btn.offsetParent, root].filter(Boolean))) ro.observe(el);
+  }
   if (typeof IntersectionObserver === "function") new IntersectionObserver(settle).observe(anchor);
+  root.addEventListener("transitionend", settle);
+  root.addEventListener("animationend", settle);
 }
 
 export function registerSheetButtons() {

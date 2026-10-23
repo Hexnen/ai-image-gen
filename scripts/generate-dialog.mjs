@@ -18,6 +18,7 @@ const savePrefs = (p) => {
   try { localStorage.setItem(PREFS_KEY, JSON.stringify({ ...loadPrefs(), ...p })); } catch { /* storage unavailable */ }
 };
 
+const esc = (s) => foundry.utils.escapeHTML(String(s ?? ""));
 const money = (v) => (v > 0 ? `~$${v.toFixed(v < 0.1 ? 3 : 2)}` : "?");
 
 /** Modal: opis, dodatkowe referencje, liczba wersji + Fast / Batch dla jednego dokumentu. */
@@ -42,7 +43,12 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
 
   /** Open (or focus) the dialog for a document. */
   static open(document) {
-    const key = document.uuid ?? `unsaved-${document.documentName}-${document.id ?? document.name}`;
+    // An unsaved document has no uuid: the image would be paid for and then have nowhere to go.
+    if (!document?.uuid || !document.id) {
+      ui.notifications.warn(game.i18n.localize("AIIMG.Gen.Unsaved"));
+      return null;
+    }
+    const key = document.uuid;
     const id = `${MODULE_ID}-generate-${key.replace(/[^A-Za-z0-9]/g, "-")}`;
     const existing = foundry.applications.instances.get(id);
     if (existing) { existing.bringToFront?.(); return existing; }
@@ -115,8 +121,11 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   #paste = (ev) => {
+    // Only the window the user is working in takes a pasted image (two open dialogs would both get it).
     const active = document.activeElement;
-    if (active && active !== document.body && !this.element?.contains(active)) return;
+    const inside = !!this.element?.contains(active);
+    const focusFree = !active || active === document.body;
+    if (!inside && !(focusFree && ui.activeWindow === this)) return;
     const files = [...(ev.clipboardData?.files ?? [])].filter((f) => f.type.startsWith("image/"));
     if (!files.length) return;
     ev.preventDefault();
@@ -225,12 +234,12 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       if (mode === "fast") {
         if (count === 1 && !this.preview) {
           await runFast(this.document, this.description, { extraRefs: refs });
-          ui.notifications.info(game.i18n.format("AIIMG.Gen.Done", { name: this.document.name }));
+          ui.notifications.info(game.i18n.format("AIIMG.Gen.Done", { name: esc(this.document.name) }));
         } else {
           const description = this.description;
           const res = await generateCandidates(this.document, description, { count, extraRefs: refs });
           if (res.failed.length) {
-            ui.notifications.warn(game.i18n.format("AIIMG.Gen.SomeFailed", { failed: res.failed.length, total: count, error: res.failed[0].error }));
+            ui.notifications.warn(game.i18n.format("AIIMG.Gen.SomeFailed", { failed: res.failed.length, total: count, error: esc(res.failed[0].error) }));
           }
           PickApp.open({
             document: this.document, candidates: res.candidates, meta: res.meta, source: "memory",
@@ -239,7 +248,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
         }
       } else {
         await runBatch(this.document, this.description, { count, extraRefs: refs });
-        ui.notifications.info(game.i18n.format(count > 1 ? "AIIMG.Gen.QueuedMany" : "AIIMG.Gen.Queued", { name: this.document.name, n: count }));
+        ui.notifications.info(game.i18n.format(count > 1 ? "AIIMG.Gen.QueuedMany" : "AIIMG.Gen.Queued", { name: esc(this.document.name), n: count }));
       }
       savePrefs({ count: this.count, preview: this.preview });
       await this.#persistRefs(refsFiles);
@@ -247,7 +256,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     } catch (e) {
       console.error(`${MODULE_ID} |`, e);
       this.error = e?.message ?? String(e);
-      ui.notifications.error(this.error, { console: false });
+      ui.notifications.error(esc(this.error), { console: false });
       this.busy = null;
       return this.render();
     }
@@ -266,7 +275,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       ui.notifications.info(game.i18n.format("AIIMG.Gen.RefsSaved", { n: paths.length }));
     } catch (e) {
       console.error(`${MODULE_ID} |`, e);
-      ui.notifications.warn(game.i18n.format("AIIMG.Gen.RefsSaveFailed", { error: e.message }));
+      ui.notifications.warn(game.i18n.format("AIIMG.Gen.RefsSaveFailed", { error: esc(e.message) }));
     }
   }
 

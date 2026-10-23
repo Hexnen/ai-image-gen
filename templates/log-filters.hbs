@@ -15,10 +15,10 @@
   <label>{{localize "AIIMG.Log.To"}} <input type="date" data-f="to" value="{{f.to}}"></label>
   <label class="grow">{{localize "AIIMG.Log.Search"}} <input type="search" data-f="q" value="{{f.q}}" placeholder="{{localize 'AIIMG.Log.SearchHint'}}"></label>
   <span class="aiimg-log-tools">
-    <button type="button" data-action="resetFilters" data-tooltip="AIIMG.Log.ResetFilters"><i class="fa-solid fa-filter-circle-xmark"></i></button>
-    <button type="button" data-action="refresh" data-tooltip="AIIMG.Log.Refresh"><i class="fa-solid fa-arrows-rotate"></i></button>
+    <button type="button" data-action="resetFilters" aria-label="{{localize 'AIIMG.Log.ResetFilters'}}" data-tooltip="AIIMG.Log.ResetFilters"><i class="fa-solid fa-filter-circle-xmark"></i></button>
+    <button type="button" data-action="refresh" aria-label="{{localize 'AIIMG.Log.Refresh'}}" data-tooltip="AIIMG.Log.Refresh"><i class="fa-solid fa-arrows-rotate"></i></button>
     <button type="button" data-action="exportCsv"><i class="fa-solid fa-file-csv"></i> CSV</button>
     <button type="button" data-action="exportJson"><i class="fa-solid fa-file-code"></i> JSON</button>
-    <button type="button" data-action="clear" class="aiimg-danger" data-tooltip="AIIMG.Log.Clear"><i class="fa-solid fa-trash"></i></button>
+    <button type="button" data-action="clear" class="aiimg-danger" aria-label="{{localize 'AIIMG.Log.Clear'}}" data-tooltip="AIIMG.Log.Clear"><i class="fa-solid fa-trash"></i></button>
   </span>
 </section>

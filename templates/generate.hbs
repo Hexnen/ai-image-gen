@@ -4,7 +4,7 @@
   {{/unless}}
   {{#unless configured}}
   <p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Gen.NotConfigured"}}
-    <a data-action="openConfig">{{localize "AIIMG.Gen.OpenConfig"}}</a></p>
+    <button type="button" class="link" data-action="openConfig">{{localize "AIIMG.Gen.OpenConfig"}}</button></p>
   {{/unless}}
 
   <div class="form-group stacked">
@@ -21,7 +21,7 @@
     {{#if extraRefs.length}}
     <div class="aiimg-extra-list">
       {{#each extraRefs}}
-      <div class="aiimg-extra-ref" data-tooltip="{{name}}">
+      <div class="aiimg-extra-ref" data-tooltip-text="{{name}}">
         <img src="{{url}}" alt="{{name}}">
         <button type="button" data-action="removeRef" data-uid="{{uid}}" aria-label="{{localize 'AIIMG.Gen.RemoveRef'}}" {{#if ../busy}}disabled{{/if}}><i class="fa-solid fa-xmark"></i></button>
       </div>
@@ -36,8 +36,8 @@
   </div>
 
   <div class="aiimg-versions">
-    <label for="aiimg-count">{{localize "AIIMG.Gen.Versions"}}</label>
-    <input id="aiimg-count" type="number" name="count" min="1" max="{{maxVersions}}" step="1" value="{{count}}" {{#if busy}}disabled{{/if}}>
+    <label class="aiimg-versions-count"><span>{{localize "AIIMG.Gen.Versions"}}</span>
+      <input type="number" name="count" min="1" max="{{maxVersions}}" step="1" value="{{count}}" {{#if busy}}disabled{{/if}}></label>
     {{#if showPreview}}
     <label class="aiimg-preview-opt"><input type="checkbox" name="preview" {{#if preview}}checked{{/if}} {{#if busy}}disabled{{/if}}> {{localize "AIIMG.Gen.PreviewFirst"}}</label>
     {{/if}}

@@ -5,6 +5,7 @@ import { getBatch, patchBatch } from "./batch/record.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin, DialogV2 } = foundry.applications.api;
 const t = (k, d) => game.i18n.format(k, d ?? {});
+const esc = (s) => foundry.utils.escapeHTML(String(s ?? ""));
 
 /**
  * Wybór jednej z kilku wersji obrazu.
@@ -52,6 +53,7 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
   #keep = false;
   #nextIndex = 0;
   #error = "";
+  #closed = false;
 
   constructor({ document, candidates, meta, source, batchId, regenerate, ...options }) {
     super(options);
@@ -65,6 +67,7 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   #add(list) {
+    if (this.#closed) return; // closed while a regeneration was running: no object URLs nobody can release
     for (const c of list) {
       const index = ++this.#nextIndex;
       const src = c.blob ? URL.createObjectURL(c.blob) : foundry.utils.getRoute(c.path);
@@ -99,11 +102,16 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   _onClose(options) {
     super._onClose?.(options);
+    this.#closed = true;
     for (const c of this.cands) if (c.blob) URL.revokeObjectURL(c.src);
   }
 
   /** Zamknięcie bez wyboru: dla kandydatów w pamięci pytamy o zapis/odrzucenie. */
   async close(options = {}) {
+    if (this.#busy && !options.force) {
+      ui.notifications.warn(t("AIIMG.Pick.BusyClose"));
+      return this;
+    }
     if (this.source === "memory" && !this.#decided && this.cands.length && !options.force) {
       const choice = await DialogV2.wait({
         window: { title: t("AIIMG.Pick.CloseTitle"), icon: "fa-solid fa-floppy-disk" },
@@ -118,7 +126,7 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
       if (!choice || choice === "cancel") return this;
       if (choice === "save") {
         try { await this.#saveCandidates(this.cands, { apply: false }); }
-        catch (e) { ui.notifications.error(e.message, { console: false }); return this; }
+        catch (e) { ui.notifications.error(esc(e.message), { console: false }); return this; }
       }
       this.#decided = true;
     }
@@ -149,7 +157,7 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
         await this.#finishBatch({ status: "done", picked: chosen.path });
       }
       this.#decided = true;
-      ui.notifications.info(t("AIIMG.Gen.Done", { name: this.document.name }));
+      ui.notifications.info(t("AIIMG.Gen.Done", { name: esc(this.document.name) }));
       return this.close({ force: true });
     } catch (e) {
       console.error(`${MODULE_ID} |`, e);

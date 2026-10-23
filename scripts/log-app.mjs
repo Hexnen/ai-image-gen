@@ -46,8 +46,9 @@ export class LogApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   #f = { provider: "", model: "", status: "", kind: "", from: "", to: "", q: "" };
   #all = [];
-  #bound = false;
   #timer = null;
+  /** Expanded row ids; kept here (not in the DOM) so a live update does not collapse what you are reading. */
+  #open = new Set();
 
   #hook = () => {
     if (!this.rendered) return;
@@ -58,18 +59,7 @@ export class LogApp extends HandlebarsApplicationMixin(ApplicationV2) {
   _onFirstRender(context, options) {
     super._onFirstRender?.(context, options);
     Hooks.on("aiImageGen.logUpdate", this.#hook);
-  }
-
-  _onClose(options) {
-    super._onClose?.(options);
-    Hooks.off("aiImageGen.logUpdate", this.#hook);
-    clearTimeout(this.#timer);
-  }
-
-  _onRender(context, options) {
-    super._onRender?.(context, options);
-    if (this.#bound) return;
-    this.#bound = true;
+    // The window element is rebuilt on every open, so the listeners belong to the first render of each open.
     const onChange = (ev) => {
       const el = ev.target.closest("[data-f]");
       if (!el || !this.element.contains(el)) return;
@@ -81,6 +71,19 @@ export class LogApp extends HandlebarsApplicationMixin(ApplicationV2) {
     };
     this.element.addEventListener("input", (ev) => { if (ev.target.dataset?.f === "q") onChange(ev); });
     this.element.addEventListener("change", (ev) => { if (ev.target.dataset?.f !== "q") onChange(ev); });
+    this.element.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      const row = ev.target.closest?.("tr.aiimg-log-row");
+      if (!row || ev.target !== row) return;
+      ev.preventDefault();
+      this.#toggleRow(row.dataset.id);
+    });
+  }
+
+  _onClose(options) {
+    super._onClose?.(options);
+    Hooks.off("aiImageGen.logUpdate", this.#hook);
+    clearTimeout(this.#timer);
   }
 
   #filtered() {
@@ -127,6 +130,7 @@ export class LogApp extends HandlebarsApplicationMixin(ApplicationV2) {
       context.empty = rows.length === 0;
       context.rows = rows.slice(0, MAX_ROWS).map((e) => ({
         id: e.id,
+        open: this.#open.has(e.id),
         time: new Date(e.ts).toLocaleString(),
         kind: e.kind, kindLabel: loc(`AIIMG.Log.Kind.${e.kind}`),
         status: e.status, statusLabel: loc(`AIIMG.Log.Status.${e.status}`),
@@ -152,9 +156,18 @@ export class LogApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   static #onToggle(event, target) {
     if (event.target.closest("button")) return;
-    const id = target.dataset.id;
-    const detail = this.element.querySelector(`tr.aiimg-log-detail[data-for="${id}"]`);
-    if (detail) { detail.hidden = !detail.hidden; target.classList.toggle("open", !detail.hidden); }
+    this.#toggleRow(target.dataset.id);
+  }
+
+  #toggleRow(id) {
+    const row = this.element.querySelector(`tr.aiimg-log-row[data-id="${CSS.escape(id)}"]`);
+    const detail = this.element.querySelector(`tr.aiimg-log-detail[data-for="${CSS.escape(id)}"]`);
+    if (!row || !detail) return;
+    const open = !this.#open.has(id);
+    if (open) this.#open.add(id); else this.#open.delete(id);
+    detail.hidden = !open;
+    row.classList.toggle("open", open);
+    row.setAttribute("aria-expanded", String(open));
   }
 
   static async #onCopy(event, target) {

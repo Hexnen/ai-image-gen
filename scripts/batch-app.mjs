@@ -4,6 +4,7 @@ import { openPickForBatch } from "./pick-app.mjs";
 import { listBatches, removeBatch, isActive, checkBatches, cancelBatch } from "./batch/index.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
+const esc = (s) => foundry.utils.escapeHTML(String(s ?? ""));
 
 /** Podgląd batchy: status, koszt, odśwież / anuluj / usuń z listy. */
 export class BatchesApp extends HandlebarsApplicationMixin(ApplicationV2) {
@@ -71,23 +72,24 @@ export class BatchesApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   static async #onRefresh() {
     try { await checkBatches({ force: true }); }
-    catch (e) { ui.notifications.error(e.message); }
+    catch (e) { ui.notifications.error(esc(e.message)); }
     this.render();
   }
 
   static async #onCancel(event, target) {
     try { await cancelBatch(target.dataset.id); }
-    catch (e) { ui.notifications.error(e.message); }
+    catch (e) { ui.notifications.error(esc(e.message)); }
     this.render();
   }
 
   static async #onPick(event, target) {
     try { await openPickForBatch(target.dataset.id); }
-    catch (e) { ui.notifications.error(e.message); }
+    catch (e) { ui.notifications.error(esc(e.message)); }
   }
 
   static async #onRemove(event, target) {
-    await removeBatch(target.dataset.id);
+    try { await removeBatch(target.dataset.id); }
+    catch (e) { ui.notifications.error(esc(e.message)); }
     this.render();
   }
 }

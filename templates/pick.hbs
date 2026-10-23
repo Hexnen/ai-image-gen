@@ -3,7 +3,7 @@
   <div class="aiimg-pick-grid">
     {{#each cands}}
     <figure class="aiimg-pick-card">
-      <button type="button" class="aiimg-pick-thumb" data-action="zoom" data-uid="{{uid}}" data-tooltip="AIIMG.Pick.Zoom">
+      <button type="button" class="aiimg-pick-thumb" data-action="zoom" data-uid="{{uid}}" aria-label="{{localize 'AIIMG.Pick.Zoom'}} #{{index}}" data-tooltip="AIIMG.Pick.Zoom" data-tooltip-direction="UP">
         <img src="{{src}}" alt="#{{index}}">
       </button>
       <figcaption>

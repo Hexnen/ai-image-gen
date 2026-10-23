@@ -6,11 +6,13 @@ import { getUsage } from "./limits.mjs";
 import { saveRefFile, saveTestExample } from "./save-image.mjs";
 import { getKey } from "./settings.mjs";
 import { buildTestPrompt, fitTestConfig, estimateTest, generateTest } from "./generate-flow.mjs";
+import { TestDrawerApp } from "./test-drawer-app.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin, DialogV2 } = foundry.applications.api;
 const MAX_TEST_VERSIONS = 4;
 const MAX_RUNS = 10;
 const filePicker = () => foundry.applications.apps.FilePicker.implementation;
+const esc = (s) => foundry.utils.escapeHTML(String(s ?? ""));
 
 export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
   static DEFAULT_OPTIONS = {
@@ -26,17 +28,12 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       uploadRefs: ImageConfigApp.#onUploadRefs,
       removeRef: ImageConfigApp.#onRemoveRef,
       save: ImageConfigApp.#onSave,
-      reset: ImageConfigApp.#onReset,
-      runTest: ImageConfigApp.#onRunTest,
-      saveTest: ImageConfigApp.#onSaveTest,
-      zoomTest: ImageConfigApp.#onZoomTest,
-      loadTry: ImageConfigApp.#onLoadTry,
-      openSettings: ImageConfigApp.#onOpenSettings
+      reset: ImageConfigApp.#onReset
     }
   };
 
   static PARTS = {
-    body: { template: `modules/${MODULE_ID}/templates/config.hbs` }
+    body: { template: `modules/${MODULE_ID}/templates/config.hbs`, scrollable: [".aiimg-form", ".aiimg-types ul"] }
   };
 
   static #instance;
@@ -57,15 +54,29 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
    * Test drawer state. Runs live in memory only (Blob + object URL), newest first, max MAX_RUNS; nothing
    * touches a document or the disk until the user saves an example.
    */
-  test = { open: false, key: null, description: "", name: "", type: "", count: 1, running: false, runs: [], shown: null };
+  test = { open: false, key: null, description: "", name: "", type: "", count: 1, running: false, confirming: false, runs: [], shown: null };
+
+  /** The side panel docked to this window (GM only). */
+  #drawer = null;
 
   /** Closing without Save discards the draft (the window is a singleton and would otherwise keep it). */
   _onClose(options) {
     this.draft = null;
     this.#clearRuns();
-    this.test.key = null;
-    this.test.running = false;
+    this.test.key = null; // an in-flight test keeps `running` until it settles, so a reopened window cannot start a second one
+    this.#drawer?.close();
+    this.#drawer = null;
     return super._onClose?.(options);
+  }
+
+  _onPosition(position) {
+    super._onPosition?.(position);
+    this.#drawer?.dock();
+  }
+
+  bringToFront() {
+    super.bringToFront();
+    this.#drawer?.dock();
   }
 
   #clearRuns() {
@@ -98,7 +109,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   /** Copy the drawer inputs into the state (and storage). */
   #readTest() {
-    const el = this.element;
+    const el = this.#drawer?.element;
     if (!el) return;
     const v = (n) => el.querySelector(`[name=${n}]`)?.value;
     const t = this.test;
@@ -116,7 +127,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   /** Refresh prompt / counters / estimate in place (no re-render, so focus and caret survive). */
   #updateTestPreview() {
-    const el = this.element;
+    const el = this.#drawer?.element;
     if (!el || !this.draft) return;
     const cfg = this.#testConfig();
     const prompt = buildTestPrompt(cfg, this.test);
@@ -148,6 +159,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       estimate: game.i18n.format("AIIMG.Test.Estimate", { cost: fmt(estimateTest(fitted, t.count)) }),
       hasKey: !!getKey(fitted.provider),
       running: t.running,
+      busy: t.running || t.confirming,
       results: (run?.items ?? []).map((it, index) => ({ index, url: it.url, cost: game.i18n.format("AIIMG.Test.Cost", { cost: fmt(it.cost) }) })),
       history: t.runs.map((r) => ({
         id: r.id,
@@ -158,6 +170,13 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
         active: r.id === run?.id
       }))
     };
+  }
+
+  /** Context for the docked test drawer (rendered by TestDrawerApp). */
+  drawerContext() {
+    const selected = detectImageTypes().find((t) => t.key === this.selectedKey);
+    const cfg = (this.draft ??= getConfig(this.selectedKey));
+    return { open: this.test.open, test: this.#testContext(cfg, selected) };
   }
 
   async _prepareContext() {
@@ -223,7 +242,6 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       })),
       batchWarn: cfg.defaultMode === "batch" && !supportsBatch,
       refs: cfg.refs.map((path, index) => ({ path, index })),
-      test: game.user.isGM ? this.#testContext(cfg, selected) : null,
       usage: { day: usage.day.toFixed(2), month: usage.month.toFixed(2) },
       isGM: game.user.isGM
     };
@@ -287,7 +305,11 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       this.render();
     });
     this.#wireRefZone(el.querySelector(".aiimg-refs"));
-    this.#wireTestDrawer(el);
+    el.querySelector("textarea[name=promptTemplate]")?.addEventListener("input", () => this.#onDraftInput());
+    if (game.user.isGM) {
+      this.#drawer ??= new TestDrawerApp(this);
+      this.#drawer.render({ force: true });
+    }
     el.querySelector("input[name=refUpload]")?.addEventListener("change", (ev) => {
       this.#uploadFiles([...ev.target.files]);
       ev.target.value = "";
@@ -299,13 +321,23 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       }));
   }
 
-  /** Live preview of the drawer: typing in the template or the sample inputs updates it without a re-render. */
-  #wireTestDrawer(el) {
-    const live = () => { this.#readForm(); this.#readTest(); this.#updateTestPreview(); };
-    el.querySelector("textarea[name=promptTemplate]")?.addEventListener("input", live);
+  /** Typing in the template or the sample inputs updates the drawer preview without a re-render. */
+  #onDraftInput() {
+    this.#readForm();
+    this.#readTest();
+    this.#updateTestPreview();
+  }
+
+  /** Called by the drawer after each of its renders: hook its inputs up to the live preview. */
+  wireDrawer(el) {
+    const live = () => this.#onDraftInput();
     for (const n of ["testDescription", "testName", "testType"]) el.querySelector(`[name=${n}]`)?.addEventListener("input", live);
     el.querySelector("select[name=testCount]")?.addEventListener("change", live);
-    el.querySelector("details.aiimg-test")?.addEventListener("toggle", (ev) => { this.test.open = ev.currentTarget.open; });
+  }
+
+  toggleDrawer() {
+    this.test.open = !this.test.open;
+    this.#drawer?.render();
   }
 
   /** Drag&drop and Ctrl+V (while the zone has focus) upload images as permanent references. */
@@ -350,7 +382,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     } finally {
       this.uploading = false;
     }
-    if (errors.length) ui.notifications.warn(game.i18n.format("AIIMG.Config.UploadFailed", { error: errors.join("; ") }));
+    if (errors.length) ui.notifications.warn(game.i18n.format("AIIMG.Config.UploadFailed", { error: esc(errors.join("; ")) }));
     this.render();
   }
 
@@ -396,18 +428,14 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     this.render();
   }
 
-  static #onOpenSettings() {
-    game.settings.sheet.render({ force: true });
-  }
-
   #currentRun() {
     return this.test.runs.find((r) => r.id === this.test.shown) ?? this.test.runs[0];
   }
 
   /** Real (billed) call with the unsaved draft: confirm the estimate first; the core logs it as kind "test". */
-  static async #onRunTest() {
+  async runTest() {
     const t = this.test;
-    if (t.running) return;
+    if (t.running || t.confirming) return;
     this.#readForm();
     this.#readTest();
     const key = this.selectedKey;
@@ -416,24 +444,34 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     if (!getKey(cfg.provider)) return ui.notifications.warn(game.i18n.localize("AIIMG.Test.NoKey"));
     if (!buildTestPrompt(cfg, t).trim()) return ui.notifications.warn(game.i18n.localize("AIIMG.Test.Empty"));
     const count = t.count;
-    const ok = await DialogV2.confirm({
-      window: { title: game.i18n.localize("AIIMG.Test.ConfirmTitle") },
-      content: `<p>${game.i18n.format("AIIMG.Test.ConfirmBody", {
-        provider: providers.PROVIDERS[cfg.provider]?.label ?? cfg.provider,
-        model: cfg.model, cost: estimateTest(cfg, count).toFixed(3), count
-      })}</p>`,
-      yes: { default: false }
-    });
-    if (!ok) return;
+    // Lock BEFORE the dialog opens, so a second click cannot stack another confirmation (and another paid call).
+    t.confirming = true;
+    this.#drawer?.render();
+    let ok = false;
+    try {
+      ok = await DialogV2.confirm({
+        window: { title: game.i18n.localize("AIIMG.Test.ConfirmTitle") },
+        content: `<p>${game.i18n.format("AIIMG.Test.ConfirmBody", {
+          provider: esc(providers.PROVIDERS[cfg.provider]?.label ?? cfg.provider),
+          model: esc(cfg.model), cost: estimateTest(cfg, count).toFixed(3), count
+        })}</p>`,
+        yes: { default: false }
+      });
+    } finally {
+      t.confirming = false;
+    }
+    if (!ok) { this.#drawer?.render(); return; }
     const input = { description: t.description, name: t.name, type: t.type };
     t.running = true;
-    this.render();
+    this.#drawer?.render();
     const t0 = performance.now();
     try {
       const res = await generateTest(draft, key, { ...input, count });
       const items = res.candidates.map((c) => ({ blob: c.blob, cost: c.cost, url: URL.createObjectURL(c.blob) }));
       if (!this.rendered || this.selectedKey !== key) {
-        for (const it of items) URL.revokeObjectURL(it.url); // window closed or type switched meanwhile
+        // Window closed or type switched while the call was in flight: the results are gone, but they were paid for.
+        for (const it of items) URL.revokeObjectURL(it.url);
+        if (items.length) ui.notifications.warn(game.i18n.format("AIIMG.Test.Discarded", { n: items.length }));
       } else {
         const run = { id: foundry.utils.randomID(), ...input, prompt: res.prompt, cost: res.cost, durationMs: performance.now() - t0, items };
         t.runs.unshift(run);
@@ -442,26 +480,25 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
         if (res.failed.length) ui.notifications.warn(game.i18n.format("AIIMG.Test.PartFailed", { n: res.failed.length, count }));
       }
     } catch (e) {
-      ui.notifications.error(game.i18n.format("AIIMG.Test.Failed", { error: e.message }));
+      ui.notifications.error(game.i18n.format("AIIMG.Test.Failed", { error: esc(e.message) }));
     } finally {
       t.running = false;
-      if (this.rendered) this.render();
+      this.#drawer?.render();
     }
   }
 
-  static async #onSaveTest(event, target) {
-    const item = this.#currentRun()?.items[Number(target.dataset.index)];
+  async saveTest(index) {
+    const item = this.#currentRun()?.items[index];
     if (!item) return;
     try {
       const path = await saveTestExample(item.blob, this.selectedKey, this.test.name || "test");
-      ui.notifications.info(game.i18n.format("AIIMG.Test.Saved", { path }));
+      ui.notifications.info(game.i18n.format("AIIMG.Test.Saved", { path: esc(path) }));
     } catch (e) {
-      ui.notifications.error(game.i18n.format("AIIMG.Test.SaveFailed", { error: e.message }));
+      ui.notifications.error(game.i18n.format("AIIMG.Test.SaveFailed", { error: esc(e.message) }));
     }
   }
 
-  static #onZoomTest(event, target) {
-    const index = Number(target.dataset.index);
+  zoomTest(index) {
     const item = this.#currentRun()?.items[index];
     if (!item) return;
     new foundry.applications.apps.ImagePopout({
@@ -470,13 +507,13 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   /** Load a past try's inputs back into the drawer and show its results. */
-  static #onLoadTry(event, target) {
-    this.#readForm();
-    const run = this.test.runs.find((r) => r.id === target.dataset.id);
+  loadTry(id) {
+    const run = this.test.runs.find((r) => r.id === id);
     if (!run) return;
+    this.#readForm();
     Object.assign(this.test, { description: run.description, name: run.name, type: run.type, shown: run.id, open: true });
     this.#persistTest();
-    this.render();
+    this.#drawer?.render();
   }
 
   static async #onSave() {
@@ -485,7 +522,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       await setConfig(this.selectedKey, this.draft);
       ui.notifications.info(game.i18n.localize("AIIMG.Config.Saved"));
     } catch (e) {
-      ui.notifications.error(e.message);
+      ui.notifications.error(esc(e.message));
     }
     this.draft = null;
     this.render();
@@ -495,7 +532,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     try {
       await resetConfig(this.selectedKey);
     } catch (e) {
-      ui.notifications.error(e.message);
+      ui.notifications.error(esc(e.message));
     }
     this.draft = null;
     this.render();

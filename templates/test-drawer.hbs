@@ -1,0 +1,68 @@
+<div class="aiimg-drawer-inner">
+<button type="button" class="aiimg-drawer-tab" data-action="toggle" aria-expanded="{{#if open}}true{{else}}false{{/if}}" aria-controls="aiimg-drawer-panel" aria-label="{{localize 'AIIMG.Test.Title'}}" data-tooltip="AIIMG.Test.Title" data-tooltip-direction="UP">
+  <i class="fa-solid fa-flask"></i><span>{{localize "AIIMG.Test.Tab"}}</span>
+</button>
+<div class="aiimg-drawer-panel" id="aiimg-drawer-panel" {{#unless open}}hidden{{/unless}}>
+  <header class="aiimg-drawer-head">
+    <h3><i class="fa-solid fa-flask"></i> {{localize "AIIMG.Test.Title"}}</h3>
+    <button type="button" data-action="toggle" aria-label="{{localize 'AIIMG.Test.Close'}}" data-tooltip="AIIMG.Test.Close" data-tooltip-direction="UP"><i class="fa-solid fa-xmark"></i></button>
+  </header>
+  <div class="aiimg-drawer-body aiimg-test">
+    <p class="hint">{{localize "AIIMG.Test.Hint"}}</p>
+
+    <div class="form-group stacked">
+      <label for="aiimg-test-description">{{localize "AIIMG.Test.Description"}}</label>
+      <textarea id="aiimg-test-description" name="testDescription" rows="3" placeholder="{{localize 'AIIMG.Test.DescriptionPlaceholder'}}">{{test.description}}</textarea>
+    </div>
+    <div class="aiimg-test-row">
+      <label>{{localize "AIIMG.Test.Name"}} <input type="text" name="testName" value="{{test.name}}"></label>
+      <label>{{localize "AIIMG.Test.Type"}} <input type="text" name="testType" value="{{test.type}}"></label>
+      <label>{{localize "AIIMG.Test.Versions"}}
+        <select name="testCount">{{#each test.counts}}<option value="{{value}}" {{#if selected}}selected{{/if}}>{{value}}</option>{{/each}}</select>
+      </label>
+    </div>
+
+    <div class="aiimg-prompt-meta">
+      <strong>{{localize "AIIMG.Test.Prompt"}}</strong>
+      <span><span data-role="testChars">{{test.chars}}</span> · <span data-role="testRefs">{{test.refs}}</span></span>
+    </div>
+    <pre class="aiimg-prompt-text" data-role="testPrompt">{{test.prompt}}</pre>
+    <p class="aiimg-warn" data-role="testEmpty" {{#unless test.empty}}hidden{{/unless}}><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Test.Empty"}}</p>
+
+    {{#unless test.hasKey}}
+    <p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Test.NoKey"}} <button type="button" class="link" data-action="openSettings">{{localize "AIIMG.Test.OpenSettings"}}</button></p>
+    {{/unless}}
+
+    <div class="aiimg-test-actions">
+      <span class="hint" data-role="testEstimate">{{test.estimate}}</span>
+      <button type="button" data-action="runTest" {{#unless test.hasKey}}disabled{{/unless}} {{#if test.busy}}disabled{{/if}}>
+        {{#if test.running}}<i class="fa-solid fa-spinner fa-spin"></i> {{localize "AIIMG.Test.Running"}}{{else}}<i class="fa-solid fa-flask"></i> {{localize "AIIMG.Test.Generate"}}{{/if}}
+      </button>
+    </div>
+
+    {{#if test.results.length}}
+    <h4>{{localize "AIIMG.Test.Results"}}</h4>
+    <div class="aiimg-test-results">
+      {{#each test.results}}
+      <figure>
+        <button type="button" class="aiimg-test-thumb" data-action="zoomTest" data-index="{{index}}" aria-label="{{localize 'AIIMG.Test.Zoom'}}" data-tooltip="AIIMG.Test.Zoom" data-tooltip-direction="UP"><img src="{{url}}" alt=""></button>
+        <figcaption><span>{{cost}}</span><button type="button" data-action="saveTest" data-index="{{index}}"><i class="fa-solid fa-floppy-disk"></i> {{localize "AIIMG.Test.SaveExample"}}</button></figcaption>
+      </figure>
+      {{/each}}
+    </div>
+    {{/if}}
+
+    {{#if test.history.length}}
+    <h4>{{localize "AIIMG.Test.History"}}</h4>
+    <p class="hint">{{localize "AIIMG.Test.HistoryHint"}}</p>
+    <ul class="aiimg-test-history">
+      {{#each test.history}}
+      <li><button type="button" data-action="loadTry" data-id="{{id}}" class="{{#if active}}active{{/if}}">
+        <img src="{{thumb}}" alt=""><span class="text">{{text}}</span><small>{{cost}} · {{seconds}}</small>
+      </button></li>
+      {{/each}}
+    </ul>
+    {{/if}}
+  </div>
+</div>
+</div>
