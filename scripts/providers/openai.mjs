@@ -76,6 +76,6 @@ function costOf(model, json, quality, size, count = 1) {
   if (isFinite(inTok) && isFinite(outTok) && inTok + outTok > 0) return { cost: inCost + outTok * IMG_OUT, estimated: false };
   // Brak usage: nigdy 0 — tabela cen (skalowana polem dla nowych rozmiarów/jakości) albo szacunek tokenowy.
   const [w, h] = size.split("x").map(Number);
-  const per = Math.max(openaiPriceFloor(quality, w, h), estimateSyncCost("openai", model, [{ quality, width: w, height: h }]));
+  const per = Math.max(openaiPriceFloor(quality, w, h, model), estimateSyncCost("openai", model, [{ quality, width: w, height: h }]));
   return { cost: per * count, estimated: true };
 }

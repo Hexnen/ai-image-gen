@@ -11,17 +11,41 @@ export const OPENAI_RATES = {
   batch: { textIn: 2.5, imageIn: 4, imageOut: 15 },
 };
 
-// Cena SYNC za obraz (USD) — dolna granica szacunku i fallback, gdy odpowiedź nie ma `usage`.
+// Cena SYNC za obraz (USD) gpt-image-2 i starszych — dolna granica szacunku i fallback, gdy odpowiedź nie ma `usage`.
 // Wpisy low/medium/high x 3 rozmiary z roleplay; reszta jest skalowana polem od 1024x1024.
-// xhigh/max/auto: ZGRUBNE założenie (OpenAI nie publikuje cen za jakość); auto liczone jak high (ostrożnie).
 export const OPENAI_PRICES = {
   low: { "1024x1024": 0.006, "1024x1536": 0.005, "1536x1024": 0.005 },
   medium: { "1024x1024": 0.053, "1024x1536": 0.041, "1536x1024": 0.041 },
   high: { "1024x1024": 0.211, "1024x1536": 0.165, "1536x1024": 0.165 },
 };
-const OPENAI_SQUARE_PRICE = { low: 0.006, medium: 0.053, high: 0.211, xhigh: 0.422, max: 0.633, auto: 0.211 };
+const OPENAI_SQUARE_PRICE = { low: 0.006, medium: 0.053, high: 0.211, auto: 0.211 };
 
-export function openaiPriceFloor(quality, width, height) {
+// gpt-image-2.5 (sunburst i flare mają TEN SAM koszt tokenowy przy tej samej jakości i rozmiarze).
+// Tokeny wyjścia na obraz: NIEZALEŻNE POMIARY osób trzecich (nie dane OpenAI; OpenAI podaje tylko stawki za 1M tokenów
+// i kalkulator, którego nie da się odczytać): tosea.ai (2048x1152, 41 wywołań), OneWave (1024x1024 high $0,0532),
+// kirahina note.com (1536x1024 high 1372 tok.). Liczba tokenów NIE rośnie liniowo z pikselami (kwadrat 1024² jest droższy
+// niż 2048x1152), więc nie skalujemy po polu: do ~2,4 Mpx bierzemy ostrożną górną granicę (wiersz 1024²), powyżej
+// rośnie liniowo do ~1,9× przy 3840x2160 (zmierzone: high 3336 vs 1772, max 13342 vs 7024).
+// Uczący się szacunek (cost-learning.mjs) ma pierwszeństwo po 3 próbkach z logu.
+export const OPENAI_25_TOKENS = {
+  low: 196, medium: 439, high: 1772, xhigh: 3122, max: 7024, auto: 1772, // 1024x1024, górna granica
+};
+const PX_FLAT = 2_400_000, PX_4K = 3840 * 2160, GROWTH_4K = 1.9;
+
+/** Czy model OpenAI jest z rodziny 2.5 (tokenowy cennik z pomiarów powyżej). */
+export const isOpenAI25 = (model) => getModel("openai", model)?.family === "gpt-image-2.5";
+
+/** Ostrożna liczba tokenów wyjścia obrazu dla gpt-image-2.5. */
+export function openai25OutputTokens(quality, width, height) {
+  const base = OPENAI_25_TOKENS[quality] ?? OPENAI_25_TOKENS.medium;
+  const px = (Number(width) || 1024) * (Number(height) || 1024);
+  if (px <= PX_FLAT) return base;
+  const k = Math.min(1, (px - PX_FLAT) / (PX_4K - PX_FLAT));
+  return Math.round(base * (1 + (GROWTH_4K - 1) * k));
+}
+
+export function openaiPriceFloor(quality, width, height, model) {
+  if (model && isOpenAI25(model)) return openai25OutputTokens(quality, width, height) * OPENAI_RATES.sync.imageOut / 1e6;
   const exact = OPENAI_PRICES[quality]?.[`${width}x${height}`];
   if (exact != null) return exact;
   const base = OPENAI_SQUARE_PRICE[quality] ?? OPENAI_SQUARE_PRICE.medium;
@@ -43,12 +67,12 @@ const ASPECTS_WIDE = [...ASPECTS_BASE, "1:4", "4:1", "1:8", "8:1"];
 export const MODELS = {
   openai: [
     {
-      id: "gpt-image-2.5-sunburst", label: "GPT Image 2.5 Sunburst", note: "detailed",
+      id: "gpt-image-2.5-flare", label: "GPT Image 2.5 Flare", note: "fast", // OpenAI's default; default model for new OpenAI types
       family: "gpt-image-2.5", qualities: OPENAI_QUALITIES_25, defaultQuality: "medium",
       customSize: true, presets: PRESETS_25,
     },
     {
-      id: "gpt-image-2.5-flare", label: "GPT Image 2.5 Flare", note: "fast",
+      id: "gpt-image-2.5-sunburst", label: "GPT Image 2.5 Sunburst", note: "detailed", // same token cost as Flare, ~50% slower (independent tests)
       family: "gpt-image-2.5", qualities: OPENAI_QUALITIES_25, defaultQuality: "medium",
       customSize: true, presets: PRESETS_25,
     },
@@ -98,8 +122,8 @@ export const MODELS = {
   // the list gives none, so costs stay a conservative estimate (openrouterEstimate) until usage.cost arrives.
   openrouter: [
     { id: "google/gemini-nano-banana-2.1", label: "Nano Banana 2.1", note: "newest" },
-    { id: "openai/gpt-image-2.5-sunburst", label: "GPT Image 2.5 Sunburst", note: "detailed" },
     { id: "openai/gpt-image-2.5-flare", label: "GPT Image 2.5 Flare", note: "fast" },
+    { id: "openai/gpt-image-2.5-sunburst", label: "GPT Image 2.5 Sunburst", note: "detailed" },
     { id: "google/gemini-3.1-flash-lite-image", label: "Nano Banana 2 Lite", note: "cheapest" },
     { id: "google/gemini-3.1-flash-image", label: "Nano Banana 2" },
     { id: "google/gemini-3-pro-image", label: "Nano Banana Pro" },

@@ -1,6 +1,6 @@
 # AI Image Gen (Foundry VTT v14)
 
-Generate images for actors, items and macros with OpenAI, Gemini or OpenRouter, in fast (sync) or batch mode.
+Generate images for actors, items and macros with OpenAI, Gemini or OpenRouter, in "Now" (sync) or batch mode (up to 24 h, about half price).
 Per image type (system + document + subtype) you configure the model, size, quality, prompt template and
 reference images. The plan and status live in [PLAN.md](PLAN.md).
 
@@ -18,7 +18,7 @@ earlier than this one can wait for the `aiImageGen.ready` hook (it passes the AP
 - `estimateGeneration({ typeKey, count?, refsCount?, width?, height?, aspectRatio? })`: estimated cost, model, size,
   whether a key is set, whether the type needs a reference. No network call.
 - `generateImage({ typeKey, description?, name?, refs?, width?, height?, aspectRatio?, count?, pick?, saveTo?, output?, caller?, signal?, title? })`
-  → `{ paths, path, cost, candidates, failed, prompt, picked }`. It uses the same core as Fast mode (budget
+  → `{ paths, path, cost, candidates, failed, prompt, picked }`. It uses the same core as "Now" mode (budget
   reservation and limits, the call log with a `caller` column, optimization on save, `optimized: true` uploads) and
   never touches a document. `refs` are extra reference images for this call (Blobs or Data paths) on top of the type's own.
   `saveTo: { dir, name }` chooses the folder inside Data and the file name stem; `output: { maxEdge, quality, format }`

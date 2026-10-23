@@ -1,4 +1,4 @@
-import { OPENAI_RATES, getModel, fitGeminiSize, fitOpenAIQuality, openaiSizeFor, openaiPriceFloor, openrouterEstimate } from "../providers/models.mjs";
+import { OPENAI_RATES, getModel, fitGeminiSize, fitOpenAIQuality, openaiSizeFor, openaiPriceFloor, openai25OutputTokens, isOpenAI25, openrouterEstimate } from "../providers/models.mjs";
 
 // Stawki batch (USD / token) i koszt z usage. Port z roleplay workshopBatch/cost.ts.
 // OpenAI batch = sync ÷ 2: text-in $2.50, image-in $4, image-out $15 za 1M tok.
@@ -62,9 +62,9 @@ export function openaiBatchCost(u) {
   return inCost + outTok * OPENAI_BATCH_OUT;
 }
 
-// Mnożniki liczby tokenów wyjścia względem "medium" (low/high z roleplay; xhigh/max to ZGRUBNE
-// założenie — OpenAI nie publikuje tokenów na jakość, a to tylko szacunek do limitów).
-const QUALITY_FACTOR = { low: 0.3, medium: 1, high: 4, xhigh: 8, max: 12, auto: 1 };
+// Mnożniki liczby tokenów wyjścia względem "medium" dla gpt-image-2 i starszych (z roleplay; rodzina 2.5 ma własną
+// tabelę tokenów w models.mjs, a xhigh/max nie istnieją poza nią).
+const QUALITY_FACTOR = { low: 0.3, medium: 1, high: 4, auto: 1 };
 const BASE_PIXELS = 1024 * 1536; // 1372 tok. zmierzone w roleplay dla 1024x1536 medium
 
 /**
@@ -76,11 +76,18 @@ export function estimateBatchCost(provider, model, items) {
   for (const it of items) {
     const refs = it.refs?.length ?? 0;
     if (provider === "openai") {
-      const q = QUALITY_FACTOR[fitOpenAIQuality(model, it.quality ?? "medium")] ?? 1;
+      const quality = fitOpenAIQuality(model, it.quality ?? "medium");
       const [w, h] = openaiSizeFor(model, { width: it.width, height: it.height }).split("x").map(Number);
-      const area = (w * h) / BASE_PIXELS;
-      // dolna granica: tabela cen sync / 2 (szacunek tokenowy zaniżał kwadrat ~2×)
-      const outCost = Math.max(1372 * q * area * OPENAI_BATCH_OUT, openaiPriceFloor(fitOpenAIQuality(model, it.quality ?? "medium"), w, h) / 2);
+      let outCost;
+      if (isOpenAI25(model)) {
+        // 2.5: tokeny z pomiarów niezależnych testerów (models.mjs), bez skalowania liniowego po polu
+        outCost = openai25OutputTokens(quality, w, h) * OPENAI_BATCH_OUT;
+      } else {
+        const q = QUALITY_FACTOR[quality] ?? 1;
+        const area = (w * h) / BASE_PIXELS;
+        // dolna granica: tabela cen sync / 2 (szacunek tokenowy zaniżał kwadrat ~2×)
+        outCost = Math.max(1372 * q * area * OPENAI_BATCH_OUT, openaiPriceFloor(quality, w, h, model) / 2);
+      }
       total += outCost + refs * 1536 * OPENAI_BATCH_IMAGE_IN + 150 * OPENAI_BATCH_TEXT_IN;
     } else if (provider === "gemini") {
       const r = GEMINI_BATCH[geminiTierOf(model)];

@@ -6,7 +6,7 @@ import { virtualDefaults } from "./image-types.mjs";
 
 export const DEFAULT_CONFIG = Object.freeze({
   provider: "openai",
-  model: "gpt-image-2.5-sunburst",
+  model: "gpt-image-2.5-flare",
   width: 1024,
   height: 1024,
   promptTemplate: "{description}",

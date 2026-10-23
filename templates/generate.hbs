@@ -59,7 +59,7 @@
     <dt>{{localize "AIIMG.Config.Refs"}}</dt><dd>{{refsTotal}} / {{maxRefs}}</dd>
     <dt>{{localize "AIIMG.Gen.SavedAs"}}</dt><dd>{{outputSummary}}</dd>
     <dt>{{localize "AIIMG.Gen.Estimate"}}</dt>
-    <dd>Fast {{estFast}}{{#if estFastTag}} ({{estFastTag}}){{/if}}{{#if estBatch}} · Batch {{estBatch}}{{#if estBatchTag}} ({{estBatchTag}}){{/if}}{{/if}}{{#if estTag}} · {{estTag}}{{/if}}</dd>
+    <dd>{{localize "AIIMG.Fast"}} {{estFast}}{{#if estFastTag}} ({{estFastTag}}){{/if}}{{#if estBatch}} · {{localize "AIIMG.BatchShort"}} {{estBatch}}{{#if estBatchTag}} ({{estBatchTag}}){{/if}}{{/if}}{{#if estTag}} · {{estTag}}{{/if}}</dd>
   </dl>
 
   {{#if error}}<p class="aiimg-error"><i class="fa-solid fa-circle-xmark"></i> {{error}}</p>{{/if}}
