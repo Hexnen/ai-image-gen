@@ -1,5 +1,5 @@
-// OpenRouter. Modele openai/* nie mają /images, więc idą przez /chat/completions
-// (modalities image+text; size/quality są wtedy dropowane). Reszta: POST /images.
+// OpenRouter. Modele openai/gpt-5* to modele czatu: /chat/completions (modalities image+text; size/quality dropowane).
+// Reszta (w tym openai/gpt-image-*, google/gemini-*-image): POST /images (lista: GET /images/models).
 // Port z roleplay imageGen/openrouter.ts. Brak batcha. Koszt: usage.cost (realny).
 import { GEN_TIMEOUT_MS, GPT_IMAGE_TIMEOUT_MS, withTimeout, httpError, b64ToBlob, blobToB64, mimeOf, nearestAspect } from "./util.mjs";
 import { openrouterEstimate } from "./models.mjs";
@@ -22,8 +22,11 @@ function costOf(json, model) {
 }
 const dataUri = async (blob) => `data:${await mimeOf(blob)};base64,${await blobToB64(blob)}`;
 
+/** openai/gpt-5* image models are chat models (modalities image+text); everything else is on the Images API. */
+export const openrouterRoute = (model) => (/^openai\/gpt-5/.test(model) ? "chat" : "images");
+
 export async function generate({ apiKey, model, prompt, refs = [], width, height, aspectRatio, signal }) {
-  return model.startsWith("openai/")
+  return openrouterRoute(model) === "chat"
     ? viaChat({ apiKey, model, prompt, refs, signal })
     : viaImages({ apiKey, model, prompt, refs, width, height, aspectRatio, signal });
 }

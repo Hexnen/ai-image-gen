@@ -94,9 +94,17 @@ export const MODELS = {
       tokens: { "1K": 1120, "2K": 1120, "4K": 2000 },
     },
   ],
+  // Ids come from OpenRouter's public Images API list (GET /api/v1/images/models, 2026-10). No per-image prices:
+  // the list gives none, so costs stay a conservative estimate (openrouterEstimate) until usage.cost arrives.
   openrouter: [
-    { id: "google/gemini-3.1-flash-lite-image", label: "Nano Banana 2 Lite" },
-    { id: "openai/gpt-5.4-image-2", label: "GPT Image 2 (via chat)" },
+    { id: "google/gemini-nano-banana-2.1", label: "Nano Banana 2.1", note: "newest" },
+    { id: "openai/gpt-image-2.5-sunburst", label: "GPT Image 2.5 Sunburst", note: "detailed" },
+    { id: "openai/gpt-image-2.5-flare", label: "GPT Image 2.5 Flare", note: "fast" },
+    { id: "google/gemini-3.1-flash-lite-image", label: "Nano Banana 2 Lite", note: "cheapest" },
+    { id: "google/gemini-3.1-flash-image", label: "Nano Banana 2" },
+    { id: "google/gemini-3-pro-image", label: "Nano Banana Pro" },
+    { id: "openai/gpt-image-2", label: "GPT Image 2" },
+    { id: "openai/gpt-5.4-image-2", label: "GPT-5.4 Image 2 (via chat)" },
   ],
 };
 
