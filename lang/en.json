@@ -38,6 +38,7 @@
   "AIIMG.Quality.high": "High",
   "AIIMG.Quality.auto": "Auto",
   "AIIMG.Config.Mode": "Default mode",
+  "AIIMG.Config.DefaultCount": "Versions per run",
   "AIIMG.Config.CardModel": "Model and size",
   "AIIMG.Config.NoBatchTag": "no batch",
   "AIIMG.Config.NotForModel": "Not available for this model",

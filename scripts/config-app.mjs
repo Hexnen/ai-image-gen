@@ -2,7 +2,7 @@ import { MODULE_ID } from "./constants.mjs";
 import { MAX_EDGES, FORMATS, OPTIMIZER_ID, optimizeEnabled, optimizerApi, outputOptsFromConfig, fmtBytes } from "./optimize.mjs";
 import { safeMessage } from "./redact.mjs";
 import { detectImageTypes } from "./image-types.mjs";
-import { getConfig, setConfig, resetConfig, isConfigured, sizePresetsFor, fitConfig } from "./config-store.mjs";
+import { getConfig, setConfig, resetConfig, isConfigured, sizePresetsFor, fitConfig, clampCount } from "./config-store.mjs";
 import * as providers from "./providers/index.mjs";
 import { getUsage } from "./limits.mjs";
 import { saveRefFile, saveTestExampleEx } from "./save-image.mjs";
@@ -255,6 +255,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       customSize,
       aspect: this.#aspectContext(cfg.width, cfg.height),
       sizeNote: this.sizeNote?.draft === this.draft ? this.sizeNote.text : "",
+      defaultCount: cfg.defaultCount,
       isFast: cfg.defaultMode === "fast",
       isBatch: cfg.defaultMode === "batch",
       supportsBatch,
@@ -306,6 +307,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     d.model = fd.model ?? d.model;
     d.promptTemplate = fd.promptTemplate ?? d.promptTemplate;
     d.defaultMode = fd.defaultMode ?? d.defaultMode;
+    if (fd.defaultCount !== undefined) d.defaultCount = clampCount(fd.defaultCount);
     d.quality = fd.quality ?? d.quality;
     d.imageSize = fd.imageSize ?? d.imageSize;
     d.thinkingLevel = fd.thinkingLevel ?? d.thinkingLevel;

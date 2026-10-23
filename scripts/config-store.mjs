@@ -11,6 +11,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   promptTemplate: "{description}",
   refs: [],
   defaultMode: "fast",
+  defaultCount: 1,     // versions per run offered by the generate dialog (1-8)
   quality: "medium",
   imageSize: "1K",     // Gemini
   thinkingLevel: "",   // Gemini; "" = domyślny modelu
@@ -97,6 +98,7 @@ export function getConfig(key) {
   // Zapis z nieznanym dostawcą (usunięty/przemianowany) psułby każde renderowanie okien: wróć do domyślnego.
   if (!PROVIDER_IDS.includes(cfg.provider)) { cfg.provider = DEFAULT_CONFIG.provider; cfg.model = DEFAULT_CONFIG.model; }
   if (!QUALITIES.includes(cfg.quality)) cfg.quality = DEFAULT_CONFIG.quality; // old saves lack it
+  cfg.defaultCount = clampCount(cfg.defaultCount);
   // Heal a model that no longer belongs to the provider.
   const models = providers.listModels(cfg.provider);
   if (models.length && !models.some((m) => m.id === cfg.model)) cfg.model = models[0].id;
@@ -110,6 +112,7 @@ function assertGM() {
   if (!game.user.isGM) throw new Error("Only a GM can change image settings.");
 }
 
+export const clampCount = (v) => Math.min(8, Math.max(1, Math.floor(Number(v)) || 1));
 const clampSize = (v, fallback) => Math.max(64, Math.min(3840, Math.round(Number(v)) || fallback));
 
 export async function setConfig(key, data) {
@@ -125,6 +128,7 @@ export async function setConfig(key, data) {
     promptTemplate: String(data.promptTemplate ?? DEFAULT_CONFIG.promptTemplate),
     refs: cleanRefs(data.refs),
     defaultMode: data.defaultMode === "batch" ? "batch" : "fast",
+    defaultCount: clampCount(data.defaultCount),
     quality: QUALITIES.includes(data.quality) ? data.quality : DEFAULT_CONFIG.quality,
     imageSize: String(data.imageSize ?? DEFAULT_CONFIG.imageSize),
     thinkingLevel: String(data.thinkingLevel ?? ""),

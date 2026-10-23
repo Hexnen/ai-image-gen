@@ -8,7 +8,7 @@ import { ImageConfigApp } from "./config-app.mjs";
 import { PickApp } from "./pick-app.mjs";
 import { saveRefFile } from "./save-image.mjs";
 import { resolveTypeKey } from "./image-types.mjs";
-import { getConfig, setConfig } from "./config-store.mjs";
+import { getConfig, setConfig, isConfigured, clampCount } from "./config-store.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
@@ -77,7 +77,11 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     this.busy = null; // "fast" | "batch" | null
     this.error = "";
     const prefs = loadPrefs();
-    this.count = Math.min(MAX_VERSIONS, Math.max(1, Math.floor(Number(prefs.count)) || 1));
+    // A type with saved settings starts from its own versions-per-run; otherwise the last count used.
+    const key = resolveTypeKey(document);
+    this.count = key && isConfigured(key)
+      ? clampCount(getConfig(key).defaultCount)
+      : Math.min(MAX_VERSIONS, Math.max(1, Math.floor(Number(prefs.count)) || 1));
     this.preview = !!prefs.preview;
     this.promptOpen = !!prefs.promptOpen;
     this.saveRef = false;

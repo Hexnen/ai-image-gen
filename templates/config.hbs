@@ -144,6 +144,10 @@
               <span>{{localize "AIIMG.Batch"}}</span>
             </label>
           </div>
+          <div class="aiimg-field aiimg-count">
+            <label for="aiimg-default-count">{{localize "AIIMG.Config.DefaultCount"}}</label>
+            <input type="number" id="aiimg-default-count" name="defaultCount" min="1" max="8" step="1" value="{{defaultCount}}" {{#unless isGM}}disabled{{/unless}}>
+          </div>
           {{#unless supportsBatch}}<p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Config.NoBatch"}}</p>{{/unless}}
           {{#if batchWarn}}<p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Config.BatchFallback"}}</p>{{/if}}
         </section>

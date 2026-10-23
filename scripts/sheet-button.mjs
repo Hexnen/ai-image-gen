@@ -44,7 +44,7 @@ function findAnchor(root) {
   return null;
 }
 
-function canGenerate(doc) {
+export function canGenerate(doc) {
   if (!game.user.isGM || !resolveTypeKey(doc) || !doc.id) return false;
   // Unsaved, not editable or in a locked compendium (embedded included): the image could not be applied after paying.
   try { assertCanApply(doc); } catch { return false; }

@@ -37,6 +37,7 @@
   "AIIMG.Quality.medium": "Średnia",
   "AIIMG.Quality.high": "Wysoka",
   "AIIMG.Quality.auto": "Auto",
+  "AIIMG.Config.DefaultCount": "Wersji na jedno uruchomienie",
   "AIIMG.Config.Mode": "Tryb domyślny",
   "AIIMG.Config.CardModel": "Model i rozmiar",
   "AIIMG.Config.NoBatchTag": "bez batcha",

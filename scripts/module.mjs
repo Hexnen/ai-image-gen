@@ -11,6 +11,7 @@ import { LogApp } from "./log-app.mjs";
 import * as callLog from "./call-log.mjs";
 import { GenerateDialog } from "./generate-dialog.mjs";
 import { registerSheetButtons } from "./sheet-button.mjs";
+import { registerContextMenus } from "./context-menu.mjs";
 import { openPickForBatch } from "./pick-app.mjs";
 import { runMigrations } from "./migrate.mjs";
 import { syncOptimizerProfile } from "./optimize.mjs";
@@ -26,6 +27,7 @@ function notifyPick(rec) {
 Hooks.once("init", () => {
   registerSettings();
   registerSheetButtons();
+  registerContextMenus();
 });
 
 Hooks.once("ready", async () => {
