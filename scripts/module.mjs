@@ -52,8 +52,15 @@ Hooks.once("ready", () => {
 // Left-hand toolbar buttons (GM only). v14: controls is a record keyed by control name.
 Hooks.on("getSceneControlButtons", (controls) => {
   if (!game.user.isGM) return;
-  const group = controls.tokens;
-  if (!group) return;
+  // Own control category (no canvas layer): the three buttons live here, not under Token Controls.
+  const group = controls[MODULE_ID] = {
+    name: MODULE_ID,
+    order: Object.keys(controls).length,
+    title: "AIIMG.Controls.Category",
+    icon: "fa-solid fa-wand-magic-sparkles",
+    visible: true,
+    tools: {}
+  };
   const add = (id, title, icon, open) => {
     group.tools[`${MODULE_ID}-${id}`] = {
       name: `${MODULE_ID}-${id}`,

@@ -41,6 +41,7 @@
   "AIIMG.Config.Save": "Save",
   "AIIMG.Config.Reset": "Reset",
   "AIIMG.Config.Saved": "Image settings saved.",
+  "AIIMG.Controls.Category": "AI Image Gen",
   "AIIMG.Controls.Open": "AI Image Gen settings",
   "AIIMG.Controls.Batches": "AI Image Gen batches",
   "AIIMG.Sheet.Generate": "Generate image with AI",
@@ -181,7 +182,7 @@
   "AIIMG.Gen.PromptCopied": "Prompt copied.",
   "AIIMG.Gen.PromptCopyFailed": "Could not copy the prompt.",
   "AIIMG.Test.Title": "Test drawer",
-  "AIIMG.Test.Hint": "Uses the unsaved draft above. Nothing is applied to any document and nothing is written to disk until you save an example.",
+  "AIIMG.Test.Hint": "Uses the unsaved draft in the editor. Nothing is applied to any document and nothing is written to disk until you save an example.",
   "AIIMG.Test.Description": "Sample description",
   "AIIMG.Test.DescriptionPlaceholder": "e.g. a scarred dwarf blacksmith, torch-lit forge",
   "AIIMG.Test.Name": "Sample name",
@@ -209,5 +210,10 @@
   "AIIMG.Test.HistoryHint": "Click a try to load its description back into the drawer.",
   "AIIMG.Test.Cost": "{cost} USD",
   "AIIMG.Test.Seconds": "{s} s",
-  "AIIMG.Log.Kind.test": "Test"
+  "AIIMG.Log.Kind.test": "Test",
+  "AIIMG.Test.Tab": "Test",
+  "AIIMG.Test.Close": "Close the test drawer",
+  "AIIMG.Test.Discarded": "The window was closed or the type changed before the test finished; {n} paid image(s) were discarded.",
+  "AIIMG.Pick.BusyClose": "Wait for the generation to finish before closing (or the new images would be lost).",
+  "AIIMG.Gen.Unsaved": "Save this document first: a generated image needs a saved document to be applied to."
 }
