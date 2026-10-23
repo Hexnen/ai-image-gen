@@ -221,5 +221,10 @@
   "AIIMG.Settings.Limit.monthly.HintV2": "USD per month. 0 = NO LIMIT (no protection).",
   "AIIMG.Settings.Limit.perRequest.HintV2": "Max estimated cost of one request in USD. 0 = NO LIMIT (no protection).",
   "AIIMG.Settings.Limit.batchSize.HintV2": "Max images in one batch. 0 = NO LIMIT (no protection).",
-  "AIIMG.Batches.Status.submitting": "Submitting"
+  "AIIMG.Batches.Status.submitting": "Submitting",
+  "AIIMG.Batches.Abandon": "Abandon (stop tracking; cancels at the provider if possible)",
+  "AIIMG.Batches.AbandonTitle": "Abandon batch",
+  "AIIMG.Batches.AbandonBody": "Stop tracking this batch? It is cancelled at the provider when possible, and its results will no longer be collected.",
+  "AIIMG.Batches.GMOnly": "Only the GM can manage batches.",
+  "AIIMG.Pick.AlreadyDecided": "This batch was already decided in another window."
 }

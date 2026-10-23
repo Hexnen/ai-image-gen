@@ -1,4 +1,5 @@
 import { MODULE_ID } from "./constants.mjs";
+import { safeMessage } from "./redact.mjs";
 import {
   readiness, runFast, runBatch, generateCandidates, estimateTotal, buildPrompt, MAX_VERSIONS, MAX_EXTRA_REF_BYTES
 } from "./generate-flow.mjs";
@@ -239,7 +240,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
           const description = this.description;
           const res = await generateCandidates(this.document, description, { count, extraRefs: refs });
           if (res.failed.length) {
-            ui.notifications.warn(game.i18n.format("AIIMG.Gen.SomeFailed", { failed: res.failed.length, total: count, error: esc(res.failed[0].error) }));
+            ui.notifications.warn(game.i18n.format("AIIMG.Gen.SomeFailed", { failed: res.failed.length, total: count, error: safeMessage(res.failed[0].error) }));
           }
           PickApp.open({
             document: this.document, candidates: res.candidates, meta: res.meta, source: "memory",
@@ -256,7 +257,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     } catch (e) {
       console.error(`${MODULE_ID} |`, e);
       this.error = e?.message ?? String(e);
-      ui.notifications.error(esc(this.error), { console: false });
+      ui.notifications.error(safeMessage(this.error), { console: false });
       this.busy = null;
       return this.render();
     }
@@ -275,7 +276,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       ui.notifications.info(game.i18n.format("AIIMG.Gen.RefsSaved", { n: paths.length }));
     } catch (e) {
       console.error(`${MODULE_ID} |`, e);
-      ui.notifications.warn(game.i18n.format("AIIMG.Gen.RefsSaveFailed", { error: esc(e.message) }));
+      ui.notifications.warn(game.i18n.format("AIIMG.Gen.RefsSaveFailed", { error: safeMessage(e.message) }));
     }
   }
 

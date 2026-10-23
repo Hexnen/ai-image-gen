@@ -106,14 +106,16 @@ export function removeBatch(id) {
 /**
  * Scala `patch` w rekord (undefined = usuń pole).
  * onlyActive: nie nadpisuj rekordu, który już nie jest aktywny.
+ * onlyStatus: zapisz tylko, jeśli rekord ma dokładnie ten status (np. dwa okna wyboru tego samego batcha).
  * leaseOwner: zapisz tylko, jeśli ten klient nadal trzyma dzierżawę (inaczej zwraca null).
  */
-export function patchBatch(id, patch, { onlyActive = false, leaseOwner = null } = {}) {
+export function patchBatch(id, patch, { onlyActive = false, onlyStatus = null, leaseOwner = null } = {}) {
   return serial(async () => {
     const i = findSlot(id);
     if (i < 0) return null;
     const cur = readSlot(i);
     if (onlyActive && !isActive(cur)) return cur;
+    if (onlyStatus && cur.status !== onlyStatus) return cur;
     if (leaseOwner && cur.lease && cur.lease.owner !== leaseOwner && cur.lease.until > Date.now()) return null;
     for (const [k, v] of Object.entries(patch)) {
       if (v === undefined) delete cur[k];

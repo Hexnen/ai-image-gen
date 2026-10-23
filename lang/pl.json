@@ -221,5 +221,10 @@
   "AIIMG.Settings.Limit.monthly.HintV2": "USD na miesiąc. 0 = BEZ LIMITU (brak zabezpieczenia).",
   "AIIMG.Settings.Limit.perRequest.HintV2": "Maks. szacowany koszt jednego żądania w USD. 0 = BEZ LIMITU (brak zabezpieczenia).",
   "AIIMG.Settings.Limit.batchSize.HintV2": "Maks. liczba obrazów w jednym batchu. 0 = BEZ LIMITU (brak zabezpieczenia).",
-  "AIIMG.Batches.Status.submitting": "Wysyłanie"
+  "AIIMG.Batches.Status.submitting": "Wysyłanie",
+  "AIIMG.Batches.Abandon": "Porzuć (przestań śledzić; anuluje u dostawcy, jeśli się da)",
+  "AIIMG.Batches.AbandonTitle": "Porzuć batch",
+  "AIIMG.Batches.AbandonBody": "Przestać śledzić ten batch? Zostanie anulowany u dostawcy, jeśli to możliwe, a jego wyniki nie będą już pobierane.",
+  "AIIMG.Batches.GMOnly": "Tylko GM może zarządzać batchami.",
+  "AIIMG.Pick.AlreadyDecided": "Ten batch został już rozstrzygnięty w innym oknie."
 }

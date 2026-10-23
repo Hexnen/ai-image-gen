@@ -2,6 +2,7 @@ import { MODULE_ID } from "./constants.mjs";
 import { commitCandidate } from "./generate-flow.mjs";
 import { applyImage } from "./save-image.mjs";
 import { getBatch, patchBatch } from "./batch/record.mjs";
+import { safeMessage } from "./redact.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin, DialogV2 } = foundry.applications.api;
 const t = (k, d) => game.i18n.format(k, d ?? {});
@@ -126,11 +127,20 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
       if (!choice || choice === "cancel") return this;
       if (choice === "save") {
         try { await this.#saveCandidates(this.cands, { apply: false }); }
-        catch (e) { ui.notifications.error(esc(e.message), { console: false }); return this; }
+        catch (e) { ui.notifications.error(safeMessage(e.message), { console: false }); return this; }
       }
       this.#decided = true;
     }
     return super.close(options);
+  }
+
+  /** Disk batch: another window (or GM) may have decided already; do not apply twice. */
+  async #stillAwaiting() {
+    if (!this.batchId || getBatch(this.batchId)?.status === "awaiting-pick") return true;
+    ui.notifications.warn(t("AIIMG.Pick.AlreadyDecided"));
+    this.#decided = true;
+    await this.close({ force: true });
+    return false;
   }
 
   async #saveCandidates(list, { apply }) {
@@ -138,7 +148,7 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   async #finishBatch(patch) {
-    if (this.batchId) await patchBatch(this.batchId, { candidates: undefined, ...patch });
+    if (this.batchId) await patchBatch(this.batchId, { candidates: undefined, ...patch }, { onlyStatus: "awaiting-pick" });
   }
 
   static async #onUse(event, target) {
@@ -153,6 +163,7 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
         await commitCandidate(this.document, chosen, this.meta, { apply: true });
         if (this.#keep) await this.#saveCandidates(this.cands.filter((c) => c !== chosen), { apply: false });
       } else {
+        if (!(await this.#stillAwaiting())) return;
         await applyImage(this.document.uuid, chosen.path, "img");
         await this.#finishBatch({ status: "done", picked: chosen.path });
       }
@@ -177,6 +188,7 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
   static async #onDiscard() {
     if (this.#busy) return;
     if (this.source === "disk") {
+      if (!(await this.#stillAwaiting())) return;
       await this.#finishBatch({ status: "done", picked: null, discarded: true });
       ui.notifications.info(t("AIIMG.Pick.DiscardedDisk", { folder: `ai-image-gen/_candidates/${this.batchId}` }));
     }

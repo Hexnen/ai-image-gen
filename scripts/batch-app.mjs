@@ -1,9 +1,10 @@
 import { MODULE_ID } from "./constants.mjs";
 import { PROVIDERS } from "./providers/index.mjs";
 import { openPickForBatch } from "./pick-app.mjs";
-import { listBatches, removeBatch, isActive, checkBatches, cancelBatch } from "./batch/index.mjs";
+import { listBatches, removeBatch, isActive, checkBatches, cancelBatch, abandonBatch } from "./batch/index.mjs";
+import { safeMessage } from "./redact.mjs";
 
-const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
+const { ApplicationV2, HandlebarsApplicationMixin, DialogV2 } = foundry.applications.api;
 const esc = (s) => foundry.utils.escapeHTML(String(s ?? ""));
 
 /** Podgląd batchy: status, koszt, odśwież / anuluj / usuń z listy. */
@@ -18,6 +19,7 @@ export class BatchesApp extends HandlebarsApplicationMixin(ApplicationV2) {
       refresh: BatchesApp.#onRefresh,
       cancel: BatchesApp.#onCancel,
       remove: BatchesApp.#onRemove,
+      abandon: BatchesApp.#onAbandon,
       pick: BatchesApp.#onPick
     }
   };
@@ -29,6 +31,7 @@ export class BatchesApp extends HandlebarsApplicationMixin(ApplicationV2) {
   static #instance;
 
   static open() {
+    if (!game.user.isGM) { ui.notifications.warn(game.i18n.localize("AIIMG.Batches.GMOnly")); return null; }
     this.#instance ??= new this();
     this.#instance.render({ force: true });
     return this.#instance;
@@ -63,6 +66,7 @@ export class BatchesApp extends HandlebarsApplicationMixin(ApplicationV2) {
         costReal: cost != null,
         error: rec.error ?? (rec.failed?.length ? game.i18n.format("AIIMG.Batches.Failed", { n: rec.failed.length }) : ""),
         active: isActive(rec),
+        abandonable: isActive(rec) || rec.status === "submitting",
         cancelling: rec.status === "cancelling",
         awaitingPick: rec.status === "awaiting-pick" && !!rec.candidates?.length
       };
@@ -72,24 +76,36 @@ export class BatchesApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   static async #onRefresh() {
     try { await checkBatches({ force: true }); }
-    catch (e) { ui.notifications.error(esc(e.message)); }
+    catch (e) { ui.notifications.error(safeMessage(e.message)); }
     this.render();
   }
 
   static async #onCancel(event, target) {
     try { await cancelBatch(target.dataset.id); }
-    catch (e) { ui.notifications.error(esc(e.message)); }
+    catch (e) { ui.notifications.error(safeMessage(e.message)); }
     this.render();
   }
 
   static async #onPick(event, target) {
     try { await openPickForBatch(target.dataset.id); }
-    catch (e) { ui.notifications.error(esc(e.message)); }
+    catch (e) { ui.notifications.error(safeMessage(e.message)); }
+  }
+
+  static async #onAbandon(event, target) {
+    try {
+      const ok = await DialogV2.confirm({
+        window: { title: game.i18n.localize("AIIMG.Batches.AbandonTitle"), icon: "fa-solid fa-ban" },
+        content: `<p>${game.i18n.localize("AIIMG.Batches.AbandonBody")}</p>`,
+        rejectClose: false
+      });
+      if (ok) await abandonBatch(target.dataset.id);
+    } catch (e) { ui.notifications.error(safeMessage(e.message)); }
+    this.render();
   }
 
   static async #onRemove(event, target) {
     try { await removeBatch(target.dataset.id); }
-    catch (e) { ui.notifications.error(esc(e.message)); }
+    catch (e) { ui.notifications.error(safeMessage(e.message)); }
     this.render();
   }
 }

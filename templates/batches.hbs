@@ -30,9 +30,13 @@
           {{/if}}
           {{#if active}}
           <button type="button" data-action="cancel" data-id="{{id}}" {{#if cancelling}}disabled{{/if}} aria-label="{{localize 'AIIMG.Batches.Cancel'}}" data-tooltip="AIIMG.Batches.Cancel"><i class="fa-solid fa-ban"></i></button>
-          {{else}}
-          <button type="button" data-action="remove" data-id="{{id}}" aria-label="{{localize 'AIIMG.Batches.Remove'}}" data-tooltip="AIIMG.Batches.Remove"><i class="fa-solid fa-trash"></i></button>
           {{/if}}
+          {{#if abandonable}}
+          <button type="button" data-action="abandon" data-id="{{id}}" aria-label="{{localize 'AIIMG.Batches.Abandon'}}" data-tooltip="AIIMG.Batches.Abandon"><i class="fa-solid fa-link-slash"></i></button>
+          {{/if}}
+          {{#unless active}}
+          <button type="button" data-action="remove" data-id="{{id}}" aria-label="{{localize 'AIIMG.Batches.Remove'}}" data-tooltip="AIIMG.Batches.Remove"><i class="fa-solid fa-trash"></i></button>
+          {{/unless}}
         </td>
       </tr>
       {{/each}}

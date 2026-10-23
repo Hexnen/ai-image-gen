@@ -1,4 +1,5 @@
 import { MODULE_ID } from "./constants.mjs";
+import { safeMessage } from "./redact.mjs";
 import { detectImageTypes } from "./image-types.mjs";
 import { getConfig, setConfig, resetConfig, isConfigured, sizePresetsFor, fitConfig } from "./config-store.mjs";
 import * as providers from "./providers/index.mjs";
@@ -388,7 +389,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     } finally {
       this.uploading = false;
     }
-    if (errors.length) ui.notifications.warn(game.i18n.format("AIIMG.Config.UploadFailed", { error: esc(errors.join("; ")) }));
+    if (errors.length) ui.notifications.warn(game.i18n.format("AIIMG.Config.UploadFailed", { error: safeMessage(errors.join("; ")) }));
     this.render();
   }
 
@@ -486,7 +487,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
         if (res.failed.length) ui.notifications.warn(game.i18n.format("AIIMG.Test.PartFailed", { n: res.failed.length, count }));
       }
     } catch (e) {
-      ui.notifications.error(game.i18n.format("AIIMG.Test.Failed", { error: esc(e.message) }));
+      ui.notifications.error(game.i18n.format("AIIMG.Test.Failed", { error: safeMessage(e.message) }));
     } finally {
       t.running = false;
       this.#drawer?.render();
@@ -500,7 +501,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       const path = await saveTestExample(item.blob, this.selectedKey, this.test.name || "test");
       ui.notifications.info(game.i18n.format("AIIMG.Test.Saved", { path: esc(path) }));
     } catch (e) {
-      ui.notifications.error(game.i18n.format("AIIMG.Test.SaveFailed", { error: esc(e.message) }));
+      ui.notifications.error(game.i18n.format("AIIMG.Test.SaveFailed", { error: safeMessage(e.message) }));
     }
   }
 
@@ -528,7 +529,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       await setConfig(this.selectedKey, this.draft);
       ui.notifications.info(game.i18n.localize("AIIMG.Config.Saved"));
     } catch (e) {
-      ui.notifications.error(esc(e.message));
+      ui.notifications.error(safeMessage(e.message));
     }
     this.draft = null;
     this.render();
@@ -538,7 +539,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     try {
       await resetConfig(this.selectedKey);
     } catch (e) {
-      ui.notifications.error(esc(e.message));
+      ui.notifications.error(safeMessage(e.message));
     }
     this.draft = null;
     this.render();

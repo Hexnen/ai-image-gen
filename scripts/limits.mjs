@@ -31,7 +31,7 @@ export function pendingBatchCost() {
   let sum = 0;
   try {
     for (const r of listBatches()) {
-      if (!isActive(r)) continue;
+      if (!isActive(r) && r.status !== "submitting") continue; // "submitting": zapisane, jeszcze bez odpowiedzi dostawcy
       sum += Math.max(0, (Number(r.estimatedCost) || 0) - (Number(r.ingest?.cost) || 0));
     }
   } catch { /* ustawienie niedostępne */ }
