@@ -1,0 +1,18 @@
+{
+  "AIIMG.Settings.ApiKey.Hint": "Zapisany tylko w tej przeglądarce (ustawienie klienta), nigdy nie trafia do graczy.",
+  "AIIMG.Settings.ApiKey.openai.Name": "Klucz API OpenAI",
+  "AIIMG.Settings.ApiKey.gemini.Name": "Klucz API Gemini",
+  "AIIMG.Settings.ApiKey.openrouter.Name": "Klucz API OpenRouter",
+  "AIIMG.Settings.Limit.daily.Name": "Budżet dzienny (USD)",
+  "AIIMG.Settings.Limit.daily.Hint": "0 = bez limitu.",
+  "AIIMG.Settings.Limit.monthly.Name": "Budżet miesięczny (USD)",
+  "AIIMG.Settings.Limit.monthly.Hint": "0 = bez limitu.",
+  "AIIMG.Settings.Limit.perRequest.Name": "Maks. koszt jednego żądania (USD)",
+  "AIIMG.Settings.Limit.perRequest.Hint": "0 = bez limitu.",
+  "AIIMG.Settings.Limit.batchSize.Name": "Maks. obrazów w batchu",
+  "AIIMG.Settings.Limit.batchSize.Hint": "0 = bez limitu.",
+  "AIIMG.Limits.PerRequest": "Szacowany koszt przekracza limit na żądanie ({limit} USD).",
+  "AIIMG.Limits.BatchSize": "Batch przekracza maksymalny rozmiar ({limit}).",
+  "AIIMG.Limits.Daily": "Przekroczony zostałby budżet dzienny {limit} USD.",
+  "AIIMG.Limits.Monthly": "Przekroczony zostałby budżet miesięczny {limit} USD."
+}

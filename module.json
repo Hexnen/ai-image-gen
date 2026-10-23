@@ -1,0 +1,14 @@
+{
+  "id": "ai-image-gen",
+  "title": "AI Image Gen",
+  "description": "Generate images for actors, items and macros with OpenAI, Gemini or OpenRouter (fast or batch).",
+  "version": "0.1.0",
+  "compatibility": { "minimum": "14", "verified": "14" },
+  "authors": [{ "name": "Hexnen" }],
+  "esmodules": ["scripts/module.mjs"],
+  "styles": ["styles/module.css"],
+  "languages": [
+    { "lang": "en", "name": "English", "path": "lang/en.json" },
+    { "lang": "pl", "name": "Polski", "path": "lang/pl.json" }
+  ]
+}

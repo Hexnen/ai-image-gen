@@ -1,0 +1,18 @@
+{
+  "AIIMG.Settings.ApiKey.Hint": "Stored in this browser only (client setting), never shared with players.",
+  "AIIMG.Settings.ApiKey.openai.Name": "OpenAI API key",
+  "AIIMG.Settings.ApiKey.gemini.Name": "Gemini API key",
+  "AIIMG.Settings.ApiKey.openrouter.Name": "OpenRouter API key",
+  "AIIMG.Settings.Limit.daily.Name": "Daily budget (USD)",
+  "AIIMG.Settings.Limit.daily.Hint": "0 = unlimited.",
+  "AIIMG.Settings.Limit.monthly.Name": "Monthly budget (USD)",
+  "AIIMG.Settings.Limit.monthly.Hint": "0 = unlimited.",
+  "AIIMG.Settings.Limit.perRequest.Name": "Max cost per request (USD)",
+  "AIIMG.Settings.Limit.perRequest.Hint": "0 = unlimited.",
+  "AIIMG.Settings.Limit.batchSize.Name": "Max images per batch",
+  "AIIMG.Settings.Limit.batchSize.Hint": "0 = unlimited.",
+  "AIIMG.Limits.PerRequest": "Estimated cost exceeds the per-request limit ({limit} USD).",
+  "AIIMG.Limits.BatchSize": "Batch exceeds the maximum size ({limit}).",
+  "AIIMG.Limits.Daily": "Daily budget of {limit} USD would be exceeded.",
+  "AIIMG.Limits.Monthly": "Monthly budget of {limit} USD would be exceeded."
+}
