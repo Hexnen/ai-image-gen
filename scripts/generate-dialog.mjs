@@ -273,8 +273,8 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       return this.close();
     } catch (e) {
       console.error(`${MODULE_ID} |`, e);
-      this.error = e?.message ?? String(e);
-      ui.notifications.error(safeMessage(this.error), { console: false });
+      // Shown inline in the dialog (it stays open), so no toast with the same text.
+      this.error = safeMessage(e?.message ?? String(e));
       this.busy = null;
       return this.render();
     }
