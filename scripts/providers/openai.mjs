@@ -26,6 +26,7 @@ export async function generate({ apiKey, model, prompt, refs = [], width, height
   // 2.5: dokładny rozmiar po normalizacji (×16, limity API); starsze: 3 koszyki.
   const size = openaiSizeFor(model, { width, height, aspectRatio });
   let res;
+  const route = refs.length ? "images/edits" : "images/generations";
   if (refs.length) {
     const form = new FormData();
     form.set("model", model);
@@ -56,7 +57,7 @@ export async function generate({ apiKey, model, prompt, refs = [], width, height
   const json = await res.json();
   const b64 = json?.data?.[0]?.b64_json;
   if (!b64) throw new Error(`OpenAI: brak b64_json w odpowiedzi (${JSON.stringify(json).slice(0, 300)})`);
-  return { blob: b64ToBlob(b64, "image/png"), cost: costOf(json, quality, size), raw: json };
+  return { blob: b64ToBlob(b64, "image/png"), cost: costOf(json, quality, size), raw: json, route };
 }
 
 function costOf(json, quality, size) {

@@ -29,9 +29,10 @@ export async function generate({ apiKey, model, prompt, refs = [], width, height
     } catch (e) {
       if (!e?.fallbackOk) throw e;
       console.warn("ai-image-gen | Interactions API unavailable for", model, "- falling back to generateContent", e.message);
+      return viaGenerateContent(ctx, "generateContent (fallback from interactions)");
     }
   }
-  return viaGenerateContent(ctx);
+  return viaGenerateContent(ctx, "generateContent");
 }
 
 // ---------- Interactions API ----------
@@ -67,7 +68,7 @@ async function viaInteractions(ctx) {
     const txt = findText(json);
     throw new Error(`Gemini: brak obrazu w odpowiedzi${txt ? ` — ${txt.slice(0, 300)}` : ` (${JSON.stringify(json).slice(0, 300)})`}`);
   }
-  return { blob: b64ToBlob(img.data, img.mime), cost: imageCost(ctx.model, ctx.size), raw: json };
+  return { blob: b64ToBlob(img.data, img.mime), cost: imageCost(ctx.model, ctx.size), raw: json, route: "interactions" };
 }
 
 /** Odporne wyszukanie obrazu: interaction.output_image.data, steps[].content[] albo inlineData. */
@@ -117,7 +118,7 @@ export function buildGenerateContentBody({ prompt, parts, aspect, size, think, d
   return { contents: [{ parts: [...parts, { text: prompt }] }], generationConfig };
 }
 
-async function viaGenerateContent(ctx) {
+async function viaGenerateContent(ctx, route = "generateContent") {
   const parts = [];
   for (const blob of ctx.refs) parts.push({ inline_data: { mime_type: await mimeOf(blob), data: await blobToB64(blob) } });
   const res = await fetch(`${GEMINI_BASE}/v1beta/models/${ctx.model}:generateContent`, {
@@ -133,7 +134,7 @@ async function viaGenerateContent(ctx) {
     const txt = findText(json);
     throw new Error(`Gemini: brak obrazu w odpowiedzi${txt ? ` — ${txt.slice(0, 300)}` : ` (${JSON.stringify(json).slice(0, 300)})`}`);
   }
-  return { blob: b64ToBlob(img.data, img.mime), cost: costOf(json, ctx), raw: json };
+  return { blob: b64ToBlob(img.data, img.mime), cost: costOf(json, ctx), raw: json, route };
 }
 
 function costOf(json, ctx) {

@@ -25,7 +25,7 @@ export async function blobToWebp(blob, quality = 0.92) {
   }
 }
 
-async function ensureDir(path) {
+export async function ensureDir(path) {
   let cur = "";
   for (const p of path.split("/")) {
     cur = cur ? `${cur}/${p}` : p;

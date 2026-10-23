@@ -7,6 +7,7 @@ import { UPLOAD_TIMEOUT_MS, DOWNLOAD_TIMEOUT_MS, readError, jsonl, parseJsonl, u
 import { geminiBatchCost } from "./cost.mjs";
 import { patchBatch, markIngested } from "./record.mjs";
 import { applyBatchItem } from "./apply.mjs";
+import { logBatchResult, tokensFrom } from "../call-log.mjs";
 
 export const GEMINI_BASE = "https://generativelanguage.googleapis.com";
 const ASPECTS = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"];
@@ -108,15 +109,25 @@ async function ingest(apiKey, rec, op) {
     const id = String(row?.key ?? row?.metadata?.key ?? "");
     const item = byId.get(id);
     if (!item || done.has(id)) continue;
-    if (row?.error) { out.failed.push({ id, error: String(row.error?.message || "błąd batcha") }); continue; }
+    if (row?.error) {
+      const error = String(row.error?.message || "błąd batcha");
+      out.failed.push({ id, error });
+      await logBatchResult(rec, id, { ok: false, error });
+      continue;
+    }
     const resp = row?.response ?? row;
     const parts = resp?.candidates?.[0]?.content?.parts ?? [];
     const img = parts.find((p) => p?.inlineData?.data || p?.inline_data?.data);
     const b64 = img?.inlineData?.data || img?.inline_data?.data;
-    if (!b64) { out.failed.push({ id, error: "brak obrazu w odpowiedzi batcha" }); continue; }
+    if (!b64) {
+      out.failed.push({ id, error: "brak obrazu w odpowiedzi batcha" });
+      await logBatchResult(rec, id, { ok: false, error: "brak obrazu w odpowiedzi batcha", tokens: tokensFrom(resp) });
+      continue;
+    }
     const mime = img?.inlineData?.mimeType || img?.inline_data?.mime_type || "image/png";
     const cost = geminiBatchCost(resp?.usageMetadata ?? resp?.usage_metadata, rec.model);
     const r = await applyBatchItem(item, b64ToBlob(b64, mime), cost);
+    await logBatchResult(rec, id, { ok: r.ok, error: r.error, cost, tokens: tokensFrom(resp) });
     out.cost += cost;
     done.add(id); // przetworzony (koszt już naliczony) — nie powtarzamy po wznowieniu
     if (!r.ok) { applyFailed.push({ id, error: r.error }); out.failed.push({ id, error: r.error }); }

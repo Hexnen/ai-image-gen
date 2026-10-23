@@ -1,0 +1,24 @@
+<section class="aiimg-log-filters">
+  <label>{{localize "AIIMG.Config.Provider"}}
+    <select data-f="provider">{{#each providers}}<option value="{{value}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}</select>
+  </label>
+  <label>{{localize "AIIMG.Log.Model"}}
+    <select data-f="model">{{#each models}}<option value="{{value}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}</select>
+  </label>
+  <label>{{localize "AIIMG.Log.StatusLabel"}}
+    <select data-f="status">{{#each statuses}}<option value="{{value}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}</select>
+  </label>
+  <label>{{localize "AIIMG.Log.KindLabel"}}
+    <select data-f="kind">{{#each kinds}}<option value="{{value}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}</select>
+  </label>
+  <label>{{localize "AIIMG.Log.From"}} <input type="date" data-f="from" value="{{f.from}}"></label>
+  <label>{{localize "AIIMG.Log.To"}} <input type="date" data-f="to" value="{{f.to}}"></label>
+  <label class="grow">{{localize "AIIMG.Log.Search"}} <input type="search" data-f="q" value="{{f.q}}" placeholder="{{localize 'AIIMG.Log.SearchHint'}}"></label>
+  <span class="aiimg-log-tools">
+    <button type="button" data-action="resetFilters" data-tooltip="AIIMG.Log.ResetFilters"><i class="fa-solid fa-filter-circle-xmark"></i></button>
+    <button type="button" data-action="refresh" data-tooltip="AIIMG.Log.Refresh"><i class="fa-solid fa-arrows-rotate"></i></button>
+    <button type="button" data-action="exportCsv"><i class="fa-solid fa-file-csv"></i> CSV</button>
+    <button type="button" data-action="exportJson"><i class="fa-solid fa-file-code"></i> JSON</button>
+    <button type="button" data-action="clear" class="aiimg-danger" data-tooltip="AIIMG.Log.Clear"><i class="fa-solid fa-trash"></i></button>
+  </span>
+</section>

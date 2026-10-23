@@ -6,6 +6,7 @@ import { openaiBatchCost } from "./cost.mjs";
 import { openaiSizeFor, fitOpenAIQuality } from "../providers/models.mjs";
 import { patchBatch, markIngested } from "./record.mjs";
 import { applyBatchItem } from "./apply.mjs";
+import { logBatchResult, tokensFrom } from "../call-log.mjs";
 
 export const OPENAI_BASE = "https://api.openai.com/v1";
 const auth = (apiKey) => ({ Authorization: `Bearer ${apiKey}` });
@@ -109,9 +110,14 @@ async function ingest(apiKey, rec, batch) {
       if (!item || done.has(id)) continue;
       const body = row?.response?.body;
       const b64 = body?.data?.[0]?.b64_json;
-      if (!b64) { out.failed.push({ id, error: "brak obrazu w odpowiedzi batcha" }); continue; }
+      if (!b64) {
+        out.failed.push({ id, error: "brak obrazu w odpowiedzi batcha" });
+        await logBatchResult(rec, id, { ok: false, error: "brak obrazu w odpowiedzi batcha", tokens: tokensFrom(body) });
+        continue;
+      }
       const cost = openaiBatchCost(body?.usage);
       const r = await applyBatchItem(item, b64ToBlob(b64, "image/png"), cost);
+      await logBatchResult(rec, id, { ok: r.ok, error: r.error, cost, tokens: tokensFrom(body) });
       out.cost += cost;
       done.add(id); // przetworzony (koszt już naliczony) — nie powtarzamy po wznowieniu
       if (!r.ok) { applyFailed.push({ id, error: r.error }); out.failed.push({ id, error: r.error }); }
@@ -121,10 +127,12 @@ async function ingest(apiKey, rec, batch) {
   }
   if (batch.error_file_id) {
     for (const row of parseJsonl(await fileContent(apiKey, batch.error_file_id))) {
-      out.failed.push({
+      const failure = {
         id: String(row?.custom_id ?? "?"),
         error: String(row?.error?.message || row?.response?.body?.error?.message || "błąd"),
-      });
+      };
+      out.failed.push(failure);
+      await logBatchResult(rec, failure.id, { ok: false, error: failure.error });
     }
   }
   return out;

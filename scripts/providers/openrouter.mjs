@@ -33,7 +33,7 @@ async function viaImages({ apiKey, model, prompt, refs, width, height, aspectRat
   const json = await res.json();
   const b64 = json?.data?.[0]?.b64_json;
   if (!b64) throw new Error(`OpenRouter images: brak b64_json (${JSON.stringify(json).slice(0, 300)})`);
-  return { blob: b64ToBlob(b64, "image/png"), cost: Number(json?.usage?.cost) || 0, raw: json };
+  return { blob: b64ToBlob(b64, "image/png"), cost: Number(json?.usage?.cost) || 0, raw: json, route: "images" };
 }
 
 async function viaChat({ apiKey, model, prompt, refs, signal }) {
@@ -64,5 +64,5 @@ async function viaChat({ apiKey, model, prompt, refs, signal }) {
     throw new Error(`OpenRouter: brak obrazu w odpowiedzi${txt ? ` — ${txt.slice(0, 300)}` : ` (${JSON.stringify(json).slice(0, 300)})`}`);
   }
   const m = /^data:([^;,]+)/.exec(uri);
-  return { blob: b64ToBlob(uri.slice(uri.indexOf(",") + 1), m?.[1] || "image/png"), cost: Number(json?.usage?.cost) || 0, raw: json };
+  return { blob: b64ToBlob(uri.slice(uri.indexOf(",") + 1), m?.[1] || "image/png"), cost: Number(json?.usage?.cost) || 0, raw: json, route: "chat/completions" };
 }

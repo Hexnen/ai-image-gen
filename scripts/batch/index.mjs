@@ -7,6 +7,7 @@ import { newBatchId } from "./util.mjs";
 import { putBatch } from "./record.mjs";
 import { submitOpenAI } from "./openai.mjs";
 import { submitGemini } from "./gemini.mjs";
+import { logCall } from "../call-log.mjs";
 
 export { listBatches, getBatch, removeBatch, isActive } from "./record.mjs";
 export { checkBatches, startPoller, stopPoller, cancelBatch, CHECK_EVERY_MS } from "./poller.mjs";
@@ -32,9 +33,32 @@ export async function submitBatch({ provider, model, items }) {
   if (!apiKey) throw new Error(`Brak klucza API dla ${PROVIDERS[provider].label}.`);
 
   const estimatedCost = estimateBatchCost(provider, model, items);
-  assertWithinLimits(estimatedCost, { count: items.length, batch: true });
+  const logItems = (extra, perItemCost) => Promise.all(items.map((i) => logCall({
+    provider, model, prompt: i.prompt, description: i.meta?.description,
+    size: i.width && i.height ? `${i.width}x${i.height}` : undefined,
+    quality: provider === "openai" ? i.quality : undefined,
+    imageSize: provider === "gemini" ? i.imageSize : undefined,
+    thinkingLevel: provider === "gemini" ? i.thinkingLevel : undefined,
+    refsCount: i.refs?.length ?? 0,
+    docUuid: i.target?.uuid, docName: i.meta?.name, typeKey: i.meta?.typeKey, itemId: i.id,
+    cost: perItemCost, costKind: "estimated", ...extra
+  })));
+  try {
+    assertWithinLimits(estimatedCost, { count: items.length, batch: true });
+  } catch (e) {
+    await logItems({ kind: "limit-blocked", status: "blocked", error: e.message, durationMs: 0 }, estimatedCost / items.length);
+    throw e;
+  }
 
-  const { remoteId, endpoint } = await SUBMIT[provider]({ apiKey, model, items });
+  const t0 = performance.now();
+  let submitted;
+  try {
+    submitted = await SUBMIT[provider]({ apiKey, model, items });
+  } catch (e) {
+    await logItems({ kind: "batch-submit", status: "error", error: e.message, durationMs: performance.now() - t0 }, 0);
+    throw e;
+  }
+  const { remoteId, endpoint } = submitted;
 
   const rec = {
     id: newBatchId(),
@@ -45,5 +69,8 @@ export async function submitBatch({ provider, model, items }) {
     // Blobów nie trzymamy w ustawieniach — tylko to, czego potrzebuje ingest.
     items: items.map(({ id, target, meta }) => ({ id, target: { field: "img", ...target }, meta: meta ?? {} })),
   };
-  return putBatch(rec);
+  const saved = await putBatch(rec);
+  await logItems({ kind: "batch-submit", status: "pending", route: endpoint, batchId: rec.id, durationMs: performance.now() - t0 },
+    estimatedCost / items.length);
+  return saved;
 }

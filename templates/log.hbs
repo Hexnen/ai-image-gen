@@ -1,0 +1,54 @@
+<section class="aiimg-log-body">
+  <div class="aiimg-log-summary">
+    <span><b>{{summary.count}}</b> {{localize "AIIMG.Log.Calls"}}</span>
+    <span data-tooltip="AIIMG.Log.SpentTip">{{localize "AIIMG.Log.Spent"}}: <b>{{summary.spent}}</b></span>
+    <span data-tooltip="AIIMG.Log.QueuedTip">{{localize "AIIMG.Log.Queued"}}: <b>{{summary.queued}}</b></span>
+    <span data-tooltip="AIIMG.Log.AvgTip">{{localize "AIIMG.Log.Avg"}}: <b>{{summary.avg}}</b></span>
+    {{#if capped}}<span class="aiimg-warn">{{capped}}</span>{{/if}}
+  </div>
+  <div class="aiimg-log-scroll">
+    {{#if empty}}
+    <p class="notes">{{localize "AIIMG.Log.Empty"}}</p>
+    {{else}}
+    <table class="aiimg-log-table">
+      <thead>
+        <tr>
+          <th>{{localize "AIIMG.Log.Time"}}</th>
+          <th>{{localize "AIIMG.Log.KindLabel"}}</th>
+          <th>{{localize "AIIMG.Log.Model"}}</th>
+          <th>{{localize "AIIMG.Log.StatusLabel"}}</th>
+          <th data-tooltip="AIIMG.Log.DurationTip">{{localize "AIIMG.Log.Duration"}}</th>
+          <th>{{localize "AIIMG.Batches.Cost"}}</th>
+          <th>{{localize "AIIMG.Log.Document"}}</th>
+          <th>{{localize "AIIMG.Log.Prompt"}}</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{#each rows}}
+        <tr class="aiimg-log-row" data-action="toggle" data-id="{{id}}">
+          <td class="nowrap">{{time}}</td>
+          <td class="nowrap">{{kindLabel}}</td>
+          <td>{{provider}}<br><small>{{model}}</small></td>
+          <td class="aiimg-status aiimg-status-{{status}} nowrap">{{statusLabel}}</td>
+          <td class="nowrap">{{duration}}</td>
+          <td class="nowrap">{{cost}}</td>
+          <td>{{doc}}</td>
+          <td class="aiimg-log-prompt">{{short}}</td>
+          <td class="aiimg-batch-actions">{{#if prompt}}<button type="button" data-action="copyPrompt" data-id="{{id}}" data-tooltip="AIIMG.Log.CopyPrompt"><i class="fa-solid fa-copy"></i></button>{{/if}}</td>
+        </tr>
+        <tr class="aiimg-log-detail" data-for="{{id}}" hidden>
+          <td colspan="9">
+            {{#if prompt}}<pre class="aiimg-log-fullprompt">{{prompt}}</pre>{{/if}}
+            {{#if error}}<p class="aiimg-error">{{error}}</p>{{/if}}
+            <dl class="aiimg-summary">
+              {{#each details}}<dt>{{label}}</dt><dd>{{value}}</dd>{{/each}}
+            </dl>
+          </td>
+        </tr>
+        {{/each}}
+      </tbody>
+    </table>
+    {{/if}}
+  </div>
+</section>
