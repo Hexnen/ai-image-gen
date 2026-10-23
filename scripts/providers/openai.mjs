@@ -1,19 +1,23 @@
 // OpenAI Images (gpt-image-*) bezpośrednio. Port z roleplay imageGen/openai.ts.
 // Bez refs: JSON /images/generations; z refs: multipart /images/edits (max 16).
-import { GPT_IMAGE_TIMEOUT_MS, withTimeout, httpError, b64ToBlob, mimeOf } from "./util.mjs";
-import { OPENAI_RATES, openaiSizeFor, fitOpenAIQuality, bucketOpenAISize } from "./models.mjs";
+import { GPT_IMAGE_TIMEOUT_MS, withTimeout, scaledTimeout, httpError, b64ToBlob, mimeOf } from "./util.mjs";
+import { OPENAI_RATES, openaiSizeFor, fitOpenAIQuality, bucketOpenAISize, openaiPriceFloor } from "./models.mjs";
+import { estimateSyncCost } from "../batch/cost.mjs";
 
 export const OPENAI_BASE = "https://api.openai.com/v1";
 const EDIT_REF_LIMIT = 16;
 
 // Stawki za token (USD): gpt-image-2 i gpt-image-2.5 mają te same (OPENAI_RATES w models.mjs).
 const TXT_IN = OPENAI_RATES.sync.textIn / 1e6, IMG_IN = OPENAI_RATES.sync.imageIn / 1e6, IMG_OUT = OPENAI_RATES.sync.imageOut / 1e6;
-// Fallback per obraz, gdy brak usage.
-const PRICES = {
-  low: { "1024x1024": 0.006, "1024x1536": 0.005, "1536x1024": 0.005 },
-  medium: { "1024x1024": 0.053, "1024x1536": 0.041, "1536x1024": 0.041 },
-  high: { "1024x1024": 0.211, "1024x1536": 0.165, "1536x1024": 0.165 },
-};
+// Fallback per obraz, gdy brak usage: openaiPriceFloor (models.mjs) albo szacunek tokenowy, co wyższe.
+
+// Mnożniki czasu generacji względem medium (dłuższe jakości i większe obrazy mielą dłużej).
+const TIME_FACTOR = { low: 1, medium: 1, high: 1.5, xhigh: 2.5, max: 3.5, auto: 1.5 };
+function requestTimeout(quality, size, n) {
+  const [w, h] = size.split("x").map(Number);
+  const area = Math.max(1, (w * h) / (1536 * 1024));
+  return scaledTimeout(GPT_IMAGE_TIMEOUT_MS, { n, factor: (TIME_FACTOR[quality] ?? 1) * area, max: 600_000 });
+}
 
 /** Zachowane dla zgodności: rozmiar-koszyk (starsze modele). */
 export const pickSize = ({ width, height, aspectRatio }) => bucketOpenAISize(width, height, aspectRatio);
@@ -45,14 +49,14 @@ export async function generate({ apiKey, model, prompt, refs = [], width, height
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}` },
       body: form,
-      signal: withTimeout(GPT_IMAGE_TIMEOUT_MS, signal),
+      signal: withTimeout(requestTimeout(quality, size, n), signal),
     });
   } else {
     res = await fetch(`${OPENAI_BASE}/images/generations`, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model, prompt, size, quality, n }),
-      signal: withTimeout(GPT_IMAGE_TIMEOUT_MS, signal),
+      signal: withTimeout(requestTimeout(quality, size, n), signal),
     });
   }
   if (!res.ok) throw await httpError(`OpenAI ${model}`, res);
@@ -60,14 +64,18 @@ export async function generate({ apiKey, model, prompt, refs = [], width, height
   const blobs = (json?.data ?? []).map((d) => d?.b64_json).filter(Boolean).map((b64) => b64ToBlob(b64, "image/png"));
   if (!blobs.length) throw new Error(`OpenAI: brak b64_json w odpowiedzi (${JSON.stringify(json).slice(0, 300)})`);
   // usage obejmuje wszystkie obrazy żądania: cost = koszt CAŁEGO żądania (n obrazów).
-  return { blob: blobs[0], blobs, cost: costOf(json, quality, size, blobs.length), raw: json, route };
+  const { cost, estimated } = costOf(model, json, quality, size, blobs.length);
+  return { blob: blobs[0], blobs, cost, ...(estimated ? { costEstimated: true } : {}), raw: json, route };
 }
 
-function costOf(json, quality, size, count = 1) {
+function costOf(model, json, quality, size, count = 1) {
   const inTok = Number(json?.usage?.input_tokens), outTok = Number(json?.usage?.output_tokens);
   const det = json?.usage?.input_tokens_details;
   const img = Number(det?.image_tokens), txt = Number(det?.text_tokens);
   const inCost = isFinite(img) && isFinite(txt) && img + txt > 0 ? img * IMG_IN + txt * TXT_IN : (inTok || 0) * IMG_IN;
-  if (isFinite(inTok) && isFinite(outTok) && inTok + outTok > 0) return inCost + outTok * IMG_OUT;
-  return (PRICES[quality]?.[size] ?? 0) * count;
+  if (isFinite(inTok) && isFinite(outTok) && inTok + outTok > 0) return { cost: inCost + outTok * IMG_OUT, estimated: false };
+  // Brak usage: nigdy 0 — tabela cen (skalowana polem dla nowych rozmiarów/jakości) albo szacunek tokenowy.
+  const [w, h] = size.split("x").map(Number);
+  const per = Math.max(openaiPriceFloor(quality, w, h), estimateSyncCost("openai", model, [{ quality, width: w, height: h }]));
+  return { cost: per * count, estimated: true };
 }

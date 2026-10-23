@@ -1,22 +1,53 @@
 // Wspólne helpery providerów (przeglądarka, bez zależności).
 // Port z Hexnen/roleplay src/lib/roleplay/imageGen/shared.ts.
+import { redact } from "../redact.mjs";
 
 export const GEN_TIMEOUT_MS = 120_000;
 /** GPT Image 2 na quality=high potrafi mielić > 1 min. */
 export const GPT_IMAGE_TIMEOUT_MS = 180_000;
 
-/** Łączy sygnał użytkownika (anuluj) z timeoutem. */
+/** Timeout skalowany od obciążenia żądania (np. n obrazów, wysoka jakość, 4K), w [base, max]. */
+export function scaledTimeout(base, { n = 1, factor = 1, max = 600_000 } = {}) {
+  const k = factor * (1 + 0.5 * (Math.max(1, Number(n) || 1) - 1));
+  return Math.min(max, Math.max(base, Math.round(base * k)));
+}
+
+/** Łączy sygnał użytkownika (anuluj) z timeoutem; działa też bez AbortSignal.any. */
 export function withTimeout(ms, signal) {
   const t = AbortSignal.timeout(ms);
   if (!signal) return t;
-  return typeof AbortSignal.any === "function" ? AbortSignal.any([signal, t]) : t;
+  if (typeof AbortSignal.any === "function") return AbortSignal.any([signal, t]);
+  const ctl = new AbortController();
+  const fire = (s) => () => ctl.abort(s.reason);
+  for (const s of [signal, t]) {
+    if (s.aborted) { ctl.abort(s.reason); break; }
+    s.addEventListener("abort", fire(s), { once: true });
+  }
+  return ctl.signal;
 }
 
-/** Błąd HTTP z początkiem body. */
+/** TimeoutError/AbortError z fetch -> czytelny komunikat (zachowuje name, żeby wywołujący rozróżnił). */
+export function normalizeError(e) {
+  if (e?.name === "TimeoutError") {
+    const x = new Error("Request timed out (the provider may still have processed and billed it).");
+    x.name = "TimeoutError";
+    return x;
+  }
+  if (e?.name === "AbortError") {
+    const x = new Error("Cancelled.");
+    x.name = "AbortError";
+    return x;
+  }
+  return e;
+}
+
+/** Błąd HTTP z początkiem body (zamaskowane klucze). */
 export async function httpError(label, res) {
   let detail = "";
   try { detail = await res.text(); } catch { /* brak treści */ }
-  return new Error(`${label} HTTP ${res.status}: ${detail.slice(0, 500)}`);
+  const e = new Error(redact(`${label} HTTP ${res.status}: ${detail.slice(0, 500)}`));
+  e.status = res.status;
+  return e;
 }
 
 export function b64ToBlob(b64, type = "image/png") {

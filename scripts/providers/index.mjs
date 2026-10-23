@@ -11,6 +11,7 @@ import * as openai from "./openai.mjs";
 import * as gemini from "./gemini.mjs";
 import * as openrouter from "./openrouter.mjs";
 import { MODELS, getModel, defaultModelId } from "./models.mjs";
+import { normalizeError } from "./util.mjs";
 
 export * from "./models.mjs";
 
@@ -35,5 +36,9 @@ export async function generate({ provider, ...rest }) {
   const impl = IMPL[provider];
   if (!impl) throw new Error(`Nieznany provider: ${provider}`);
   if (!rest.apiKey) throw new Error(`Brak klucza API dla ${PROVIDERS[provider].label}.`);
-  return impl.generate(rest);
+  try {
+    return await impl.generate(rest);
+  } catch (e) {
+    throw normalizeError(e); // TimeoutError/AbortError -> czytelny komunikat, name zachowane
+  }
 }

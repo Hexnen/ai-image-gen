@@ -2,6 +2,7 @@
 // (modalities image+text; size/quality są wtedy dropowane). Reszta: POST /images.
 // Port z roleplay imageGen/openrouter.ts. Brak batcha. Koszt: usage.cost (realny).
 import { GEN_TIMEOUT_MS, GPT_IMAGE_TIMEOUT_MS, withTimeout, httpError, b64ToBlob, blobToB64, mimeOf, nearestAspect } from "./util.mjs";
+import { openrouterEstimate } from "./models.mjs";
 
 export const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 const ASPECTS = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"];
@@ -10,6 +11,15 @@ const headers = (apiKey) => ({
   "Content-Type": "application/json",
   "X-Title": "Foundry ai-image-gen",
 });
+/**
+ * Koszt z usage.cost; przy BYOK bywa 0 (realny koszt w usage.cost_details.upstream_inference_cost,
+ * nazwa pola NIEZWERYFIKOWANA). Brak jakiejkolwiek kwoty -> ostrożny szacunek oznaczony jako estimated.
+ */
+function costOf(json, model) {
+  const u = json?.usage;
+  const c = Number(u?.cost) || Number(u?.cost_details?.upstream_inference_cost) || 0;
+  return c > 0 ? { cost: c } : { cost: openrouterEstimate(model), costEstimated: true };
+}
 const dataUri = async (blob) => `data:${await mimeOf(blob)};base64,${await blobToB64(blob)}`;
 
 export async function generate({ apiKey, model, prompt, refs = [], width, height, aspectRatio, signal }) {
@@ -33,7 +43,7 @@ async function viaImages({ apiKey, model, prompt, refs, width, height, aspectRat
   const json = await res.json();
   const b64 = json?.data?.[0]?.b64_json;
   if (!b64) throw new Error(`OpenRouter images: brak b64_json (${JSON.stringify(json).slice(0, 300)})`);
-  return { blob: b64ToBlob(b64, "image/png"), cost: Number(json?.usage?.cost) || 0, raw: json, route: "images" };
+  return { blob: b64ToBlob(b64, "image/png"), ...costOf(json, model), raw: json, route: "images" };
 }
 
 async function viaChat({ apiKey, model, prompt, refs, signal }) {
@@ -61,8 +71,10 @@ async function viaChat({ apiKey, model, prompt, refs, signal }) {
   if (!uri) {
     const txt = typeof msg.content === "string" ? msg.content
       : Array.isArray(msg.content) ? msg.content.map((b) => (typeof b?.text === "string" ? b.text : "")).filter(Boolean).join(" ") : "";
-    throw new Error(`OpenRouter: brak obrazu w odpowiedzi${txt ? ` — ${txt.slice(0, 300)}` : ` (${JSON.stringify(json).slice(0, 300)})`}`);
+    const e = new Error(`OpenRouter: brak obrazu w odpowiedzi${txt ? ` — ${txt.slice(0, 300)}` : ` (${JSON.stringify(json).slice(0, 300)})`}`);
+    e.cost = Number(json?.usage?.cost) || 0; // odpowiedź bez obrazu bywa rozliczona
+    throw e;
   }
   const m = /^data:([^;,]+)/.exec(uri);
-  return { blob: b64ToBlob(uri.slice(uri.indexOf(",") + 1), m?.[1] || "image/png"), cost: Number(json?.usage?.cost) || 0, raw: json, route: "chat/completions" };
+  return { blob: b64ToBlob(uri.slice(uri.indexOf(",") + 1), m?.[1] || "image/png"), ...costOf(json, model), raw: json, route: "chat/completions" };
 }

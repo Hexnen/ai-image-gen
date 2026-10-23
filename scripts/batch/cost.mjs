@@ -1,4 +1,4 @@
-import { OPENAI_RATES, getModel, fitGeminiSize, fitOpenAIQuality, openaiSizeFor } from "../providers/models.mjs";
+import { OPENAI_RATES, getModel, fitGeminiSize, fitOpenAIQuality, openaiSizeFor, openaiPriceFloor, openrouterEstimate } from "../providers/models.mjs";
 
 // Stawki batch (USD / token) i koszt z usage. Port z roleplay workshopBatch/cost.ts.
 // OpenAI batch = sync ÷ 2: text-in $2.50, image-in $4, image-out $15 za 1M tok.
@@ -21,22 +21,33 @@ export function geminiTierOf(model = "") {
   if (m.includes("pro")) return "pro";
   if (m.includes("lite")) return "nano";
   if (m.includes("flash")) return "flash";
-  return "nano";
+  return "pro"; // nieznany model Gemini: ostrożnie jak najdroższy tier
 }
 
-/** Koszt jednej odpowiedzi Gemini z usageMetadata (batch). Brak rozbicia → całość jak obraz. */
+const num = (...v) => { for (const x of v) { const n = Number(x); if (Number.isFinite(n) && n > 0) return n; } return 0; };
+
+/**
+ * Koszt jednej odpowiedzi Gemini z usageMetadata (stawki batch). Brak rozbicia → całość jak obraz.
+ * Tokeny „thinking" (thoughtsTokenCount) rozliczane są jak wyjście tekstowe; działa też dla wiersza
+ * bez obrazu (odmowa/sam tekst), bo tokeny i tak zostały naliczone. Alternatywne nazwy pól
+ * (Interactions API: input_tokens/output_tokens) są NIEZWERYFIKOWANE.
+ */
 export function geminiBatchCost(u, model) {
   const r = GEMINI_BATCH[geminiTierOf(model)];
-  const inTok = Number(u?.promptTokenCount ?? u?.prompt_token_count) || 0;
-  const outTok = Number(u?.candidatesTokenCount ?? u?.candidates_token_count) || 0;
+  const inTok = num(u?.promptTokenCount, u?.prompt_token_count, u?.total_input_tokens, u?.input_tokens);
+  const outTok = num(u?.candidatesTokenCount, u?.candidates_token_count, u?.total_output_tokens, u?.output_tokens);
+  const thoughts = num(u?.thoughtsTokenCount, u?.thoughts_token_count, u?.total_thought_tokens, u?.thought_tokens);
   const details = u?.candidatesTokensDetails ?? u?.candidates_tokens_details ?? [];
   const outImg = Array.isArray(details)
     ? details.filter((d) => d?.modality === "IMAGE").reduce((s, d) => s + (Number(d?.tokenCount ?? d?.token_count) || 0), 0)
     : 0;
   const img = outImg || outTok;
   const text = Math.max(0, outTok - img);
-  return inTok * r.in + img * r.outImage + text * r.outText;
+  return inTok * r.in + img * r.outImage + (text + thoughts) * r.outText;
 }
+
+/** Koszt odpowiedzi Gemini SYNC z usage: stawki standard = 2× batch (zgodne z cennikiem). */
+export const geminiSyncCost = (u, model) => geminiBatchCost(u, model) * 2;
 
 /** Koszt jednej odpowiedzi OpenAI batch z usage (rozbicie text/image gdy jest). */
 export function openaiBatchCost(u) {
@@ -68,13 +79,24 @@ export function estimateBatchCost(provider, model, items) {
       const q = QUALITY_FACTOR[fitOpenAIQuality(model, it.quality ?? "medium")] ?? 1;
       const [w, h] = openaiSizeFor(model, { width: it.width, height: it.height }).split("x").map(Number);
       const area = (w * h) / BASE_PIXELS;
-      total += 1372 * q * area * OPENAI_BATCH_OUT + refs * 1536 * OPENAI_BATCH_IMAGE_IN + 150 * OPENAI_BATCH_TEXT_IN;
+      // dolna granica: tabela cen sync / 2 (szacunek tokenowy zaniżał kwadrat ~2×)
+      const outCost = Math.max(1372 * q * area * OPENAI_BATCH_OUT, openaiPriceFloor(fitOpenAIQuality(model, it.quality ?? "medium"), w, h) / 2);
+      total += outCost + refs * 1536 * OPENAI_BATCH_IMAGE_IN + 150 * OPENAI_BATCH_TEXT_IN;
     } else if (provider === "gemini") {
       const r = GEMINI_BATCH[geminiTierOf(model)];
       const m = getModel("gemini", model);
-      const tokens = m?.tokens?.[fitGeminiSize(model, it.imageSize)] ?? 1120;
+      const tokens = m?.tokens?.[fitGeminiSize(model, it.imageSize)] ?? 2000; // nieznany model: ostrożnie
       total += tokens * r.outImage + (260 * refs + 150) * r.in;
     }
   }
   return total;
+}
+
+/**
+ * SZACUNEK kosztu żądania SYNC (Fast) do limitów: OpenAI/Gemini = 2× batch (stawki standard);
+ * OpenRouter nie ma cennika w kodzie, więc stała ostrożna kwota za obraz (openrouterEstimate).
+ */
+export function estimateSyncCost(provider, model, items) {
+  if (provider === "openrouter") return items.length * openrouterEstimate(model);
+  return estimateBatchCost(provider, model, items) * 2;
 }

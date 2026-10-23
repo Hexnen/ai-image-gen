@@ -4,17 +4,54 @@
 //    nie znaleziono" (404/400/405/501), spadamy na models/<model>:generateContent.
 //    NIEZWERYFIKOWANE z prawdziwym kluczem: kształt body Interactions i odpowiedzi.
 //  • pozostałe modele: generateContent (port z roleplay imageGen/gemini.ts).
-import { GEN_TIMEOUT_MS, withTimeout, httpError, b64ToBlob, blobToB64, mimeOf, nearestAspect } from "./util.mjs";
+import { GEN_TIMEOUT_MS, withTimeout, scaledTimeout, httpError, b64ToBlob, blobToB64, mimeOf, nearestAspect } from "./util.mjs";
 import { getModel, fitGeminiSize, fitGeminiThinking } from "./models.mjs";
+import { geminiSyncCost } from "../batch/cost.mjs";
 
 export const GEMINI_BASE = "https://generativelanguage.googleapis.com";
 const LEGACY_ASPECTS = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"];
 
-/** Koszt za obraz: tabela z oficjalnego cennika (stawka standard). Wejściowe obrazy pomijamy (~$0.001). */
+/** Ostrożny szacunek dla modelu spoza katalogu (jak najdroższy znany: Pro 4K), gdy brak usage. */
+const UNKNOWN_MODEL_COST = 0.24;
+
+/** Koszt za obraz: tabela z oficjalnego cennika (stawka standard) albo null dla nieznanego modelu. */
 export function imageCost(modelId, size) {
   const m = getModel("gemini", modelId);
-  return m?.price?.[size] ?? m?.price?.["1K"] ?? 0.0336;
+  if (!m) return null;
+  return m.price?.[size] ?? m.price?.["1K"] ?? null;
 }
+
+const usageOf = (json) => json?.usageMetadata ?? json?.usage_metadata ?? json?.usage ?? null;
+
+/** Koszt odpowiedzi: max(tabela, tokeny z usage — z thinking i referencjami); nieznany model bez usage = szacunek. */
+function responseCost(json, ctx) {
+  const table = imageCost(ctx.model, ctx.size);
+  const u = usageOf(json);
+  const usageCost = u ? geminiSyncCost(u, ctx.model) : 0;
+  if (table == null && !usageCost) return { cost: UNKNOWN_MODEL_COST, estimated: true };
+  return { cost: Math.max(table ?? 0, usageCost), estimated: false };
+}
+
+/** Odpowiedź BEZ obrazu (odmowa/sam tekst): tokeny z usage i tak są rozliczone, więc wynoszą koszt w `e.cost`. */
+function noImageError(json, ctx) {
+  const txt = findText(json);
+  const e = new Error(`Gemini: brak obrazu w odpowiedzi${txt ? ` — ${txt.slice(0, 300)}` : ` (${JSON.stringify(json).slice(0, 300)})`}`);
+  const u = usageOf(json);
+  if (u) e.cost = geminiSyncCost(u, ctx.model);
+  return e;
+}
+
+/** Timeout rośnie z rozmiarem obrazu i poziomem thinking (zakres 120–300 s). */
+function requestTimeout(ctx) {
+  const sizeF = { "0.5K": 1, "1K": 1, "2K": 1.3, "4K": 2 }[ctx.size] ?? 1;
+  const thinkF = ctx.think === "high" ? 1.5 : 1;
+  return scaledTimeout(GEN_TIMEOUT_MS, { factor: sizeF * thinkF, max: 300_000 });
+}
+
+/** Fallback Interactions -> generateContent TYLKO gdy endpoint/model nie jest obsługiwany. */
+const UNSUPPORTED_RE = /not (found|supported)|unsupported|unknown|unrecogni[sz]ed/i;
+export const isUnsupportedStatus = (status, message = "") =>
+  status === 404 || status === 405 || status === 501 || (status === 400 && UNSUPPORTED_RE.test(message));
 
 export async function generate({ apiKey, model, prompt, refs = [], width, height, aspectRatio, imageSize, thinkingLevel, signal }) {
   const m = getModel("gemini", model);
@@ -40,6 +77,8 @@ export async function generate({ apiKey, model, prompt, refs = [], width, height
 export function buildInteractionsBody({ model, prompt, parts, aspect, size, think }) {
   return {
     model,
+    // domyślnie Interactions zapisuje prompt i referencje po stronie Google (store=true); wyłączamy
+    store: false,
     input: parts.length ? [...parts, { type: "text", text: prompt }] : prompt,
     response_format: { type: "image", mime_type: "image/png", aspect_ratio: aspect, image_size: size },
     ...(think ? { generation_config: { thinking_level: think } } : {}),
@@ -54,31 +93,34 @@ async function viaInteractions(ctx) {
     headers: { "x-goog-api-key": ctx.apiKey, "Content-Type": "application/json" },
     // domyślny poziom thinking modelu pomijamy (jak w generateContent)
     body: JSON.stringify(buildInteractionsBody({ ...ctx, parts, think: ctx.think !== ctx.defaultThink ? ctx.think : "" })),
-    signal: withTimeout(GEN_TIMEOUT_MS, ctx.signal),
+    signal: withTimeout(requestTimeout(ctx), ctx.signal),
   });
   if (!res.ok) {
     const err = await httpError(`Gemini ${ctx.model} (interactions)`, res);
-    // Tylko "endpoint/model nieobsługiwany" uprawnia do fallbacku; 401/403/429 itp. propagujemy.
-    err.fallbackOk = [400, 404, 405, 501].includes(res.status);
+    // Tylko "endpoint/model nieobsługiwany" uprawnia do fallbacku; 400 tylko z takim komunikatem,
+    // a 401/403/429 i inne 400 (zły klucz, blokada promptu, za dużo referencji) propagujemy bez zmian.
+    err.fallbackOk = isUnsupportedStatus(res.status, err.message);
     throw err;
   }
   const json = await res.json();
   const img = findImage(json);
-  if (!img) {
-    const txt = findText(json);
-    throw new Error(`Gemini: brak obrazu w odpowiedzi${txt ? ` — ${txt.slice(0, 300)}` : ` (${JSON.stringify(json).slice(0, 300)})`}`);
-  }
-  return { blob: b64ToBlob(img.data, img.mime), cost: imageCost(ctx.model, ctx.size), raw: json, route: "interactions" };
+  if (!img) throw noImageError(json, ctx);
+  const { cost, estimated } = responseCost(json, ctx);
+  return { blob: b64ToBlob(img.data, img.mime), cost, ...(estimated ? { costEstimated: true } : {}), raw: json, route: "interactions" };
 }
 
-/** Odporne wyszukanie obrazu: interaction.output_image.data, steps[].content[] albo inlineData. */
+/**
+ * Odporne wyszukanie obrazu: interaction.output_image.data (wynik końcowy), a w pozostałych kształtach
+ * OSTATNI obraz w odpowiedzi; części `thought: true` (szkice myślenia) są pomijane.
+ */
 export function findImage(json) {
   const direct = json?.output_image ?? json?.outputImage;
   if (typeof direct?.data === "string" && direct.data) return { data: direct.data, mime: direct.mime_type || direct.mimeType || "image/png" };
   let found = null;
   const walk = (n, depth = 0) => {
-    if (found || !n || typeof n !== "object" || depth > 8) return;
+    if (!n || typeof n !== "object" || depth > 8) return;
     if (Array.isArray(n)) { for (const x of n) walk(x, depth + 1); return; }
+    if (n.thought === true) return;
     const inl = n.inlineData ?? n.inline_data;
     if (typeof inl?.data === "string" && inl.data) { found = { data: inl.data, mime: inl.mimeType || inl.mime_type || "image/png" }; return; }
     const mime = n.mime_type || n.mimeType;
@@ -125,19 +167,12 @@ async function viaGenerateContent(ctx, route = "generateContent") {
     method: "POST",
     headers: { "x-goog-api-key": ctx.apiKey, "Content-Type": "application/json" },
     body: JSON.stringify(buildGenerateContentBody({ ...ctx, parts })),
-    signal: withTimeout(GEN_TIMEOUT_MS, ctx.signal),
+    signal: withTimeout(requestTimeout(ctx), ctx.signal),
   });
   if (!res.ok) throw await httpError(`Gemini ${ctx.model}`, res);
   const json = await res.json();
   const img = findImage(json);
-  if (!img) {
-    const txt = findText(json);
-    throw new Error(`Gemini: brak obrazu w odpowiedzi${txt ? ` — ${txt.slice(0, 300)}` : ` (${JSON.stringify(json).slice(0, 300)})`}`);
-  }
-  return { blob: b64ToBlob(img.data, img.mime), cost: costOf(json, ctx), raw: json, route };
-}
-
-function costOf(json, ctx) {
-  // Tabela z cennika jest wiarygodniejsza niż mieszane stawki tokenów (obraz+tekst+thinking).
-  return imageCost(ctx.model, ctx.size);
+  if (!img) throw noImageError(json, ctx);
+  const { cost, estimated } = responseCost(json, ctx);
+  return { blob: b64ToBlob(img.data, img.mime), cost, ...(estimated ? { costEstimated: true } : {}), raw: json, route };
 }

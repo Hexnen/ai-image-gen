@@ -11,6 +11,29 @@ export const OPENAI_RATES = {
   batch: { textIn: 2.5, imageIn: 4, imageOut: 15 },
 };
 
+// Cena SYNC za obraz (USD) — dolna granica szacunku i fallback, gdy odpowiedź nie ma `usage`.
+// Wpisy low/medium/high x 3 rozmiary z roleplay; reszta jest skalowana polem od 1024x1024.
+// xhigh/max/auto: ZGRUBNE założenie (OpenAI nie publikuje cen za jakość); auto liczone jak high (ostrożnie).
+export const OPENAI_PRICES = {
+  low: { "1024x1024": 0.006, "1024x1536": 0.005, "1536x1024": 0.005 },
+  medium: { "1024x1024": 0.053, "1024x1536": 0.041, "1536x1024": 0.041 },
+  high: { "1024x1024": 0.211, "1024x1536": 0.165, "1536x1024": 0.165 },
+};
+const OPENAI_SQUARE_PRICE = { low: 0.006, medium: 0.053, high: 0.211, xhigh: 0.422, max: 0.633, auto: 0.211 };
+
+export function openaiPriceFloor(quality, width, height) {
+  const exact = OPENAI_PRICES[quality]?.[`${width}x${height}`];
+  if (exact != null) return exact;
+  const base = OPENAI_SQUARE_PRICE[quality] ?? OPENAI_SQUARE_PRICE.medium;
+  return base * ((Number(width) || 1024) * (Number(height) || 1024)) / (1024 * 1024);
+}
+
+/** Konserwatywny szacunek za obraz przez OpenRouter (brak cennika w kodzie): gpt-image/pro drogie, reszta tania. */
+export function openrouterEstimate(modelId = "") {
+  const m = String(modelId).toLowerCase();
+  return m.startsWith("openai/") || m.includes("pro") ? 0.25 : 0.08;
+}
+
 const PRESETS_3 = ["1024x1024", "1536x1024", "1024x1536"];
 const PRESETS_25 = [...PRESETS_3, "1536x864", "2048x2048"];
 
@@ -86,17 +109,18 @@ export const defaultModelId = (provider) => MODELS[provider]?.[0]?.id ?? "";
 export const openaiCustomSize = (modelId) => !!getModel("openai", modelId)?.customSize;
 
 const r16 = (v) => Math.round(v / 16) * 16;
+const MAX_RATIO = 2.9;
 
 /**
  * Normalizacja rozmiaru gpt-image-2.5 do reguł API: wielokrotność 16, krawędź ≤ 3840,
- * proporcje 1:3..3:1, 655 360 ≤ piksele ≤ 8 294 400. Zachowuje proporcje przy skalowaniu.
+ * proporcje < 3:1 (ostrożnie 2.9), 655 360 ≤ piksele ≤ 8 294 400. Zachowuje proporcje przy skalowaniu.
  * (> 2560x1440 jest oznaczone przez OpenAI jako eksperymentalne.)
  */
 export function normalizeOpenAISize(width, height) {
   let w = Number(width) || 1024, h = Number(height) || 1024;
-  // proporcje: podciągnij krótszą krawędź
-  if (w / h > 3) h = w / 3;
-  if (h / w > 3) w = h / 3;
+  // proporcje: dokumentacja mówi „between 1:3 and 3:1" (końce niejasne), więc zostajemy ostrożnie poniżej 3:1
+  if (w / h > MAX_RATIO) h = w / MAX_RATIO;
+  if (h / w > MAX_RATIO) w = h / MAX_RATIO;
   const MIN = 655_360, MAX = 8_294_400;
   let px = w * h;
   if (px < MIN) { const k = Math.sqrt(MIN / px); w *= k; h *= k; }
@@ -107,8 +131,8 @@ export function normalizeOpenAISize(width, height) {
   // zaokrąglenia mogą wypchnąć poza limity o 1 krok: skoryguj
   while (w * h > MAX) { if (w >= h) w -= 16; else h -= 16; }
   while (w * h < MIN) { if (w <= h) w += 16; else h += 16; }
-  if (w / h > 3) w = Math.floor((h * 3) / 16) * 16;
-  if (h / w > 3) h = Math.floor((w * 3) / 16) * 16;
+  if (w / h > MAX_RATIO) w = Math.floor((h * MAX_RATIO) / 16) * 16;
+  if (h / w > MAX_RATIO) h = Math.floor((w * MAX_RATIO) / 16) * 16;
   return { width: w, height: h };
 }
 
