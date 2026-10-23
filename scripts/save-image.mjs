@@ -3,9 +3,28 @@ import { MODULE_ID } from "./constants.mjs";
 
 const FP = () => foundry.applications.apps.FilePicker.implementation;
 
-const slug = (s, fallback = "image") =>
-  String(s ?? "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase()
+/** Nazwy zastrzeżone przez Windows (jako katalog/plik tworzyłyby kłopoty): dostają prefiks. */
+const RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/;
+
+export const slug = (s, fallback = "image") => {
+  const v = String(s ?? "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase()
     .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || fallback;
+  return RESERVED.test(v) ? `_${v}` : v;
+};
+
+/** Typ obrazu po magic bytes (nie ufamy file.type ani MIME z odpowiedzi): png | jpeg | webp | gif | avif | null. */
+export function sniffMime(bytes) {
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const ascii = (from, to) => String.fromCharCode(...b.subarray(from, to));
+  if (b.length >= 8 && b[0] === 0x89 && ascii(1, 4) === "PNG") return "image/png";
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+  if (b.length >= 12 && ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "image/webp";
+  if (b.length >= 6 && (ascii(0, 6) === "GIF87a" || ascii(0, 6) === "GIF89a")) return "image/gif";
+  if (b.length >= 12 && ascii(4, 8) === "ftyp" && /^(avif|avis)$/.test(ascii(8, 12))) return "image/avif";
+  return null;
+}
+
+const sniffBlob = async (blob) => sniffMime(await blob.slice(0, 16).arrayBuffer());
 
 const EXT = { "image/png": "png", "image/webp": "webp", "image/jpeg": "jpg" };
 
@@ -40,7 +59,7 @@ export async function ensureDir(path) {
  */
 export async function saveImageBlob(blob, { system = "core", docType = "Document", name = "image", webp = true, dir: dirOverride } = {}) {
   const data = webp ? await blobToWebp(blob) : blob;
-  const type = data.type || "image/png";
+  const type = (await sniffBlob(data)) ?? (data.type || "image/png");
   const dir = dirOverride ?? `${MODULE_ID}/${slug(system, "core")}/${slug(docType, "doc")}`;
   await ensureDir(dir);
   const filename = `${slug(name)}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}.${EXT[type] ?? "png"}`;
@@ -51,7 +70,8 @@ export async function saveImageBlob(blob, { system = "core", docType = "Document
 }
 
 export const MAX_REF_BYTES = 20 * 1024 * 1024;
-const REF_EXT = { "image/png": "png", "image/webp": "webp", "image/jpeg": "jpg", "image/gif": "gif", "image/avif": "avif" };
+// Stałe referencje trafiają później do dostawców, którzy przyjmują tylko png/jpeg/webp.
+const REF_EXT = { "image/png": "png", "image/webp": "webp", "image/jpeg": "jpg" };
 
 /** Folder for the permanent references of an image type key (`<system>.<Doc>.<type>`). */
 export function refsDirFor(typeKey) {
@@ -76,13 +96,16 @@ export function saveTestExample(blob, typeKey, name = "test") {
  * @returns {Promise<string>} stored path
  */
 export async function saveRefFile(file, typeKey) {
-  if (!file?.type?.startsWith("image/")) throw new Error(`${file?.name ?? "file"}: not an image`);
+  if (!file) throw new Error("No file");
   if (file.size > MAX_REF_BYTES) throw new Error(`${file.name}: larger than ${MAX_REF_BYTES / 1048576} MB`);
+  // Typ z zawartości, nie z file.type (SVG/HTML przebrany za .png nie przejdzie).
+  const type = await sniffBlob(file);
+  if (!type || !REF_EXT[type]) throw new Error(`${file.name ?? "file"}: not a PNG, JPEG or WebP image`);
   const dir = refsDirFor(typeKey);
   await ensureDir(dir);
   const base = (file.name ?? "").replace(/\.[^.]+$/, "");
-  const filename = `${slug(base, "ref")}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}.${REF_EXT[file.type] ?? "png"}`;
-  const res = await FP().upload("data", dir, new File([file], filename, { type: file.type }), {}, { notify: false });
+  const filename = `${slug(base, "ref")}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}.${REF_EXT[type]}`;
+  const res = await FP().upload("data", dir, new File([file], filename, { type }), {}, { notify: false });
   if (!res?.path) throw new Error(`Upload failed for ${dir}/${filename}`);
   return res.path;
 }

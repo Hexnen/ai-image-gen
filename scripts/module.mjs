@@ -12,10 +12,12 @@ import * as callLog from "./call-log.mjs";
 import { GenerateDialog } from "./generate-dialog.mjs";
 import { registerSheetButtons } from "./sheet-button.mjs";
 import { openPickForBatch } from "./pick-app.mjs";
+import { runMigrations } from "./migrate.mjs";
 
 /** GM-owe powiadomienie: batch z wieloma wersjami czeka na wybór (klik w powiadomienie otwiera okno). */
 function notifyPick(rec) {
-  const name = rec.items?.[0]?.meta?.name ?? "";
+  // Nazwę dokumentu może zmienić gracz-właściciel: do powiadomienia (HTML) tylko po escape.
+  const name = foundry.utils.escapeHTML(String(rec.items?.[0]?.meta?.name ?? ""));
   const n = ui.notifications.info(game.i18n.format("AIIMG.Pick.Ready", { name }), { permanent: true, console: false });
   try { n?.element?.addEventListener?.("click", () => openPickForBatch(rec.id)); } catch { /* best effort */ }
 }
@@ -25,16 +27,21 @@ Hooks.once("init", () => {
   registerSheetButtons();
 });
 
-Hooks.once("ready", () => {
-  game.modules.get(MODULE_ID).api = {
-    providers, limits, getKey, imageTypes, configStore, batch, callLog,
+Hooks.once("ready", async () => {
+  const api = {
+    providers, limits, getKey, imageTypes, configStore,
     openConfig: () => ImageConfigApp.open(),
     openBatches: () => BatchesApp.open(),
     openLog: () => LogApp.open(),
     generate: (document) => GenerateDialog.open(document),
     openPick: (batchId) => openPickForBatch(batchId)
   };
+  // Log (prompty, koszty) i silnik batcha tylko dla GM-a: gracz nie ma ich ani przez API modułu.
+  if (game.user.isGM) Object.assign(api, { batch, callLog });
+  game.modules.get(MODULE_ID).api = api;
   if (game.user.isGM) {
+    try { await runMigrations(); }
+    catch (e) { console.error(`${MODULE_ID} | migration failed (will retry next start)`, e); }
     callLog.initLog();
     batch.startPoller();
     const seen = new Set();

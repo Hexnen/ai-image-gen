@@ -1,6 +1,10 @@
 import { MODULE_ID, PROVIDER_IDS } from "./constants.mjs";
+import { SLOTS, slotKey } from "./batch/record.mjs";
 
 const { NumberField, StringField, ObjectField } = foundry.data.fields;
+
+/** Bieżący schemat danych modułu (migracje w migrate.mjs). */
+export const SCHEMA_VERSION = 2;
 
 export function registerSettings() {
   // API keys: client scope on purpose. World-scope settings sync to every player.
@@ -18,7 +22,7 @@ export function registerSettings() {
   const limit = (key, initial) =>
     game.settings.register(MODULE_ID, `limit.${key}`, {
       name: `AIIMG.Settings.Limit.${key}.Name`,
-      hint: `AIIMG.Settings.Limit.${key}.Hint`,
+      hint: `AIIMG.Settings.Limit.${key}.HintV2`, // 0 = brak limitu (ostrzeżenie w tekście)
       scope: "world",
       config: true,
       restricted: true,
@@ -36,9 +40,21 @@ export function registerSettings() {
   game.settings.register(MODULE_ID, "imageTypes", {
     scope: "world", config: false, type: new ObjectField({ initial: {} })
   });
+  // Dawna mapa wszystkich batchy: tylko do jednorazowej migracji do slotów `batch.<n>` (migrate.mjs).
   game.settings.register(MODULE_ID, "batches", {
     scope: "world", config: false, type: new ObjectField({ initial: {} })
   });
+  game.settings.register(MODULE_ID, "schema", {
+    scope: "world", config: false, type: new NumberField({ initial: 0, nullable: false })
+  });
+  // Jeden rekord batcha na ustawienie: zapis jednego nie nadpisuje innych. onChange odpala się na
+  // każdym kliencie, więc UI (okno batchy, przypomnienie o wyborze) odświeża się też u drugiego GM-a.
+  for (let i = 0; i < SLOTS; i++) {
+    game.settings.register(MODULE_ID, slotKey(i), {
+      scope: "world", config: false, type: new ObjectField({ initial: {} }),
+      onChange: (v) => Hooks.callAll("aiImageGen.batchUpdate", v?.id ? v : { id: null, removed: true })
+    });
+  }
 }
 
 export const getKey = (provider) => game.settings.get(MODULE_ID, `apiKey.${provider}`);

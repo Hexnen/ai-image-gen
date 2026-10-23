@@ -1,4 +1,4 @@
-import { MODULE_ID } from "./constants.mjs";
+import { MODULE_ID, PROVIDER_IDS } from "./constants.mjs";
 import * as providers from "./providers/index.mjs";
 
 export const DEFAULT_CONFIG = Object.freeze({
@@ -48,6 +48,22 @@ export function fitConfig(cfg) {
 
 const all = () => game.settings.get(MODULE_ID, "imageTypes") ?? {};
 
+/**
+ * Referencje to ścieżki plików w Data (względne). Odrzucamy adresy http(s)/data/blob/file, litery dysków,
+ * `//` i `..`: `loadRefs` pobiera je z przeglądarki GM-a i wysyła bajty do dostawcy, więc konfiguracja
+ * (czytelna dla wszystkich klientów świata) nie może wskazywać dowolnego adresu. Bez duplikatów.
+ */
+export function cleanRefs(list) {
+  const out = [];
+  for (const r of Array.isArray(list) ? list : []) {
+    const v = String(r ?? "").trim();
+    if (!v || v.length > 512) continue;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(v) || /^[\\/]{2}/.test(v) || v.split(/[\\/]/).includes("..")) continue;
+    if (!out.includes(v)) out.push(v);
+  }
+  return out;
+}
+
 // Type keys contain dots ("dnd5e.Actor.npc"); Foundry expands dotted keys inside an
 // ObjectField into nested objects, so store them with a dot-free key.
 const sk = (key) => String(key).replaceAll(".", "|");
@@ -58,7 +74,9 @@ export const isConfigured = (key) => sk(key) in all();
 /** Config for a type key, merged over defaults (so unconfigured types still work). */
 export function getConfig(key) {
   const saved = all()[sk(key)] ?? {};
-  const cfg = { ...DEFAULT_CONFIG, ...saved, refs: [...(saved.refs ?? [])] };
+  const cfg = { ...DEFAULT_CONFIG, ...saved, refs: cleanRefs(saved.refs) };
+  // Zapis z nieznanym dostawcą (usunięty/przemianowany) psułby każde renderowanie okien: wróć do domyślnego.
+  if (!PROVIDER_IDS.includes(cfg.provider)) { cfg.provider = DEFAULT_CONFIG.provider; cfg.model = DEFAULT_CONFIG.model; }
   if (!QUALITIES.includes(cfg.quality)) cfg.quality = DEFAULT_CONFIG.quality; // old saves lack it
   // Heal a model that no longer belongs to the provider.
   const models = providers.listModels(cfg.provider);
@@ -77,13 +95,16 @@ const clampSize = (v, fallback) => Math.max(64, Math.min(3840, Math.round(Number
 
 export async function setConfig(key, data) {
   assertGM();
+  if (!PROVIDER_IDS.includes(data.provider)) throw new Error(`Unknown provider: ${data.provider}`);
+  const known = providers.listModels(data.provider);
+  const model = known.length && !known.some((m) => m.id === data.model) ? known[0].id : String(data.model);
   let clean = {
     provider: String(data.provider),
-    model: String(data.model),
+    model,
     width: clampSize(data.width, DEFAULT_CONFIG.width),
     height: clampSize(data.height, DEFAULT_CONFIG.height),
     promptTemplate: String(data.promptTemplate ?? DEFAULT_CONFIG.promptTemplate),
-    refs: (data.refs ?? []).filter(Boolean).map(String),
+    refs: cleanRefs(data.refs),
     defaultMode: data.defaultMode === "batch" ? "batch" : "fast",
     quality: QUALITIES.includes(data.quality) ? data.quality : DEFAULT_CONFIG.quality,
     imageSize: String(data.imageSize ?? DEFAULT_CONFIG.imageSize),

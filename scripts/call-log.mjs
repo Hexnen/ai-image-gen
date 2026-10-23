@@ -1,9 +1,13 @@
 // Pełny log wywołań (Fast, wysyłka batcha, wyniki batcha, zablokowane przez limity).
 // Pliki miesięczne Data/ai-image-gen/_log/YYYY-MM.json; cache w pamięci; zapisy serializowane.
 // Log NIE zawiera kluczy API ani nagłówków (błędy są oczyszczane w `redact`).
-import { MODULE_ID, PROVIDER_IDS } from "./constants.mjs";
-import { getKey } from "./settings.mjs";
+// Zapis jest bezpieczny dla danych: przed nadpisaniem pliku miesiąca czytamy jego aktualną zawartość
+// i scalamy po id (drugi GM mógł dopisać wpisy), a błąd odczytu NIGDY nie kończy się nadpisaniem pustym.
+import { MODULE_ID } from "./constants.mjs";
+import { redact } from "./redact.mjs";
 import { ensureDir } from "./save-image.mjs";
+
+export { redact };
 
 const FP = () => foundry.applications.apps.FilePicker.implementation;
 const DIR = `${MODULE_ID}/_log`;
@@ -16,29 +20,21 @@ export const LOG_FIELDS = [
 
 const months = new Map();   // "YYYY-MM" -> entry[]
 const dirty = new Set();
+const replace = new Set();  // miesiące do nadpisania bez scalania (clearLog)
 let loading = null;
+let needsReload = false;    // listowanie/odczyt plików się nie udało: spróbuj ponownie przy najbliższym odczycie
+let lastLoadTry = 0;
+let lastBak = 0;
+/** Strojenie (testy ustawiają bakEveryMs = 0): kopia .bak poprzedniej zawartości najwyżej raz na tyle ms. */
+export const logTuning = { bakEveryMs: 60_000 };
+let retryTimer = null;
 let chain = Promise.resolve();
+
+const isGM = () => !!game.user?.isGM;
 
 const monthOf = (ts) => String(ts).slice(0, 7);
 
 // ---------- sanitising ----------
-
-/** Wycina klucze/tokeny z tekstu (błędy HTTP potrafią je cytować). */
-export function redact(text) {
-  let s = String(text ?? "");
-  for (const p of PROVIDER_IDS) {
-    let k = "";
-    try { k = getKey(p); } catch { /* settings not ready */ }
-    if (k && k.length >= 8) s = s.split(k).join("[redacted]");
-  }
-  return s
-    .replace(/Bearer\s+[A-Za-z0-9._~+\/-]+=*/gi, "Bearer [redacted]")
-    .replace(/\bsk-[A-Za-z0-9_-]{8,}/g, "[redacted]")
-    .replace(/\bAIza[0-9A-Za-z_-]{20,}/g, "[redacted]")
-    .replace(/([?&]key=)[^&\s"']+/gi, "$1[redacted]")
-    .replace(/(x-goog-api-key|authorization|api[_-]?key)(["']?\s*[:=]\s*["']?)[^\s"',&}]+/gi, "$1$2[redacted]")
-    .slice(0, 2000);
-}
 
 /** Tokeny z obiektu usage/usageMetadata (albo z całej odpowiedzi). */
 export function tokensFrom(obj) {
@@ -50,12 +46,16 @@ export function tokensFrom(obj) {
   return { in: Number(inT) || 0, out: Number(outT) || 0 };
 }
 
+/** Limity długości pól tekstowych (plik miesiąca jest przepisywany w całości przy każdym wpisie). */
+const FIELD_MAX = { prompt: 8000, description: 2000, docName: 200, docUuid: 200, typeKey: 200, route: 200, model: 120 };
+
 function clean(entry) {
   const e = {};
   for (const f of LOG_FIELDS) if (entry[f] !== undefined && entry[f] !== null && entry[f] !== "") e[f] = entry[f];
   e.id ??= foundry.utils.randomID();
   e.ts ??= new Date().toISOString();
   e.user ??= game.user?.name ?? "";
+  for (const [f, max] of Object.entries(FIELD_MAX)) if (typeof e[f] === "string" && e[f].length > max) e[f] = `${e[f].slice(0, max)}…`;
   if (e.error !== undefined) e.error = redact(e.error);
   if (typeof e.cost === "number") e.cost = Math.round(e.cost * 1e6) / 1e6;
   if (typeof e.durationMs === "number") e.durationMs = Math.round(e.durationMs);
@@ -70,42 +70,92 @@ function mergeInto(key, arr) {
   months.set(key, [...arr.filter((x) => x && !seen.has(x.id)), ...cur]);
 }
 
+const fileUrl = (key) => `${foundry.utils.getRoute(`${DIR}/${key}.json`)}?t=${Date.now()}`;
+
+/** Odczyt pliku miesiąca: "ok" | "missing" (404: wolno utworzyć) | "corrupt" (zła zawartość) | "error" (nie wiemy). */
+async function readMonthFile(key) {
+  let res;
+  try { res = await fetch(fileUrl(key), { cache: "no-store" }); }
+  catch (e) { return { state: "error", error: e }; }
+  if (res.status === 404) return { state: "missing" };
+  if (!res.ok) return { state: "error", error: new Error(`HTTP ${res.status}`) };
+  let text;
+  try { text = await res.text(); } catch (e) { return { state: "error", error: e }; }
+  try {
+    const arr = JSON.parse(text);
+    return Array.isArray(arr) ? { state: "ok", arr } : { state: "corrupt", text };
+  } catch {
+    return { state: "corrupt", text };
+  }
+}
+
 async function doLoad() {
-  let files = [];
-  try { files = (await FP().browse("data", DIR)).files ?? []; } catch { /* no log dir yet */ }
-  for (const f of files) {
-    const m = /(\d{4}-\d{2})\.json$/.exec(f);
-    if (!m) continue;
-    try {
-      const res = await fetch(`${foundry.utils.getRoute(f)}?t=${Date.now()}`, { cache: "no-store" });
-      if (!res.ok) continue;
-      const arr = await res.json();
-      if (Array.isArray(arr)) mergeInto(m[1], arr);
-    } catch (e) {
-      console.warn(`${MODULE_ID} | log: cannot read ${f}`, e);
+  lastLoadTry = Date.now();
+  needsReload = false;
+  const keys = new Set([monthOf(new Date().toISOString())]);
+  try {
+    for (const f of (await FP().browse("data", DIR)).files ?? []) {
+      const m = /(\d{4}-\d{2})\.json$/.exec(f);
+      if (m) keys.add(m[1]);
+    }
+  } catch { needsReload = true; /* brak katalogu albo błąd listowania: niepewne, spróbujemy ponownie */ }
+  for (const key of keys) {
+    const r = await readMonthFile(key);
+    if (r.state === "ok") mergeInto(key, r.arr);
+    else if (r.state !== "missing") {
+      needsReload = true;
+      console.warn(`${MODULE_ID} | log: cannot read ${key}.json (${r.state}); it will not be overwritten blindly`, r.error ?? "");
     }
   }
 }
 
-/** Wczytaj istniejące pliki logu (idempotentne). */
+/** Wczytaj istniejące pliki logu (idempotentne; tylko GM). */
 export function initLog() {
+  if (!isGM()) return Promise.resolve();
   return (loading ??= doLoad());
 }
 
-async function writeMonth(key) {
-  await ensureDir(DIR);
-  const file = new File([JSON.stringify(months.get(key) ?? [])], `${key}.json`, { type: "application/json" });
-  await FP().upload("data", DIR, file, {}, { notify: false });
+async function ensureLoaded() {
+  await initLog();
+  if (needsReload && isGM() && Date.now() - lastLoadTry > 30_000) {
+    loading = doLoad();
+    await loading;
+  }
 }
 
-/** Zapisz brudne miesiące; kolejka seryjna (bez wyścigów). Błąd zapisu nigdy nie psuje generacji. */
+async function uploadText(name, text) {
+  await ensureDir(DIR);
+  await FP().upload("data", DIR, new File([text], name, { type: "application/json" }), {}, { notify: false });
+}
+
+async function writeMonth(key) {
+  // Świeża zawartość pliku: wpisy dopisane przez innego GM-a nie mogą zniknąć, a niepewny odczyt blokuje zapis.
+  const cur = await readMonthFile(key);
+  if (cur.state === "error") throw new Error(`log: cannot read ${key}.json, refusing to overwrite it (${cur.error?.message ?? "?"})`);
+  if (cur.state === "corrupt") await uploadText(`${key}.corrupt-${Date.now()}.json`, cur.text);
+  if (cur.state === "ok") {
+    if (!replace.has(key)) mergeInto(key, cur.arr);
+    if (Date.now() - lastBak >= logTuning.bakEveryMs) { await uploadText(`${key}.bak.json`, JSON.stringify(cur.arr)); lastBak = Date.now(); }
+  }
+  replace.delete(key);
+  await uploadText(`${key}.json`, JSON.stringify(months.get(key) ?? []));
+}
+
+/** Zapisz brudne miesiące; kolejka seryjna (bez wyścigów). Błąd zapisu nigdy nie psuje generacji (ponowienie za 30 s). */
 export function flushLog() {
+  if (!isGM()) return Promise.resolve();
   chain = chain.then(async () => {
     while (dirty.size) {
       const key = dirty.values().next().value;
       dirty.delete(key);
       try { await writeMonth(key); }
-      catch (e) { dirty.add(key); console.warn(`${MODULE_ID} | log: write failed`, e); break; }
+      catch (e) {
+        dirty.add(key);
+        console.warn(`${MODULE_ID} | log: write failed (will retry)`, e);
+        retryTimer ??= setTimeout(() => { retryTimer = null; flushLog(); }, 30_000);
+        retryTimer?.unref?.(); // tylko Node (testy): nie trzymaj procesu
+        break;
+      }
     }
   });
   return chain;
@@ -134,6 +184,7 @@ export async function logCall(entry) {
 
 /** Zmień pola istniejącego wpisu (np. zapis pliku się nie udał po udanym wywołaniu API). */
 export async function updateCall(id, patch) {
+  if (!isGM()) return null;
   try {
     await initLog();
     for (const [key, arr] of months) {
@@ -153,7 +204,8 @@ export async function updateCall(id, patch) {
 
 /** Wszystkie wpisy (najnowsze pierwsze), opcjonalnie z zakresu dat (ISO lub Date). */
 export async function readLog({ from, to } = {}) {
-  await initLog();
+  if (!isGM()) return [];
+  await ensureLoaded();
   const lo = from ? new Date(from).getTime() : -Infinity;
   const hi = to ? new Date(to).getTime() : Infinity;
   return [...months.values()].flat()
@@ -162,8 +214,9 @@ export async function readLog({ from, to } = {}) {
 }
 
 export async function clearLog() {
+  if (!isGM()) throw new Error("Only a GM can clear the call log.");
   await initLog();
-  for (const key of months.keys()) { months.set(key, []); dirty.add(key); }
+  for (const key of months.keys()) { months.set(key, []); dirty.add(key); replace.add(key); }
   Hooks.callAll("aiImageGen.logUpdate", null);
   await flushLog();
 }
