@@ -304,6 +304,12 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       this.#readFormExceptSize();
       this.render();
     });
+    // Quality / image size / thinking / custom width+height only change the draft and the live estimate
+    // (no re-render, so focus and caret survive). Provider, model, size preset and mode re-render above.
+    for (const n of ["quality", "imageSize", "thinkingLevel", "width", "height"]) {
+      const f = el.querySelector(`[name=${n}]`);
+      f?.addEventListener(f.tagName === "SELECT" ? "change" : "input", () => this.#onDraftInput());
+    }
     this.#wireRefZone(el.querySelector(".aiimg-refs"));
     el.querySelector("textarea[name=promptTemplate]")?.addEventListener("input", () => this.#onDraftInput());
     if (game.user.isGM) {
