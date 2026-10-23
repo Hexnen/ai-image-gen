@@ -9,7 +9,7 @@ import { getKey } from "./settings.mjs";
 import { getVirtualType } from "./image-types.mjs";
 import { getConfig, fitConfig, renderPrompt, isConfigured } from "./config-store.mjs";
 import * as providers from "./providers/index.mjs";
-import { executeGeneration, estimateFast, loadRefs, normalizeRef, maxRefsFor, MAX_VERSIONS } from "./generate-flow.mjs";
+import { executeGeneration, estimateInfo, loadRefs, normalizeRef, maxRefsFor, MAX_VERSIONS } from "./generate-flow.mjs";
 import { saveImageBlobEx, slug } from "./save-image.mjs";
 import { outputOptsFromConfig, statsPatch } from "./optimize.mjs";
 import { updateCall } from "./call-log.mjs";
@@ -52,16 +52,19 @@ const cancelled = () => Object.assign(new Error("cancelled"), { name: "AbortErro
 
 /**
  * Estimated cost and readiness for a generation (no network call, no side effects).
- * @returns {{cost:number, perImage:number, provider:string, providerLabel:string, model:string, modelLabel:string,
+ * @returns {{cost:number, perImage:number, source:"learned"|"table", samples:number, provider:string, providerLabel:string, model:string, modelLabel:string,
  *   width:number, height:number, hasKey:boolean, configured:boolean, requiresRef:boolean, maxRefs:number, estimated:true}}
  */
 export function estimateGeneration({ typeKey, count = 1, refsCount = 0, width, height, aspectRatio } = {}) {
   assertGM();
   const cfg = configFor(typeKey, { width, height, aspectRatio });
-  const perImage = estimateFast(cfg, (cfg.refs?.length ?? 0) + Math.max(0, Number(refsCount) || 0));
+  const info = estimateInfo(cfg, (cfg.refs?.length ?? 0) + Math.max(0, Number(refsCount) || 0), "sync");
+  const perImage = info.display;
   return {
     cost: perImage * Math.max(1, Math.min(MAX_VERSIONS, Math.floor(Number(count)) || 1)),
     perImage,
+    source: info.source,   // "learned" (median of real costs from the log) or "table"
+    samples: info.n,
     provider: cfg.provider,
     providerLabel: providers.PROVIDERS[cfg.provider]?.label ?? cfg.provider,
     model: cfg.model,

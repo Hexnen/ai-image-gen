@@ -44,7 +44,7 @@
   "AIIMG.Config.NotForModel": "Niedostępne dla tego modelu",
   "AIIMG.Config.ModelFrom": "od {cost} USD / obraz",
   "AIIMG.Config.ModelPriceRough": "cena zmienna, tylko szacunek",
-  "AIIMG.Config.EstPerImage": "≈ {cost} USD / obraz (bieżący szkic)",
+  "AIIMG.Config.EstPerImage": "≈ {cost} USD / obraz (bieżący szkic) · {source}",
   "AIIMG.Fast": "Szybko",
   "AIIMG.Batch": "Batch",
   "AIIMG.Config.NoBatch": "Ten dostawca nie ma API batch; tryb Batch jest niedostępny.",
@@ -208,7 +208,7 @@
   "AIIMG.Test.Refs": "refs: {n} obrazów wysyłanych osobno",
   "AIIMG.Test.Empty": "Pusty prompt: szkic nie daje żadnego tekstu.",
   "AIIMG.Test.Generate": "Generuj test",
-  "AIIMG.Test.Estimate": "Szacowany koszt: ~{cost} USD",
+  "AIIMG.Test.Estimate": "Szacowany koszt: ~{cost} USD · {source}",
   "AIIMG.Test.ConfirmTitle": "Uruchomić próbną generację?",
   "AIIMG.Test.ConfirmBody": "To prawdziwe wywołanie API {provider} ({model}), szacunkowo ~{cost} USD za {count} wersji. Trafi do logu i zostanie wliczone w limity.",
   "AIIMG.Test.NoKey": "Brak klucza API dla tego dostawcy.",
@@ -261,5 +261,7 @@
   "AIIMG.Gen.OutputOff": "oryginał (optymalizacja wyłączona)",
   "AIIMG.Gen.DoneSized": "Obraz dla {name} zapisany ({before} → {after}).",
   "AIIMG.Pick.SizeTip": "Rozmiar pliku: oryginał → tak, jak zostanie zapisany",
-  "AIIMG.Log.Optimized": "Rozmiar pliku (przed → po)"
+  "AIIMG.Log.Optimized": "Rozmiar pliku (przed → po)",
+  "AIIMG.Cost.FromRuns": "z {n} generacji",
+  "AIIMG.Cost.Table": "szacunek z tabeli"
 }

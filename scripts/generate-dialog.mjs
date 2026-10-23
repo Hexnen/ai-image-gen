@@ -2,8 +2,9 @@ import { MODULE_ID } from "./constants.mjs";
 import { optimizeEnabled, outputOptsFromConfig, fmtBytes } from "./optimize.mjs";
 import { safeMessage } from "./redact.mjs";
 import {
-  readiness, runFast, runBatch, generateCandidates, estimateTotal, buildPrompt, MAX_VERSIONS, MAX_EXTRA_REF_BYTES
+  readiness, runFast, runBatch, generateCandidates, estimateTotalInfo, buildPrompt, MAX_VERSIONS, MAX_EXTRA_REF_BYTES
 } from "./generate-flow.mjs";
+import { sourceTag } from "./cost-learning.mjs";
 import { ImageConfigApp } from "./config-app.mjs";
 import { PickApp } from "./pick-app.mjs";
 import { saveRefFile } from "./save-image.mjs";
@@ -94,8 +95,12 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
   async _prepareContext() {
     const r = readiness(this.document);
     const refsTotal = (r.cfg.refs?.length ?? 0) + this.extraRefs.length;
-    const fast = estimateTotal(this.document, { count: this.count, extraRefs: this.extraRefs.length, mode: "fast" });
-    const batch = estimateTotal(this.document, { count: this.count, extraRefs: this.extraRefs.length, mode: "batch" });
+    const fastI = estimateTotalInfo(this.document, { count: this.count, extraRefs: this.extraRefs.length, mode: "fast" });
+    const batchI = estimateTotalInfo(this.document, { count: this.count, extraRefs: this.extraRefs.length, mode: "batch" });
+    const fast = fastI.cost, batch = batchI.cost;
+    // One source note when both numbers come from the same place; otherwise each number says its own.
+    const showBatch = r.canBatch;
+    const sameSource = !showBatch || (fastI.source === batchI.source && fastI.n === batchI.n);
     const prompt = buildPrompt(this.document, this.description, r.cfg);
     return {
       description: this.description,
@@ -128,6 +133,9 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       showPreview: this.count === 1,
       estFast: money(fast),
       estBatch: r.canBatch ? money(batch) : "",
+      estTag: sameSource ? sourceTag(fastI.source, fastI.n) : "",
+      estFastTag: sameSource ? "" : sourceTag(fastI.source, fastI.n),
+      estBatchTag: sameSource ? "" : sourceTag(batchI.source, batchI.n),
       outputSummary: outputSummary(r.cfg),
       maxMb: MAX_EXTRA_REF_BYTES / 1048576,
       canSaveRef: game.user.isGM && !!resolveTypeKey(this.document) && this.extraRefs.length > 0,

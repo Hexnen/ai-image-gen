@@ -6,7 +6,8 @@ import * as providers from "./providers/index.mjs";
 import { reserveBudget, recordCost } from "./limits.mjs";
 import { saveImageBlobEx, applyImage } from "./save-image.mjs";
 import { submitBatch } from "./batch/index.mjs";
-import { estimateSyncCost } from "./batch/cost.mjs";
+import { estimateSyncCost, estimateBatchCost } from "./batch/cost.mjs";
+import { lookupLearned, learnedLimit } from "./cost-learning.mjs";
 import { logCall, updateCall, tokensFrom } from "./call-log.mjs";
 import { outputOptsFromConfig, statsPatch } from "./optimize.mjs";
 
@@ -128,25 +129,50 @@ function describe(document, description) {
   return { key, cfg, prompt, meta };
 }
 
-/** Szacunek kosztu pojedynczego żądania (sync; OpenRouter: stała ostrożna kwota). Nigdy 0 przy błędzie wyliczenia. */
-export function estimateFast(cfg, refCount) {
+/** Cautious table estimate of one image (sync = standard rates, batch = half). Never 0 on a failed calculation. */
+function tableEstimate(cfg, refCount, mode) {
+  const item = { refs: new Array(refCount), width: cfg.width, height: cfg.height, quality: cfg.quality, imageSize: cfg.imageSize };
   try {
-    return estimateSyncCost(cfg.provider, cfg.model, [{
-      refs: new Array(refCount), width: cfg.width, height: cfg.height, quality: cfg.quality, imageSize: cfg.imageSize
-    }]);
+    return mode === "batch" ? estimateBatchCost(cfg.provider, cfg.model, [item]) : estimateSyncCost(cfg.provider, cfg.model, [item]);
   } catch {
-    return FALLBACK_ESTIMATE;
+    return mode === "batch" ? FALLBACK_ESTIMATE / 2 : FALLBACK_ESTIMATE;
   }
 }
 
-/** Szacowany koszt całości (Fast ×count; Batch ×count po stawkach batch) — do UI. */
-export function estimateTotal(document, { count = 1, extraRefs = 0, mode = "fast" } = {}) {
+/**
+ * Cost of one image, two ways. `display`: what the UI shows (the learned median of REAL costs from the log when there
+ * are enough runs, else the table). `limit`: what the budget limits and reservations use (learned median with a
+ * margin, never below the dearest of the last 3 runs; else the cautious table).
+ * @returns {{display:number, limit:number, source:"learned"|"table", n:number}}
+ */
+export function estimateInfo(cfg, refCount, mode = "sync") {
+  const table = tableEstimate(cfg, refCount, mode);
+  const l = lookupLearned({
+    provider: cfg.provider, model: cfg.model, quality: cfg.quality, width: cfg.width, height: cfg.height,
+    imageSize: cfg.imageSize, thinkingLevel: cfg.thinkingLevel, refsCount: refCount
+  }, mode);
+  if (!l) return { display: table, limit: table, source: "table", n: 0 };
+  return { display: l.median, limit: learnedLimit(l), source: "learned", n: l.n };
+}
+
+/** Cost of one sync request for the LIMITS (see estimateInfo). */
+export function estimateFast(cfg, refCount) {
+  return estimateInfo(cfg, refCount, "sync").limit;
+}
+
+/** Cost for the UI: Fast ×count, or Batch ×count at batch rates. @returns {{cost:number, source:string, n:number}} */
+export function estimateTotalInfo(document, { count = 1, extraRefs = 0, mode = "fast" } = {}) {
   const key = resolveTypeKey(document);
-  if (!key) return 0;
+  if (!key) return { cost: 0, source: "table", n: 0 };
   const cfg = getConfig(key);
   const refs = (cfg.refs?.length ?? 0) + extraRefs;
-  const one = estimateFast(cfg, refs) / (mode === "batch" ? 2 : 1);
-  return one * count;
+  const i = estimateInfo(cfg, refs, mode === "batch" ? "batch" : "sync");
+  return { cost: i.display * count, source: i.source, n: i.n };
+}
+
+/** Same, as a plain number (kept for callers that only need the amount). */
+export function estimateTotal(document, opts = {}) {
+  return estimateTotalInfo(document, opts).cost;
 }
 
 /** Walidacja liczby wersji i referencji (rzuca czytelny błąd). @returns {number} łączna liczba referencji */
@@ -352,9 +378,15 @@ export function fitTestConfig(draft) {
   return fitConfig({ ...DEFAULT_CONFIG, ...draft, refs: [...(draft?.refs ?? [])] });
 }
 
-/** Szacowany koszt próby (Fast ×count) — pokazywany przed startem. */
+/** Cost of a test run (Fast ×count) for the UI, with where the number comes from. */
+export function estimateTestInfo(cfg, count = 1) {
+  const i = estimateInfo(cfg, cfg.refs?.length ?? 0, "sync");
+  return { cost: i.display * count, source: i.source, n: i.n };
+}
+
+/** Same, as a plain number. */
 export function estimateTest(cfg, count = 1) {
-  return estimateFast(cfg, cfg.refs?.length ?? 0) * count;
+  return estimateTestInfo(cfg, count).cost;
 }
 
 /**

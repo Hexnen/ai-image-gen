@@ -9,6 +9,7 @@ import { ImageConfigApp } from "./config-app.mjs";
 import { BatchesApp } from "./batch-app.mjs";
 import { LogApp } from "./log-app.mjs";
 import * as callLog from "./call-log.mjs";
+import { initCostLearning } from "./cost-learning.mjs";
 import { GenerateDialog } from "./generate-dialog.mjs";
 import { registerSheetButtons } from "./sheet-button.mjs";
 import { registerContextMenus } from "./context-menu.mjs";
@@ -61,6 +62,7 @@ Hooks.once("ready", async () => {
     try { await runMigrations(); }
     catch (e) { console.error(`${MODULE_ID} | migration failed (will retry next start)`, e); }
     callLog.initLog();
+    initCostLearning(); // estimates learn from real costs in the log
     batch.startPoller();
     const seen = new Set();
     const announce = (rec) => {

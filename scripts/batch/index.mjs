@@ -3,6 +3,7 @@ import { getKey } from "../settings.mjs";
 import { reserveBudget } from "../limits.mjs";
 import { PROVIDERS } from "../providers/index.mjs";
 import { estimateBatchCost } from "./cost.mjs";
+import { estimateBatchLimit } from "../cost-learning.mjs";
 import { newBatchId } from "./util.mjs";
 import { normalizeError } from "../providers/util.mjs";
 import { putBatch, patchBatch, removeBatch } from "./record.mjs";
@@ -36,7 +37,7 @@ export async function submitBatch({ provider, model, items, pick = false }) {
   const apiKey = getKey(provider);
   if (!apiKey) throw new Error(`Brak klucza API dla ${PROVIDERS[provider].label}.`);
 
-  const estimatedCost = estimateBatchCost(provider, model, items);
+  const estimatedCost = estimateBatchLimit(provider, model, items); // learned (with margin) when the log has real runs, else the table
   const logItems = (extra, perItemCost) => Promise.all(items.map((i) => logCall({
     provider, model, prompt: i.prompt, description: i.meta?.description,
     size: i.width && i.height ? `${i.width}x${i.height}` : undefined,

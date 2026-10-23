@@ -44,7 +44,7 @@
   "AIIMG.Config.NotForModel": "Not available for this model",
   "AIIMG.Config.ModelFrom": "from {cost} USD / image",
   "AIIMG.Config.ModelPriceRough": "price varies, estimate only",
-  "AIIMG.Config.EstPerImage": "≈ {cost} USD / image (current draft)",
+  "AIIMG.Config.EstPerImage": "≈ {cost} USD / image (current draft) · {source}",
   "AIIMG.Fast": "Fast",
   "AIIMG.Batch": "Batch",
   "AIIMG.Config.NoBatch": "This provider has no batch API; Batch is unavailable.",
@@ -208,7 +208,7 @@
   "AIIMG.Test.Refs": "refs: {n} images sent separately",
   "AIIMG.Test.Empty": "Empty prompt: the draft produces no text.",
   "AIIMG.Test.Generate": "Generate test",
-  "AIIMG.Test.Estimate": "Estimated cost: ~{cost} USD",
+  "AIIMG.Test.Estimate": "Estimated cost: ~{cost} USD · {source}",
   "AIIMG.Test.ConfirmTitle": "Run a test generation?",
   "AIIMG.Test.ConfirmBody": "This is a real API call to {provider} ({model}), estimated at ~{cost} USD for {count} version(s). It is logged and counted against your limits.",
   "AIIMG.Test.NoKey": "No API key for this provider.",
@@ -261,5 +261,7 @@
   "AIIMG.Gen.OutputOff": "original (optimization off)",
   "AIIMG.Gen.DoneSized": "Image for {name} saved ({before} → {after}).",
   "AIIMG.Pick.SizeTip": "File size: original → as it will be saved",
-  "AIIMG.Log.Optimized": "File size (before → after)"
+  "AIIMG.Log.Optimized": "File size (before → after)",
+  "AIIMG.Cost.FromRuns": "from {n} runs",
+  "AIIMG.Cost.Table": "table estimate"
 }

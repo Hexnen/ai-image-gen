@@ -7,7 +7,8 @@ import * as providers from "./providers/index.mjs";
 import { getUsage } from "./limits.mjs";
 import { saveRefFile, saveTestExampleEx } from "./save-image.mjs";
 import { getKey } from "./settings.mjs";
-import { buildTestPrompt, fitTestConfig, estimateTest, generateTest } from "./generate-flow.mjs";
+import { buildTestPrompt, fitTestConfig, estimateTest, estimateTestInfo, generateTest } from "./generate-flow.mjs";
+import { sourceTag } from "./cost-learning.mjs";
 import { TestDrawerApp } from "./test-drawer-app.mjs";
 import { aspectInfo } from "./aspect.mjs";
 import { generatedSize, outputPreview, edgeIsNoop } from "./output-preview.mjs";
@@ -137,6 +138,12 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   /** Refresh prompt / counters / estimate in place (no re-render, so focus and caret survive). */
+  /** "Estimated cost: ~0.056 USD · from 4 runs" for the drawer (same estimator as the form). */
+  #testEstimate(cfg) {
+    const i = estimateTestInfo(cfg, this.test.count);
+    return game.i18n.format("AIIMG.Test.Estimate", { cost: i.cost.toFixed(3), source: sourceTag(i.source, i.n) });
+  }
+
   #updateTestPreview() {
     const el = this.#drawer?.element;
     if (!el || !this.draft) return;
@@ -146,7 +153,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     set("testPrompt", prompt);
     set("testChars", game.i18n.format("AIIMG.Test.Chars", { n: prompt.length }));
     set("testRefs", game.i18n.format("AIIMG.Test.Refs", { n: cfg.refs.length }));
-    set("testEstimate", game.i18n.format("AIIMG.Test.Estimate", { cost: estimateTest(cfg, this.test.count).toFixed(3) }));
+    set("testEstimate", this.#testEstimate(cfg));
     el.querySelector("[data-role=testEmpty]")?.toggleAttribute("hidden", !!prompt.trim());
   }
 
@@ -167,7 +174,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       chars: game.i18n.format("AIIMG.Test.Chars", { n: prompt.length }),
       refs: game.i18n.format("AIIMG.Test.Refs", { n: fitted.refs.length }),
       empty: !prompt.trim(),
-      estimate: game.i18n.format("AIIMG.Test.Estimate", { cost: fmt(estimateTest(fitted, t.count)) }),
+      estimate: this.#testEstimate(fitted),
       hasKey: !!getKey(fitted.provider),
       running: t.running,
       busy: t.running || t.confirming,
@@ -204,9 +211,13 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   /** "≈ $0.053 / image (estimate)" for the current draft, same estimator as the test drawer. */
   #estPer(cfg) {
-    let cost = 0;
-    try { cost = estimateTest(fitTestConfig(cfg), 1); } catch { /* unknown model: no estimate */ }
-    return game.i18n.format("AIIMG.Config.EstPerImage", { cost: Number(cost || 0).toFixed(3) });
+    let cost = 0, tag = "";
+    try {
+      const i = estimateTestInfo(fitTestConfig(cfg), 1);
+      cost = i.cost;
+      tag = sourceTag(i.source, i.n);
+    } catch { /* unknown model: no estimate */ }
+    return game.i18n.format("AIIMG.Config.EstPerImage", { cost: Number(cost || 0).toFixed(3), source: tag });
   }
 
   async _prepareContext() {
