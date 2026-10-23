@@ -38,12 +38,14 @@ export function pendingBatchCost() {
   return sum;
 }
 
-function check(estimatedCost, { count = 1, batch = false } = {}) {
+function check(estimatedCost, { count = 1, batch = false, perRequest } = {}) {
   const est = Number.isFinite(Number(estimatedCost)) && estimatedCost > 0 ? Number(estimatedCost) : 0;
   const lim = (k) => getLimit(k) || Infinity; // 0 = bez limitu
   const { day, month } = getUsage();
   const committed = inflightTotal() + pendingBatchCost();
-  if (est > lim("perRequest")) throw new Error(game.i18n.format("AIIMG.Limits.PerRequest", { limit: lim("perRequest") }));
+  // perRequest dotyczy jednego żądania do API: przy N osobnych żądaniach (Gemini/OpenRouter) caller podaje szacunek jednego.
+  const one = Number.isFinite(Number(perRequest)) && perRequest > 0 ? Number(perRequest) : est;
+  if (one > lim("perRequest")) throw new Error(game.i18n.format("AIIMG.Limits.PerRequest", { limit: lim("perRequest") }));
   if (batch && count > lim("batchSize")) throw new Error(game.i18n.format("AIIMG.Limits.BatchSize", { limit: lim("batchSize") }));
   if (day + committed + est > lim("daily")) throw new Error(game.i18n.format("AIIMG.Limits.Daily", { limit: lim("daily") }));
   if (month + committed + est > lim("monthly")) throw new Error(game.i18n.format("AIIMG.Limits.Monthly", { limit: lim("monthly") }));

@@ -40,7 +40,8 @@ async function viaImages({ apiKey, model, prompt, refs, width, height, aspectRat
   };
   const res = await fetch(`${OPENROUTER_BASE}/images`, {
     method: "POST", headers: headers(apiKey), body: JSON.stringify(body),
-    signal: withTimeout(GEN_TIMEOUT_MS, signal),
+    // modele openai/gpt-image-* potrafią mielić ponad 2 minuty (jak przy OpenAI bezpośrednio)
+    signal: withTimeout(/^openai\//.test(model) ? GPT_IMAGE_TIMEOUT_MS : GEN_TIMEOUT_MS, signal),
   });
   if (!res.ok) throw await httpError(`OpenRouter images ${model}`, res);
   const json = await res.json();

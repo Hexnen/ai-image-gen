@@ -77,6 +77,7 @@ export async function submitBatch({ provider, model, items, pick = false }) {
       ...(pick ? { pick: true } : {}),
     };
     await putBatch(rec);
+    release(); // od teraz koszt liczy pendingBatchCost() ("submitting"): bez podwójnego liczenia w limitach
 
     const t0 = performance.now();
     let submitted;

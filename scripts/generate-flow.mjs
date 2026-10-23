@@ -59,11 +59,11 @@ export async function normalizeRef(blob, label) {
 }
 
 /** Wczytaj obrazy referencyjne (ścieżki z konfiguracji) jako Blob-y (bez duplikatów ścieżek). */
-export async function loadRefs(paths = []) {
+export async function loadRefs(paths = [], signal) {
   const out = [];
   for (const p of [...new Set(paths)]) {
     const url = /^(https?:|data:|blob:)/.test(p) ? p : foundry.utils.getRoute(p);
-    const res = await fetch(url);
+    const res = await fetch(url, signal ? { signal } : undefined);
     if (!res.ok) throw new Error(`Reference image ${p}: HTTP ${res.status}`);
     out.push(await normalizeRef(await res.blob(), p));
   }
@@ -240,11 +240,13 @@ export async function executeGeneration({ doc: document, description, key, cfg, 
   try {
     refsTotal = validateRun(cfg, count, extraRefs);
   } catch (e) { throw await preFail(e); }
-  const est = estimateFast(cfg, refsTotal) * count;
+  const one = estimateFast(cfg, refsTotal);
+  const est = one * count;
   // Rezerwacja: równoległe wywołania (inne okno, szuflada testu, regenerate) widzą ten szacunek, zanim koszt zostanie zaksięgowany.
+  // OpenAI to JEDNO żądanie z `n` (limit na żądanie dotyczy całości); Gemini/OpenRouter to `count` osobnych żądań.
   let release;
   try {
-    release = reserveBudget(est, { count });
+    release = reserveBudget(est, { count, perRequest: cfg.provider === "openai" ? est : one });
   } catch (e) { throw await preFail(e, "limit-blocked", "blocked", est, "estimated"); }
   try {
     return await runGeneration({ document, description, key, cfg, prompt, meta, count, extraRefs, signal, ts, base, est, apiKey });
@@ -254,9 +256,19 @@ export async function executeGeneration({ doc: document, description, key, cfg, 
 }
 
 async function runGeneration({ document, description, key, cfg, prompt, meta, count, extraRefs, signal, ts, base, est, apiKey }) {
+  const cancelledEarly = () => Object.assign(new Error("Cancelled."), { name: "AbortError", aiimgLogged: true });
+  if (signal?.aborted) throw cancelledEarly(); // nic jeszcze nie poszło do API: koszt 0, bez wpisu w logu
   const normalizedExtra = [];
   for (const [i, b] of extraRefs.entries()) normalizedExtra.push(await normalizeRef(b, `#${i + 1}`));
-  const refs = [...(await loadRefs(cfg.refs)), ...normalizedExtra];
+  let refs;
+  try {
+    refs = [...(await loadRefs(cfg.refs, signal)), ...normalizedExtra];
+  } catch (e) {
+    if (e?.name === "AbortError") throw cancelledEarly();
+    throw e;
+  }
+  // Anulowano podczas ładowania referencji: żądanie nie wyszło, więc nie księgujemy szacunku (jak przy timeoucie w locie).
+  if (signal?.aborted) throw cancelledEarly();
   const common = {
     provider: cfg.provider, apiKey, model: cfg.model, prompt, refs,
     width: cfg.width, height: cfg.height, quality: cfg.quality,
@@ -314,7 +326,9 @@ async function runGeneration({ document, description, key, cfg, prompt, meta, co
       failed.push({ index: i, error: r.error });
     }
   }
-  await recordCost(total); // koszt jest realny (albo szacowany po timeoucie) nawet gdy zapis się nie uda
+  // Koszt jest realny (albo szacowany po timeoucie) nawet gdy zapis się nie uda. Błąd księgowania (rozłączenie,
+  // uprawnienia) nie może odebrać opłaconych obrazów: tylko ostrzeżenie.
+  try { await recordCost(total); } catch (e) { console.warn("ai-image-gen | could not record cost", total, e); }
   if (!candidates.length) {
     const e = new Error(failed[0]?.error ?? "Generation failed.");
     e.aiimgLogged = true;
