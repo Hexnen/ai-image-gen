@@ -1,0 +1,39 @@
+<section class="aiimg-batches-body">
+  <header class="aiimg-batches-head">
+    <button type="button" data-action="refresh"><i class="fa-solid fa-arrows-rotate"></i> {{localize "AIIMG.Batches.Refresh"}}</button>
+  </header>
+  {{#if empty}}
+  <p class="notes">{{localize "AIIMG.Batches.Empty"}}</p>
+  {{else}}
+  <table class="aiimg-batch-table">
+    <thead>
+      <tr>
+        <th>{{localize "AIIMG.Batches.Created"}}</th>
+        <th>{{localize "AIIMG.Config.Provider"}}</th>
+        <th>{{localize "AIIMG.Batches.Items"}}</th>
+        <th>{{localize "AIIMG.Batches.Status"}}</th>
+        <th>{{localize "AIIMG.Batches.Cost"}}</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{#each batches}}
+      <tr>
+        <td>{{created}}</td>
+        <td>{{provider}}<br><small>{{model}}</small></td>
+        <td>{{count}}{{#if names}}<br><small>{{names}}</small>{{/if}}</td>
+        <td class="aiimg-status aiimg-status-{{status}}">{{statusLabel}}{{#if error}}<br><small class="aiimg-error">{{error}}</small>{{/if}}</td>
+        <td data-tooltip="{{#if costReal}}AIIMG.Batches.CostReal{{else}}AIIMG.Batches.CostEstimate{{/if}}">{{cost}}</td>
+        <td class="aiimg-batch-actions">
+          {{#if active}}
+          <button type="button" data-action="cancel" data-id="{{id}}" {{#if cancelling}}disabled{{/if}} data-tooltip="AIIMG.Batches.Cancel"><i class="fa-solid fa-ban"></i></button>
+          {{else}}
+          <button type="button" data-action="remove" data-id="{{id}}" data-tooltip="AIIMG.Batches.Remove"><i class="fa-solid fa-trash"></i></button>
+          {{/if}}
+        </td>
+      </tr>
+      {{/each}}
+    </tbody>
+  </table>
+  {{/if}}
+</section>

@@ -1,0 +1,34 @@
+<section class="aiimg-gen">
+  {{#unless hasKey}}
+  <p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Gen.NoKey"}} ({{providerLabel}})</p>
+  {{/unless}}
+  {{#unless configured}}
+  <p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Gen.NotConfigured"}}
+    <a data-action="openConfig">{{localize "AIIMG.Gen.OpenConfig"}}</a></p>
+  {{/unless}}
+
+  <div class="form-group stacked">
+    <label>{{localize "AIIMG.Gen.Description"}}</label>
+    <textarea name="description" rows="5" placeholder="{{localize 'AIIMG.Gen.Placeholder'}}" {{#if busy}}disabled{{/if}}>{{description}}</textarea>
+  </div>
+
+  <dl class="aiimg-summary">
+    <dt>{{localize "AIIMG.Config.Provider"}}</dt><dd>{{providerLabel}}</dd>
+    <dt>{{localize "AIIMG.Config.Model"}}</dt><dd>{{modelLabel}}</dd>
+    <dt>{{localize "AIIMG.Config.Resolution"}}</dt><dd>{{cfg.width}}×{{cfg.height}}</dd>
+    <dt>{{localize "AIIMG.Config.Refs"}}</dt><dd>{{cfg.refs.length}}</dd>
+  </dl>
+
+  {{#if error}}<p class="aiimg-error"><i class="fa-solid fa-circle-xmark"></i> {{error}}</p>{{/if}}
+
+  <footer class="aiimg-footer">
+    <button type="button" data-action="runFast" class="{{#if fastDefault}}primary{{/if}}" {{#if busy}}disabled{{/if}}>
+      <i class="fa-solid {{#if busyFast}}fa-spinner fa-spin{{else}}fa-bolt{{/if}}"></i> {{localize "AIIMG.Fast"}}
+    </button>
+    <span {{#unless canBatch}}data-tooltip="AIIMG.Gen.NoBatchTip"{{/unless}}>
+      <button type="button" data-action="runBatch" class="{{#if batchDefault}}primary{{/if}}" {{#if batchDisabled}}disabled{{/if}}>
+        <i class="fa-solid {{#if busyBatch}}fa-spinner fa-spin{{else}}fa-layer-group{{/if}}"></i> {{localize "AIIMG.Batch"}}
+      </button>
+    </span>
+  </footer>
+</section>
