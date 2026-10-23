@@ -1,0 +1,93 @@
+<section class="aiimg-layout">
+  <nav class="aiimg-types">
+    <div class="aiimg-filters">
+      {{#each filters}}
+      <button type="button" data-action="filter" data-group="{{id}}" class="{{#if active}}active{{/if}}">{{label}}</button>
+      {{/each}}
+    </div>
+    <ul>
+      {{#each types}}
+      <li>
+        <button type="button" data-action="selectType" data-key="{{key}}" class="{{#if active}}active{{/if}}">
+          <span class="aiimg-type-label">{{label}}</span>
+          <small>{{group}}</small>
+          {{#if configured}}<i class="fa-solid fa-check" data-tooltip="AIIMG.Config.Configured"></i>{{/if}}
+        </button>
+      </li>
+      {{/each}}
+    </ul>
+    <div class="aiimg-usage">
+      <i class="fa-solid fa-coins"></i>
+      {{localize "AIIMG.Config.Usage"}}: {{usage.day}} / {{usage.month}} USD
+    </div>
+  </nav>
+
+  <form class="aiimg-form" autocomplete="off" onsubmit="return false">
+    {{#if selected}}
+    <h2>{{selected.label}} <small>{{selected.group}}</small></h2>
+
+    <div class="form-group">
+      <label>{{localize "AIIMG.Config.Provider"}}</label>
+      <select name="provider" {{#unless isGM}}disabled{{/unless}}>
+        {{#each providerList}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>{{localize "AIIMG.Config.Model"}}</label>
+      <select name="model" {{#unless isGM}}disabled{{/unless}}>
+        {{#each models}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>{{localize "AIIMG.Config.Resolution"}}</label>
+      <select name="size">
+        {{#each sizes}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+        <option value="custom" {{#if customSize}}selected{{/if}}>{{localize "AIIMG.Config.Custom"}}</option>
+      </select>
+      {{#if customSize}}
+      <input type="number" name="width" value="{{cfg.width}}" min="64" max="4096" step="64">
+      <span>×</span>
+      <input type="number" name="height" value="{{cfg.height}}" min="64" max="4096" step="64">
+      {{/if}}
+    </div>
+
+    <div class="form-group stacked">
+      <label>{{localize "AIIMG.Config.Prompt"}}</label>
+      <textarea name="promptTemplate" rows="5">{{cfg.promptTemplate}}</textarea>
+      <p class="hint">{{localize "AIIMG.Config.PromptHint"}}</p>
+    </div>
+
+    <div class="form-group stacked">
+      <label>{{localize "AIIMG.Config.Refs"}}</label>
+      <div class="aiimg-refs">
+        {{#each refs}}
+        <figure>
+          <img src="{{path}}" alt="">
+          <button type="button" data-action="removeRef" data-index="{{index}}" data-tooltip="AIIMG.Config.RemoveRef"><i class="fa-solid fa-xmark"></i></button>
+        </figure>
+        {{/each}}
+        <button type="button" class="aiimg-add" data-action="addRef" data-tooltip="AIIMG.Config.AddRef"><i class="fa-solid fa-plus"></i></button>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>{{localize "AIIMG.Config.Mode"}}</label>
+      <div class="aiimg-mode">
+        <label><input type="radio" name="defaultMode" value="fast" {{#if isFast}}checked{{/if}}> {{localize "AIIMG.Fast"}}</label>
+        <label><input type="radio" name="defaultMode" value="batch" {{#if isBatch}}checked{{/if}}> {{localize "AIIMG.Batch"}}</label>
+      </div>
+    </div>
+    {{#unless supportsBatch}}<p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Config.NoBatch"}}</p>{{/unless}}
+    {{#if batchWarn}}<p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Config.BatchFallback"}}</p>{{/if}}
+
+    {{#if isGM}}
+    <footer class="aiimg-footer">
+      <button type="button" data-action="reset"><i class="fa-solid fa-rotate-left"></i> {{localize "AIIMG.Config.Reset"}}</button>
+      <button type="button" data-action="save" class="primary"><i class="fa-solid fa-floppy-disk"></i> {{localize "AIIMG.Config.Save"}}</button>
+    </footer>
+    {{/if}}
+    {{/if}}
+  </form>
+</section>
