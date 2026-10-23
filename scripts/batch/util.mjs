@@ -1,4 +1,5 @@
 // Wspólne helpery batcha (przeglądarka).
+import { errorText } from "../providers/util.mjs";
 export const UPLOAD_TIMEOUT_MS = 120_000;
 export const DOWNLOAD_TIMEOUT_MS = 120_000;
 /** Maks. czas bez nowych danych przy strumieniowym pobieraniu wyników. */
@@ -14,7 +15,7 @@ export class HttpError extends Error {
 }
 
 export async function readError(res) {
-  try { return (await res.text()).slice(0, 500); } catch { return ""; }
+  try { return errorText(await res.text()); } catch { return ""; }
 }
 
 export function jsonl(rows) {

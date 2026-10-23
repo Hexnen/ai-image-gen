@@ -51,11 +51,29 @@ export function normalizeError(e) {
   return e;
 }
 
-/** Błąd HTTP z początkiem body (zamaskowane klucze). */
+/**
+ * Treść błędu dostawcy do pokazania człowiekowi: z JSON-a bierze `error.message` (OpenAI, OpenRouter, Gemini —
+ * także w tablicy, jak w Interactions API), dodając kod/status gdy jest; inaczej początek surowego body.
+ */
+export function errorText(detail, max = 500) {
+  const raw = String(detail ?? "").trim();
+  try {
+    const j = JSON.parse(raw);
+    const err = (Array.isArray(j) ? j[0] : j)?.error ?? (Array.isArray(j) ? j[0] : j)?.detail ?? j;
+    const msg = typeof err === "string" ? err : err?.message;
+    if (typeof msg === "string" && msg.trim()) {
+      const tag = err?.status || err?.type || err?.code;
+      return (tag && typeof tag === "string" ? `${msg.trim()} [${tag}]` : msg.trim()).slice(0, max);
+    }
+  } catch { /* nie JSON */ }
+  return raw.slice(0, max);
+}
+
+/** Błąd HTTP z czytelnym komunikatem dostawcy (zamaskowane klucze). */
 export async function httpError(label, res) {
   let detail = "";
   try { detail = await res.text(); } catch { /* brak treści */ }
-  const e = new Error(redact(`${label} HTTP ${res.status}: ${detail.slice(0, 500)}`));
+  const e = new Error(redact(`${label} HTTP ${res.status}: ${errorText(detail)}`));
   e.status = res.status;
   return e;
 }
