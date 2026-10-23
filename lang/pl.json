@@ -173,6 +173,7 @@
   "AIIMG.Pick.Cancel": "Anuluj",
   "AIIMG.Pick.CloseTitle": "Niezapisane wersje",
   "AIIMG.Pick.CloseBody": "{n} wygenerowanych wersji nie jest jeszcze zapisanych. Zapisać je (bez podpinania) czy odrzucić?",
+  "AIIMG.Pick.CloseBodyHandoff": "{n} wygenerowanych wersji nie zostało jeszcze wybranych. Odrzucić je? (Kliknij „Użyj tej” przy jednej, żeby ją zachować.)",
   "AIIMG.Pick.DiskNote": "Foundry nie pozwala modułom kasować plików, więc niewybrane wersje zostają w:",
   "AIIMG.Pick.DiscardedDisk": "Batch zamknięty. Obrazy zostają w {folder}; usuń ten folder w przeglądarce plików, jeśli ich nie potrzebujesz.",
   "AIIMG.Pick.NothingToPick": "W tym batchu nie ma już nic do wyboru.",

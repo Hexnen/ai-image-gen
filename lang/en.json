@@ -173,6 +173,7 @@
   "AIIMG.Pick.Cancel": "Cancel",
   "AIIMG.Pick.CloseTitle": "Unsaved versions",
   "AIIMG.Pick.CloseBody": "{n} generated versions are not saved yet. Save them (without applying) or discard them?",
+  "AIIMG.Pick.CloseBodyHandoff": "{n} generated versions have not been chosen yet. Discard them? (Click \"Use this\" on one to keep it.)",
   "AIIMG.Pick.DiskNote": "Foundry does not let modules delete files, so the versions you do not choose stay in:",
   "AIIMG.Pick.DiscardedDisk": "Batch closed. The images remain in {folder}; delete that folder in the file browser if you do not need them.",
   "AIIMG.Pick.NothingToPick": "This batch has nothing left to choose from.",

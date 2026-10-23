@@ -52,6 +52,8 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   #decided = false;
+  /** Handoff mode: the caller was already told the outcome (picked or cancelled): never answer twice. */
+  #resolved = false;
   #busy = false;
   #keep = false;
   #nextIndex = 0;
@@ -145,20 +147,18 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
       ui.notifications.warn(t("AIIMG.Pick.BusyClose"));
       return this;
     }
-    if (this.commitFn && !this.#decided) {
-      // Closed without choosing: the caller that asked for the image is told it was cancelled.
-      this.#decided = true;
-      this.onCancel?.();
-    }
     if (this.source === "memory" && !this.#decided && this.cands.length && !options.force) {
+      // Handoff (another module asked for ONE image): saving "all" makes no sense, only discard or keep choosing.
+      const handoff = !!this.commitFn;
+      const buttons = [
+        ...(handoff ? [] : [{ action: "save", label: t("AIIMG.Pick.SaveAll"), icon: "fa-solid fa-floppy-disk" }]),
+        { action: "discard", label: t("AIIMG.Pick.DiscardAll"), icon: "fa-solid fa-trash", default: true },
+        { action: "cancel", label: t("AIIMG.Pick.Cancel"), icon: "fa-solid fa-xmark" }
+      ];
       const choice = await DialogV2.wait({
         window: { title: t("AIIMG.Pick.CloseTitle"), icon: "fa-solid fa-floppy-disk" },
-        content: `<p>${t("AIIMG.Pick.CloseBody", { n: this.cands.length })}</p>`,
-        buttons: [
-          { action: "save", label: t("AIIMG.Pick.SaveAll"), icon: "fa-solid fa-floppy-disk" },
-          { action: "discard", label: t("AIIMG.Pick.DiscardAll"), icon: "fa-solid fa-trash", default: true },
-          { action: "cancel", label: t("AIIMG.Pick.Cancel"), icon: "fa-solid fa-xmark" }
-        ],
+        content: `<p>${t(handoff ? "AIIMG.Pick.CloseBodyHandoff" : "AIIMG.Pick.CloseBody", { n: this.cands.length })}</p>`,
+        buttons,
         rejectClose: false
       });
       if (!choice || choice === "cancel") return this;
@@ -168,6 +168,8 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
       }
       this.#decided = true;
     }
+    // Only now (after the user confirmed discarding) the caller that asked for the image hears "cancelled".
+    if (this.commitFn && !this.#resolved) { this.#resolved = true; this.onCancel?.(); }
     return super.close(options);
   }
 
@@ -202,6 +204,7 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
         const path = await this.commitFn(chosen);
         const others = this.#keep ? await this.#saveCandidates(this.cands.filter((c) => c !== chosen), { apply: false }) : [];
         this.#decided = true;
+        this.#resolved = true;
         this.onPicked?.({ path, others, candidate: chosen });
         return this.close({ force: true });
       }
@@ -238,9 +241,8 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
       await this.#finishBatch({ status: "done", picked: null, discarded: true });
       ui.notifications.info(t("AIIMG.Pick.DiscardedDisk", { folder: `ai-image-gen/_candidates/${this.batchId}` }));
     }
-    if (this.commitFn && !this.#decided) { this.#decided = true; this.onCancel?.(); }
     this.#decided = true;
-    return this.close({ force: true });
+    return this.close({ force: true }); // close() tells the handoff caller "cancelled" (once)
   }
 
   static async #onRegenerate() {
