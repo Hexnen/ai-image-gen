@@ -566,6 +566,13 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   static #onFilter(event, target) {
     this.groupFilter = target.dataset.group;
+    // Keep the editor in step with the list: if the open type is filtered out, open the first visible one.
+    const visible = detectImageTypes().filter((t) => this.groupFilter === "all" || t.group === this.groupFilter);
+    if (visible.length && !visible.some((t) => t.key === this.selectedKey)) {
+      this.selectedKey = visible[0].key;
+      this.draft = null;
+      this.sizeNote = null;
+    }
     this.render();
   }
 
