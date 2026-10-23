@@ -8,8 +8,11 @@ export const DEFAULT_CONFIG = Object.freeze({
   height: 1024,
   promptTemplate: "{description}",
   refs: [],
-  defaultMode: "fast"
+  defaultMode: "fast",
+  quality: "medium"
 });
+
+export const QUALITIES = ["low", "medium", "high", "auto"];
 
 export const SIZE_PRESETS = [
   { id: "1024x1024", width: 1024, height: 1024 },
@@ -30,6 +33,7 @@ export const isConfigured = (key) => sk(key) in all();
 export function getConfig(key) {
   const saved = all()[sk(key)] ?? {};
   const cfg = { ...DEFAULT_CONFIG, ...saved, refs: [...(saved.refs ?? [])] };
+  if (!QUALITIES.includes(cfg.quality)) cfg.quality = DEFAULT_CONFIG.quality; // old saves lack it
   // Heal a model that no longer belongs to the provider.
   const models = providers.listModels(cfg.provider);
   if (models.length && !models.some((m) => m.id === cfg.model)) cfg.model = models[0].id;
@@ -53,8 +57,10 @@ export async function setConfig(key, data) {
     height: clampSize(data.height, DEFAULT_CONFIG.height),
     promptTemplate: String(data.promptTemplate ?? DEFAULT_CONFIG.promptTemplate),
     refs: (data.refs ?? []).filter(Boolean).map(String),
-    defaultMode: data.defaultMode === "batch" ? "batch" : "fast"
+    defaultMode: data.defaultMode === "batch" ? "batch" : "fast",
+    quality: QUALITIES.includes(data.quality) ? data.quality : DEFAULT_CONFIG.quality
   };
+  if (!providers.PROVIDERS[clean.provider]?.supportsBatch) clean.defaultMode = "fast";
   await game.settings.set(MODULE_ID, "imageTypes", { ...all(), [sk(key)]: clean });
   return clean;
 }

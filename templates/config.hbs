@@ -53,6 +53,15 @@
       {{/if}}
     </div>
 
+    {{#if isOpenAI}}
+    <div class="form-group">
+      <label>{{localize "AIIMG.Config.Quality"}}</label>
+      <select name="quality" {{#unless isGM}}disabled{{/unless}}>
+        {{#each qualities}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+      </select>
+    </div>
+    {{/if}}
+
     <div class="form-group stacked">
       <label>{{localize "AIIMG.Config.Prompt"}}</label>
       <textarea name="promptTemplate" rows="5">{{cfg.promptTemplate}}</textarea>
@@ -76,7 +85,7 @@
       <label>{{localize "AIIMG.Config.Mode"}}</label>
       <div class="aiimg-mode">
         <label><input type="radio" name="defaultMode" value="fast" {{#if isFast}}checked{{/if}}> {{localize "AIIMG.Fast"}}</label>
-        <label><input type="radio" name="defaultMode" value="batch" {{#if isBatch}}checked{{/if}}> {{localize "AIIMG.Batch"}}</label>
+        <label {{#unless supportsBatch}}class="disabled" data-tooltip="AIIMG.Config.NoBatch"{{/unless}}><input type="radio" name="defaultMode" value="batch" {{#if isBatch}}checked{{/if}} {{#unless supportsBatch}}disabled{{/unless}}> {{localize "AIIMG.Batch"}}</label>
       </div>
     </div>
     {{#unless supportsBatch}}<p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Config.NoBatch"}}</p>{{/unless}}

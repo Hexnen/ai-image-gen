@@ -1,6 +1,6 @@
 import { MODULE_ID } from "./constants.mjs";
 import { detectImageTypes } from "./image-types.mjs";
-import { getConfig, setConfig, resetConfig, isConfigured, SIZE_PRESETS } from "./config-store.mjs";
+import { getConfig, setConfig, resetConfig, isConfigured, SIZE_PRESETS, QUALITIES } from "./config-store.mjs";
 import * as providers from "./providers/index.mjs";
 import { getUsage } from "./limits.mjs";
 
@@ -80,6 +80,10 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       isFast: cfg.defaultMode === "fast",
       isBatch: cfg.defaultMode === "batch",
       supportsBatch,
+      isOpenAI: cfg.provider === "openai",
+      qualities: QUALITIES.map((q) => ({
+        id: q, selected: q === cfg.quality, label: game.i18n.localize(`AIIMG.Quality.${q}`)
+      })),
       batchWarn: cfg.defaultMode === "batch" && !supportsBatch,
       refs: cfg.refs.map((path, index) => ({ path, index })),
       usage: { day: usage.day.toFixed(2), month: usage.month.toFixed(2) },
@@ -97,6 +101,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     d.model = fd.model ?? d.model;
     d.promptTemplate = fd.promptTemplate ?? d.promptTemplate;
     d.defaultMode = fd.defaultMode ?? d.defaultMode;
+    d.quality = fd.quality ?? d.quality;
     if (fd.size && fd.size !== "custom") {
       const [w, h] = fd.size.split("x").map(Number);
       d.width = w;
@@ -115,6 +120,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       this.#readForm();
       const models = providers.listModels(this.draft.provider);
       this.draft.model = models[0]?.id ?? "";
+      if (!providers.PROVIDERS[this.draft.provider]?.supportsBatch) this.draft.defaultMode = "fast";
       this.render();
     });
     // Switching to "custom" must keep the current numbers; switching away applies the preset.

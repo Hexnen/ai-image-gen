@@ -47,3 +47,5 @@
 .aiimg-status-error { color: var(--color-level-error, #e05050); }
 .aiimg-status-pending, .aiimg-status-cancelling { color: var(--color-level-warning, #e0a030); }
 .aiimg-batch-actions button { width: 26px; height: 26px; padding: 0; }
+
+.aiimg-mode label.disabled { opacity: 0.45; cursor: not-allowed; }

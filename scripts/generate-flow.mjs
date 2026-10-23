@@ -74,7 +74,7 @@ export async function runFast(document, description, { signal } = {}) {
   const refs = await loadRefs(cfg.refs);
   const { blob, cost } = await providers.generate({
     provider: cfg.provider, apiKey, model: cfg.model, prompt, refs,
-    width: cfg.width, height: cfg.height, signal
+    width: cfg.width, height: cfg.height, quality: cfg.quality, signal
   });
   await recordCost(cost); // koszt jest realny nawet gdy zapis się nie uda
   const path = await saveImageBlob(blob, meta);
@@ -92,7 +92,7 @@ export async function runBatch(document, description) {
     model: cfg.model,
     items: [{
       id: foundry.utils.randomID(),
-      prompt, refs, width: cfg.width, height: cfg.height,
+      prompt, refs, width: cfg.width, height: cfg.height, quality: cfg.quality,
       target: { uuid: document.uuid, field: FIELD },
       meta
     }]
