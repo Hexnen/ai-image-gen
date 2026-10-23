@@ -4,16 +4,17 @@ import { assertWithinLimits } from "../limits.mjs";
 import { PROVIDERS } from "../providers/index.mjs";
 import { estimateBatchCost } from "./cost.mjs";
 import { newBatchId } from "./util.mjs";
-import { putBatch } from "./record.mjs";
-import { submitOpenAI } from "./openai.mjs";
-import { submitGemini } from "./gemini.mjs";
+import { putBatch, patchBatch, removeBatch } from "./record.mjs";
+import { submitOpenAI, cancelOpenAI } from "./openai.mjs";
+import { submitGemini, cancelGemini } from "./gemini.mjs";
 import { logCall } from "../call-log.mjs";
 
-export { listBatches, getBatch, removeBatch, isActive } from "./record.mjs";
-export { checkBatches, startPoller, stopPoller, cancelBatch, CHECK_EVERY_MS } from "./poller.mjs";
+export { listBatches, getBatch, removeBatch, isActive, pruneBatches } from "./record.mjs";
+export { checkBatches, startPoller, stopPoller, cancelBatch, abandonBatch, CHECK_EVERY_MS } from "./poller.mjs";
 export { estimateBatchCost } from "./cost.mjs";
 
 const SUBMIT = { openai: submitOpenAI, gemini: submitGemini };
+const CANCEL = { openai: cancelOpenAI, gemini: cancelGemini };
 
 /**
  * @param {object} p
@@ -29,6 +30,8 @@ export async function submitBatch({ provider, model, items, pick = false }) {
   }
   if (!items?.length) throw new Error("Batch: brak itemów.");
   if (new Set(items.map((i) => i.id)).size !== items.length) throw new Error("Batch: id itemów muszą być unikalne.");
+  // Id pozycji są kluczami w rekordzie (ustawienie świata rozwija kropki w kluczach) i custom_id u dostawcy.
+  if (items.some((i) => !/^[A-Za-z0-9_-]{1,64}$/.test(String(i.id)))) throw new Error("Batch: id itemów mogą zawierać tylko litery, cyfry, _ i -.");
   const apiKey = getKey(provider);
   if (!apiKey) throw new Error(`Brak klucza API dla ${PROVIDERS[provider].label}.`);
 
@@ -50,28 +53,46 @@ export async function submitBatch({ provider, model, items, pick = false }) {
     throw e;
   }
 
+  // Rekord „submitting" powstaje PRZED wywołaniem dostawcy: jeśli zapis po udanej wysyłce się nie uda
+  // (rozłączenie, uprawnienia), batch nie zostaje płatnym sierotą bez śladu.
+  const id = newBatchId();
+  const rec = {
+    id,
+    provider, model,
+    status: "submitting",
+    createdAt: Date.now(),
+    estimatedCost,
+    // Blobów nie trzymamy w ustawieniach — tylko to, czego potrzebuje ingest.
+    items: items.map(({ id: itemId, target, meta }) => ({ id: itemId, target: { field: "img", ...target }, meta: meta ?? {} })),
+    ...(pick ? { pick: true } : {}),
+  };
+  await putBatch(rec);
+
   const t0 = performance.now();
   let submitted;
   try {
     submitted = await SUBMIT[provider]({ apiKey, model, items });
   } catch (e) {
+    await removeBatch(id).catch(() => {});
     await logItems({ kind: "batch-submit", status: "error", error: e.message, durationMs: performance.now() - t0 }, 0);
     throw e;
   }
-  const { remoteId, endpoint } = submitted;
+  const { remoteId, endpoint, files } = submitted;
 
-  const rec = {
-    id: newBatchId(),
-    provider, model, remoteId, endpoint,
-    status: "pending",
-    createdAt: Date.now(),
-    estimatedCost,
-    // Blobów nie trzymamy w ustawieniach — tylko to, czego potrzebuje ingest.
-    items: items.map(({ id, target, meta }) => ({ id, target: { field: "img", ...target }, meta: meta ?? {} })),
-    ...(pick ? { pick: true } : {}),
-  };
-  const saved = await putBatch(rec);
-  await logItems({ kind: "batch-submit", status: "pending", route: endpoint, batchId: rec.id, durationMs: performance.now() - t0 },
+  let saved;
+  try {
+    saved = await patchBatch(id, { remoteId, endpoint, status: "pending", ...(files?.length ? { files } : {}) });
+    if (!saved) throw new Error("the batch record disappeared");
+  } catch (e) {
+    // Dostawca przyjął zlecenie, a my nie umiemy go zapisać: nie zostawiaj płatnego batcha bez nadzoru.
+    let cancelled = true;
+    try { await CANCEL[provider](apiKey, { remoteId }); } catch { cancelled = false; }
+    await logItems({ kind: "batch-submit", status: "error", route: endpoint, batchId: id, durationMs: performance.now() - t0,
+      error: `Batch ${remoteId} was created at the provider but could not be saved (${e.message}); cancel ${cancelled ? "requested" : "FAILED"}.` }, 0);
+    await removeBatch(id).catch(() => {});
+    throw new Error(`Batch ${remoteId} was created but could not be saved (${e.message}). ${cancelled ? "Cancellation was requested." : "Cancel it manually at the provider."}`);
+  }
+  await logItems({ kind: "batch-submit", status: "pending", route: endpoint, batchId: id, durationMs: performance.now() - t0 },
     estimatedCost / items.length);
   return saved;
 }

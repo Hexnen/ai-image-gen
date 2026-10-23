@@ -1,13 +1,13 @@
 // Gemini Batch Mode (batchGenerateContent + File API). Port z roleplay workshopBatch/gemini.ts.
 // CORS: upload plików idzie JEDNYM żądaniem multipart (X-Goog-Upload-Protocol: multipart),
 // bez resumable — nie czytamy nagłówka x-goog-upload-url.
-import { mimeOf, b64ToBlob, nearestAspect } from "../providers/util.mjs";
+import { mimeOf, nearestAspect } from "../providers/util.mjs";
 import { getModel, fitGeminiSize, fitGeminiThinking } from "../providers/models.mjs";
-import { UPLOAD_TIMEOUT_MS, DOWNLOAD_TIMEOUT_MS, readError, jsonl, parseJsonl, uniqueRefs } from "./util.mjs";
+import { UPLOAD_TIMEOUT_MS, HttpError, readError, jsonl, iterJsonl, openStream, uniqueRefs } from "./util.mjs";
 import { geminiBatchCost } from "./cost.mjs";
-import { patchBatch, markIngested } from "./record.mjs";
-import { applyBatchItem, finishPatch } from "./apply.mjs";
-import { logBatchResult, tokensFrom } from "../call-log.mjs";
+import { patchBatch } from "./record.mjs";
+import { ingestRows, failMissing, finishBatch, expireBatch, withLease } from "./ingest.mjs";
+import { tokensFrom } from "../call-log.mjs";
 
 export const GEMINI_BASE = "https://generativelanguage.googleapis.com";
 const ASPECTS = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"];
@@ -28,7 +28,7 @@ async function uploadFile(apiKey, displayName, blob, mime) {
     body,
     signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`Gemini files upload ${res.status}: ${await readError(res)}`);
+  if (!res.ok) throw new HttpError(`Gemini files upload ${res.status}: ${await readError(res)}`, res.status);
   const file = (await res.json())?.file;
   if (!file?.name || !file?.uri) throw new Error("Gemini files: brak name/uri w odpowiedzi");
   return { name: file.name, uri: file.uri };
@@ -86,73 +86,89 @@ export async function submitGemini({ apiKey, model, items }) {
     body: JSON.stringify({ batch: { display_name: `ai-image-gen-${Date.now()}`, input_config: { file_name: input.name } } }),
     signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`Gemini batch create ${res.status}: ${await readError(res)}`);
+  if (!res.ok) throw new HttpError(`Gemini batch create ${res.status}: ${await readError(res)}`, res.status);
   const name = (await res.json())?.name;
   if (!name) throw new Error("Gemini batch: brak name operacji w odpowiedzi");
   return { remoteId: name, endpoint: "batchGenerateContent" };
 }
 
-async function ingest(apiKey, rec, op) {
-  const done = new Set(rec.ingest?.ids ?? []);
-  const applyFailed = [...(rec.ingest?.failed ?? [])];
-  const out = { applied: done.size - applyFailed.length, failed: [...applyFailed], cost: rec.ingest?.cost ?? 0, candidates: [...(rec.ingest?.candidates ?? [])] };
-  const respFile =
-    op?.response?.responsesFile || op?.response?.responses_file ||
-    op?.metadata?.output?.responsesFile || op?.response?.dest?.fileName || op?.response?.dest?.file_name;
-  if (!respFile) throw new Error(`Gemini batch: brak pliku wyników w operacji (${JSON.stringify(op).slice(0, 300)})`);
-  const dl = await fetch(`${GEMINI_BASE}/download/v1beta/${respFile}:download?alt=media`, {
-    headers: hdr(apiKey), signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-  });
-  if (!dl.ok) throw new Error(`Gemini download ${dl.status}: ${await readError(dl)}`);
-  const byId = new Map(rec.items.map((i) => [i.id, i]));
-  for (const row of parseJsonl(await dl.text())) {
-    const id = String(row?.key ?? row?.metadata?.key ?? "");
-    const item = byId.get(id);
-    if (!item || done.has(id)) continue;
-    if (row?.error) {
-      const error = String(row.error?.message || "błąd batcha");
-      out.failed.push({ id, error });
-      await logBatchResult(rec, id, { ok: false, error });
-      continue;
-    }
-    const resp = row?.response ?? row;
-    const parts = resp?.candidates?.[0]?.content?.parts ?? [];
-    const img = parts.find((p) => p?.inlineData?.data || p?.inline_data?.data);
-    const b64 = img?.inlineData?.data || img?.inline_data?.data;
-    if (!b64) {
-      out.failed.push({ id, error: "brak obrazu w odpowiedzi batcha" });
-      await logBatchResult(rec, id, { ok: false, error: "brak obrazu w odpowiedzi batcha", tokens: tokensFrom(resp) });
-      continue;
-    }
-    const mime = img?.inlineData?.mimeType || img?.inline_data?.mime_type || "image/png";
-    const cost = geminiBatchCost(resp?.usageMetadata ?? resp?.usage_metadata, rec.model);
-    const r = await applyBatchItem(item, b64ToBlob(b64, mime), cost, rec);
-    if (r.candidate && r.ok) out.candidates.push({ id, path: r.path, cost });
-    await logBatchResult(rec, id, { ok: r.ok, error: r.error, cost, tokens: tokensFrom(resp) });
-    out.cost += cost;
-    done.add(id); // przetworzony (koszt już naliczony) — nie powtarzamy po wznowieniu
-    if (!r.ok) { applyFailed.push({ id, error: r.error }); out.failed.push({ id, error: r.error }); }
-    out.applied = done.size - applyFailed.length;
-    if (!(await markIngested(rec.id, done, out.cost, applyFailed, out.candidates))) break;
+// ---------- wyniki ----------
+
+const imageOf = (p) => p?.inlineData ?? p?.inline_data;
+
+/** Wiersz wyniku -> znormalizowany. Ostatni obraz nie będący „thought" (modele z myśleniem mogą zwracać szkice). */
+function resultRow(row, model, stats) {
+  const id = String(row?.key ?? row?.metadata?.key ?? "");
+  if (!id) { stats.skipped = (stats.skipped ?? 0) + 1; return null; }
+  if (row?.error) return { id, error: String(row.error?.message || "batch error"), cost: 0 };
+  const resp = row?.response ?? row;
+  const usage = resp?.usageMetadata ?? resp?.usage_metadata;
+  const cost = geminiBatchCost(usage, model);   // wiersz bez obrazu też został naliczony
+  const parts = resp?.candidates?.[0]?.content?.parts ?? [];
+  const img = [...parts].reverse().find((p) => !p?.thought && imageOf(p)?.data);
+  if (!img) {
+    const why = resp?.promptFeedback?.blockReason
+      ? `blocked (${resp.promptFeedback.blockReason})`
+      : resp?.candidates?.[0]?.finishReason ? `no image (${resp.candidates[0].finishReason})` : "no image in the batch response";
+    return { id, error: why, cost, tokens: tokensFrom(resp) };
   }
-  return out;
+  return { id, b64: imageOf(img).data, mime: imageOf(img).mimeType || imageOf(img).mime_type || "image/png", cost, tokens: tokensFrom(resp) };
 }
+
+async function* geminiRows(apiKey, respFile, model, stats) {
+  const { res, ctrl } = await openStream(`${GEMINI_BASE}/download/v1beta/${respFile}:download?alt=media`, { headers: hdr(apiKey) });
+  if (!res.ok) throw new HttpError(`Gemini download ${res.status}: ${await readError(res)}`, res.status);
+  for await (const row of iterJsonl(res, { stats, ctrl })) {
+    const out = resultRow(row, model, stats);
+    if (out) yield out;
+  }
+}
+
+const isGone = (e) => e?.status === 404 || e?.status === 410;
 
 export async function checkGemini(apiKey, rec) {
   const res = await fetch(`${GEMINI_BASE}/v1beta/${rec.remoteId}`, {
     headers: hdr(apiKey), signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`Gemini batches/get ${res.status}`);
+  if (!res.ok) {
+    if (res.status === 404) {
+      await patchBatch(rec.id, {
+        status: "error", error: "Batch operation not found at Gemini (expired, or the API key belongs to another project).",
+        completedAt: Date.now(), ingest: undefined, lease: undefined,
+      }, { onlyActive: true });
+      return;
+    }
+    throw new HttpError(`Gemini batches/get ${res.status}`, res.status);
+  }
   const op = await res.json();
   const state = String(op?.metadata?.state ?? op?.state ?? "");
   if (state.endsWith("SUCCEEDED")) {
-    const r = await ingest(apiKey, rec, op);
-    await patchBatch(rec.id, finishPatch(rec, r), { onlyActive: true });
+    await withLease(rec.id, async (cur) => {
+      const respFile =
+        op?.response?.responsesFile || op?.response?.responses_file ||
+        op?.metadata?.output?.responsesFile || op?.response?.dest?.fileName || op?.response?.dest?.file_name;
+      if (!respFile) {
+        await expireBatch(cur, "Gemini reported success but returned no results file.");
+        return;
+      }
+      const stats = { skipped: 0 };
+      let st;
+      try {
+        st = await ingestRows(cur, geminiRows(apiKey, respFile, cur.model, stats));
+      } catch (e) {
+        if (isGone(e)) { await expireBatch(cur, "Batch results expired at Gemini (result files are kept for a limited time)."); return; }
+        throw e;   // błąd przejściowy: rekord zostaje pending, marker zachowuje postęp
+      }
+      if (st.lost) return;
+      await failMissing(cur, st, `${stats.skipped} unreadable lines`);
+      if (st.lost || st.incomplete) return;
+      await finishBatch(cur, st, { terminalStatus: "done" });
+    });
   } else if (/FAILED|CANCELLED|EXPIRED/.test(state)) {
     await patchBatch(rec.id, {
       status: state.endsWith("CANCELLED") ? "cancelled" : "error",
       error: String(op?.error?.message || state),
-      completedAt: Date.now(), ingest: undefined,
+      completedAt: Date.now(), ingest: undefined, lease: undefined,
     }, { onlyActive: true });
   }
   // PENDING / RUNNING → czekamy dalej.
@@ -162,5 +178,5 @@ export async function cancelGemini(apiKey, rec) {
   const res = await fetch(`${GEMINI_BASE}/v1beta/${rec.remoteId}:cancel`, {
     method: "POST", headers: hdr(apiKey), signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`Gemini cancel ${res.status}: ${await readError(res)}`);
+  if (!res.ok) throw new HttpError(`Gemini cancel ${res.status}: ${await readError(res)}`, res.status);
 }
