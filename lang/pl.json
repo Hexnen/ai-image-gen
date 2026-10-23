@@ -170,5 +170,14 @@
   "AIIMG.Config.UploadFailed": "Nie udało się wgrać referencji: {error}",
   "AIIMG.Gen.SaveRef": "Zapisz jako stałą referencję tego typu",
   "AIIMG.Gen.RefsSaved": "Zapisano {n} obraz(ów) referencyjnych w konfiguracji tego typu.",
-  "AIIMG.Gen.RefsSaveFailed": "Nie udało się zapisać referencji: {error}"
+  "AIIMG.Gen.RefsSaveFailed": "Nie udało się zapisać referencji: {error}",
+  "AIIMG.Gen.FinalPrompt": "Finalny prompt",
+  "AIIMG.Gen.PromptChars": "{n} znaków",
+  "AIIMG.Gen.EmptyPrompt": "Pusty prompt: nic nie zostanie wysłane.",
+  "AIIMG.Gen.PromptTplConfig": "Szablon z konfiguracji tego typu",
+  "AIIMG.Gen.PromptTplDefault": "Szablon domyślny (typ nieskonfigurowany)",
+  "AIIMG.Gen.PromptRefs": "refs: {n} obrazów wysyłanych osobno",
+  "AIIMG.Gen.Copy": "Kopiuj",
+  "AIIMG.Gen.PromptCopied": "Prompt skopiowany.",
+  "AIIMG.Gen.PromptCopyFailed": "Nie udało się skopiować promptu."
 }

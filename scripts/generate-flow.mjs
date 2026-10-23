@@ -51,15 +51,20 @@ export function readiness(document) {
   };
 }
 
+/** The exact prompt text sent to the provider. The dialog preview uses this same function. */
+export function buildPrompt(document, description, cfg = getConfig(resolveTypeKey(document))) {
+  return renderPrompt(cfg.promptTemplate, {
+    description: (description ?? "").trim(),
+    name: document.name ?? "",
+    type: document.type ?? document.documentName
+  });
+}
+
 function describe(document, description) {
   const key = resolveTypeKey(document);
   if (!key) throw new Error("Unsupported document.");
   const cfg = getConfig(key);
-  const prompt = renderPrompt(cfg.promptTemplate, {
-    description: description.trim(),
-    name: document.name ?? "",
-    type: document.type ?? document.documentName
-  });
+  const prompt = buildPrompt(document, description, cfg);
   const meta = {
     system: document.documentName === "Macro" ? "core" : game.system.id,
     docType: [document.documentName, document.type].filter(Boolean).join("-"),

@@ -170,5 +170,14 @@
   "AIIMG.Config.UploadFailed": "Reference upload failed: {error}",
   "AIIMG.Gen.SaveRef": "Save as a permanent reference of this type",
   "AIIMG.Gen.RefsSaved": "Saved {n} reference image(s) to this type's configuration.",
-  "AIIMG.Gen.RefsSaveFailed": "Could not save the references: {error}"
+  "AIIMG.Gen.RefsSaveFailed": "Could not save the references: {error}",
+  "AIIMG.Gen.FinalPrompt": "Final prompt",
+  "AIIMG.Gen.PromptChars": "{n} characters",
+  "AIIMG.Gen.EmptyPrompt": "Empty prompt: nothing would be sent.",
+  "AIIMG.Gen.PromptTplConfig": "Template from this type's configuration",
+  "AIIMG.Gen.PromptTplDefault": "Default template (type not configured)",
+  "AIIMG.Gen.PromptRefs": "refs: {n} images sent separately",
+  "AIIMG.Gen.Copy": "Copy",
+  "AIIMG.Gen.PromptCopied": "Prompt copied.",
+  "AIIMG.Gen.PromptCopyFailed": "Could not copy the prompt."
 }

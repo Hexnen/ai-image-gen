@@ -1,6 +1,6 @@
 import { MODULE_ID } from "./constants.mjs";
 import {
-  readiness, runFast, runBatch, generateCandidates, estimateTotal, MAX_VERSIONS, MAX_EXTRA_REF_BYTES
+  readiness, runFast, runBatch, generateCandidates, estimateTotal, buildPrompt, MAX_VERSIONS, MAX_EXTRA_REF_BYTES
 } from "./generate-flow.mjs";
 import { ImageConfigApp } from "./config-app.mjs";
 import { PickApp } from "./pick-app.mjs";
@@ -15,7 +15,7 @@ const loadPrefs = () => {
   try { return JSON.parse(localStorage.getItem(PREFS_KEY)) ?? {}; } catch { return {}; }
 };
 const savePrefs = (p) => {
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch { /* storage unavailable */ }
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify({ ...loadPrefs(), ...p })); } catch { /* storage unavailable */ }
 };
 
 const money = (v) => (v > 0 ? `~$${v.toFixed(v < 0.1 ? 3 : 2)}` : "?");
@@ -63,6 +63,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     const prefs = loadPrefs();
     this.count = Math.min(MAX_VERSIONS, Math.max(1, Math.floor(Number(prefs.count)) || 1));
     this.preview = !!prefs.preview;
+    this.promptOpen = !!prefs.promptOpen;
     this.saveRef = false;
   }
 
@@ -75,8 +76,15 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     const refsTotal = (r.cfg.refs?.length ?? 0) + this.extraRefs.length;
     const fast = estimateTotal(this.document, { count: this.count, extraRefs: this.extraRefs.length, mode: "fast" });
     const batch = estimateTotal(this.document, { count: this.count, extraRefs: this.extraRefs.length, mode: "batch" });
+    const prompt = buildPrompt(this.document, this.description, r.cfg);
     return {
       description: this.description,
+      prompt,
+      promptChars: prompt.length,
+      promptEmpty: !prompt.trim(),
+      promptOpen: this.promptOpen,
+      promptFromConfig: r.configured,
+      refsExtraSeparate: refsTotal,
       cfg: r.cfg,
       providerLabel: r.providerLabel,
       modelLabel: r.modelLabel,
@@ -145,7 +153,18 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     super._onRender?.(context, options);
     const el = this.element;
     el.querySelector("textarea[name=description]")
-      ?.addEventListener("input", (ev) => { this.description = ev.target.value; });
+      ?.addEventListener("input", (ev) => { this.description = ev.target.value; this.#refreshPrompt(); });
+    el.querySelector("details.aiimg-prompt")?.addEventListener("toggle", (ev) => {
+      this.promptOpen = ev.target.open;
+      savePrefs({ promptOpen: this.promptOpen });
+    });
+    el.querySelector("[data-action=copyPrompt]")?.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      try {
+        await navigator.clipboard.writeText(this.#currentPrompt());
+        ui.notifications.info(game.i18n.localize("AIIMG.Gen.PromptCopied"));
+      } catch { ui.notifications.warn(game.i18n.localize("AIIMG.Gen.PromptCopyFailed")); }
+    });
     el.querySelector("input[name=count]")?.addEventListener("change", (ev) => {
       this.count = Math.min(MAX_VERSIONS, Math.max(1, Math.floor(Number(ev.target.value)) || 1));
       savePrefs({ count: this.count, preview: this.preview });
@@ -160,6 +179,22 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       this.#addFiles([...ev.target.files]);
       ev.target.value = "";
     });
+  }
+
+  #currentPrompt() {
+    return buildPrompt(this.document, this.description, readiness(this.document).cfg);
+  }
+
+  /** Update the Final prompt block in place (no re-render: keeps focus, caret and uploaded refs). */
+  #refreshPrompt() {
+    const el = this.element;
+    const pre = el?.querySelector(".aiimg-prompt-text");
+    if (!pre) return;
+    const prompt = this.#currentPrompt();
+    pre.textContent = prompt;
+    const chars = el.querySelector(".aiimg-prompt-chars");
+    if (chars) chars.textContent = game.i18n.format("AIIMG.Gen.PromptChars", { n: prompt.length });
+    el.querySelector(".aiimg-prompt-empty")?.toggleAttribute("hidden", !!prompt.trim());
   }
 
   #addFiles(files) {
