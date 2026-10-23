@@ -44,6 +44,12 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
   /** Unsaved edits for the selected type; discarded on type switch. */
   draft = null;
 
+  /** Closing without Save discards the draft (the window is a singleton and would otherwise keep it). */
+  _onClose(options) {
+    this.draft = null;
+    return super._onClose?.(options);
+  }
+
   async _prepareContext() {
     const types = detectImageTypes();
     if (!this.selectedKey || !types.some((t) => t.key === this.selectedKey)) {
