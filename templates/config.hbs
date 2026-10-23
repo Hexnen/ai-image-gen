@@ -116,6 +116,67 @@
     {{#unless supportsBatch}}<p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Config.NoBatch"}}</p>{{/unless}}
     {{#if batchWarn}}<p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Config.BatchFallback"}}</p>{{/if}}
 
+    {{#if test}}
+    <details class="aiimg-test" {{#if test.open}}open{{/if}}>
+      <summary><i class="fa-solid fa-flask"></i> {{localize "AIIMG.Test.Title"}}</summary>
+      <p class="hint">{{localize "AIIMG.Test.Hint"}}</p>
+
+      <div class="form-group stacked">
+        <label>{{localize "AIIMG.Test.Description"}}</label>
+        <textarea name="testDescription" rows="2" placeholder="{{localize 'AIIMG.Test.DescriptionPlaceholder'}}">{{test.description}}</textarea>
+      </div>
+      <div class="aiimg-test-row">
+        <label>{{localize "AIIMG.Test.Name"}} <input type="text" name="testName" value="{{test.name}}"></label>
+        <label>{{localize "AIIMG.Test.Type"}} <input type="text" name="testType" value="{{test.type}}"></label>
+        <label>{{localize "AIIMG.Test.Versions"}}
+          <select name="testCount">{{#each test.counts}}<option value="{{value}}" {{#if selected}}selected{{/if}}>{{value}}</option>{{/each}}</select>
+        </label>
+      </div>
+
+      <div class="aiimg-prompt-meta">
+        <strong>{{localize "AIIMG.Test.Prompt"}}</strong>
+        <span><span data-role="testChars">{{test.chars}}</span> · <span data-role="testRefs">{{test.refs}}</span></span>
+      </div>
+      <pre class="aiimg-prompt-text" data-role="testPrompt">{{test.prompt}}</pre>
+      <p class="aiimg-warn" data-role="testEmpty" {{#unless test.empty}}hidden{{/unless}}><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Test.Empty"}}</p>
+
+      {{#unless test.hasKey}}
+      <p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Test.NoKey"}} <a data-action="openSettings">{{localize "AIIMG.Test.OpenSettings"}}</a></p>
+      {{/unless}}
+
+      <div class="aiimg-test-actions">
+        <span class="hint" data-role="testEstimate">{{test.estimate}}</span>
+        <button type="button" data-action="runTest" {{#unless test.hasKey}}disabled{{/unless}} {{#if test.running}}disabled{{/if}}>
+          {{#if test.running}}<i class="fa-solid fa-spinner fa-spin"></i> {{localize "AIIMG.Test.Running"}}{{else}}<i class="fa-solid fa-flask"></i> {{localize "AIIMG.Test.Generate"}}{{/if}}
+        </button>
+      </div>
+
+      {{#if test.results.length}}
+      <h4>{{localize "AIIMG.Test.Results"}}</h4>
+      <div class="aiimg-test-results">
+        {{#each test.results}}
+        <figure>
+          <button type="button" class="aiimg-test-thumb" data-action="zoomTest" data-index="{{index}}" data-tooltip="AIIMG.Test.Zoom"><img src="{{url}}" alt=""></button>
+          <figcaption><span>{{cost}}</span><button type="button" data-action="saveTest" data-index="{{index}}"><i class="fa-solid fa-floppy-disk"></i> {{localize "AIIMG.Test.SaveExample"}}</button></figcaption>
+        </figure>
+        {{/each}}
+      </div>
+      {{/if}}
+
+      {{#if test.history.length}}
+      <h4>{{localize "AIIMG.Test.History"}}</h4>
+      <p class="hint">{{localize "AIIMG.Test.HistoryHint"}}</p>
+      <ul class="aiimg-test-history">
+        {{#each test.history}}
+        <li><button type="button" data-action="loadTry" data-id="{{id}}" class="{{#if active}}active{{/if}}">
+          <img src="{{thumb}}" alt=""><span class="text">{{text}}</span><small>{{cost}} · {{seconds}}</small>
+        </button></li>
+        {{/each}}
+      </ul>
+      {{/if}}
+    </details>
+    {{/if}}
+
     {{#if isGM}}
     <footer class="aiimg-footer">
       <button type="button" data-action="reset"><i class="fa-solid fa-rotate-left"></i> {{localize "AIIMG.Config.Reset"}}</button>

@@ -5,7 +5,7 @@ import { readLog, clearLog, toCSV, toJSON } from "./call-log.mjs";
 const { ApplicationV2, HandlebarsApplicationMixin, DialogV2 } = foundry.applications.api;
 
 const MAX_ROWS = 500;
-const KINDS = ["fast", "batch-submit", "batch-result", "limit-blocked"];
+const KINDS = ["fast", "test", "batch-submit", "batch-result", "limit-blocked"];
 const STATUSES = ["ok", "error", "blocked", "pending"];
 
 const loc = (key) => (game.i18n.has(key) ? game.i18n.localize(key) : key.split(".").pop());

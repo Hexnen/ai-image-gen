@@ -115,3 +115,26 @@
 .aiimg-prompt-text { margin: 6px 0; padding: 6px 8px; max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: rgba(0,0,0,.25); border-radius: 3px; font-size: var(--font-size-12); user-select: text; }
 .aiimg-prompt-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: var(--font-size-12); opacity: .85; }
 .aiimg-prompt-meta button { flex: 0 0 auto; width: auto; }
+
+/* Test drawer (config window) */
+.aiimg-test { margin: 12px 0; border: 1px solid var(--color-border-light-tertiary, #555); border-radius: 4px; padding: 4px 10px 8px; }
+.aiimg-test > summary { cursor: pointer; font-weight: 600; }
+.aiimg-test .aiimg-test-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+.aiimg-test .aiimg-test-row label { display: flex; flex-direction: column; gap: 2px; flex: 1 1 140px; font-size: var(--font-size-12); }
+.aiimg-test .aiimg-test-row label:last-child { flex: 0 0 90px; }
+.aiimg-test .aiimg-test-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; }
+.aiimg-test .aiimg-test-actions button { width: auto; flex: 0 0 auto; padding: 4px 12px; }
+.aiimg-test .aiimg-warn a { cursor: pointer; text-decoration: underline; }
+.aiimg-test h4 { margin: 10px 0 4px; }
+.aiimg-test-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.aiimg-test-results figure { margin: 0; display: flex; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid var(--color-border-dark-4, #333); border-radius: 6px; background: rgba(0, 0, 0, .25); }
+.aiimg-test-thumb { display: block; width: 100%; height: auto; min-height: 0; padding: 0; margin: 0; line-height: 0; border: 0; background: rgba(0, 0, 0, .35); aspect-ratio: 1; cursor: zoom-in; overflow: hidden; border-radius: 4px; }
+.aiimg-test-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; border: 0; }
+.aiimg-test-results figcaption { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: var(--font-size-12); }
+.aiimg-test-results figcaption button { width: auto; flex: 0 0 auto; padding: 2px 8px; }
+.aiimg-test-history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.aiimg-test-history button { display: flex; align-items: center; gap: 8px; width: 100%; height: auto; min-height: 0; padding: 3px 6px; text-align: left; line-height: 1.2; }
+.aiimg-test-history button.active { border-color: var(--color-warm-2, #c9593f); }
+.aiimg-test-history img { width: 32px; height: 32px; object-fit: cover; border: 0; border-radius: 3px; flex: 0 0 32px; }
+.aiimg-test-history .text { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aiimg-test-history small { flex: 0 0 auto; opacity: .75; }

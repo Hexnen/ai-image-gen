@@ -1,7 +1,7 @@
 // Logika generacji dla jednego dokumentu (Fast i Batch), bez UI.
 import { getKey } from "./settings.mjs";
 import { resolveTypeKey } from "./image-types.mjs";
-import { getConfig, isConfigured, renderPrompt } from "./config-store.mjs";
+import { getConfig, isConfigured, renderPrompt, fitConfig, DEFAULT_CONFIG } from "./config-store.mjs";
 import * as providers from "./providers/index.mjs";
 import { assertWithinLimits, recordCost } from "./limits.mjs";
 import { saveImageBlob, applyImage } from "./save-image.mjs";
@@ -147,10 +147,15 @@ async function pool(count, limit, task) {
  */
 export async function generateCandidates(document, description, { count = 1, extraRefs = [], signal } = {}) {
   const { key, cfg, prompt, meta } = describe(document, description);
+  return executeGeneration({ doc: document, description, key, cfg, prompt, meta, count, extraRefs, signal, runKind: "fast" });
+}
+
+/** Wspólny rdzeń generacji (dokument albo próba z szuflady testu): limity, wywołanie providera, log, koszt. */
+async function executeGeneration({ doc: document, description, key, cfg, prompt, meta, count, extraRefs, signal, runKind }) {
   const ts = new Date().toISOString();
   let refsTotal = (cfg.refs?.length ?? 0) + extraRefs.length;
-  const base = logBase(document, description, key, cfg, prompt, "fast", refsTotal);
-  const preFail = async (e, kind = "fast", status = "error", cost = 0, costKind = "actual") => {
+  const base = logBase(document, description, key, cfg, prompt, runKind, refsTotal);
+  const preFail = async (e, kind = runKind, status = "error", cost = 0, costKind = "actual") => {
     await logCall({ ...base, ts, kind, status, cost, costKind, error: e.message, durationMs: 0 });
     e.aiimgLogged = true;
     return e;
@@ -219,6 +224,37 @@ export async function generateCandidates(document, description, { count = 1, ext
     throw e;
   }
   return { candidates, failed, cost: total, meta, prompt, key };
+}
+
+// ---------- szuflada testu w oknie konfiguracji ----------
+
+const testDoc = ({ name = "", type = "" } = {}) => ({ name, type, documentName: "", uuid: undefined });
+
+/** Prompt próby: ten sam buildPrompt co przy prawdziwej generacji, z niezapisanego szkicu konfiguracji. */
+export function buildTestPrompt(cfg, { description = "", name = "", type = "" } = {}) {
+  return buildPrompt(testDoc({ name, type }), description, cfg);
+}
+
+/** Szkic konfiguracji → pełna konfiguracja dopasowana do możliwości modelu. */
+export function fitTestConfig(draft) {
+  return fitConfig({ ...DEFAULT_CONFIG, ...draft, refs: [...(draft?.refs ?? [])] });
+}
+
+/** Szacowany koszt próby (Fast ×count) — pokazywany przed startem. */
+export function estimateTest(cfg, count = 1) {
+  return estimateFast(cfg, cfg.refs?.length ?? 0) * count;
+}
+
+/**
+ * Próbna generacja ze szkicu: nie dotyka żadnego dokumentu i nic nie zapisuje na dysk. Log: kind "test",
+ * limity i koszt jak przy Fast. @returns jak generateCandidates (kandydaci w pamięci jako Blob).
+ */
+export async function generateTest(draft, key, { description = "", name = "", type = "", count = 1, signal } = {}) {
+  const cfg = fitTestConfig(draft);
+  const doc = testDoc({ name, type });
+  const prompt = buildPrompt(doc, description, cfg);
+  const meta = { system: key?.split(".")[0] ?? "core", docType: "test", name: name || "test", typeKey: key, description: description.trim() };
+  return executeGeneration({ doc, description, key, cfg, prompt, meta, count, extraRefs: [], signal, runKind: "test" });
 }
 
 /** Zapisz kandydata (Blob) do folderu typu; opcjonalnie podepnij pod dokument. @returns {Promise<string>} ścieżka */

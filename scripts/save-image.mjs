@@ -59,6 +59,17 @@ export function refsDirFor(typeKey) {
   return `${MODULE_ID}/_refs/${slug(system, "core")}/${slug(rest.join("-"), "type")}`;
 }
 
+/** Folder for saved test samples of an image type key (`ai-image-gen/_tests/<system>/<type>`). */
+export function testsDirFor(typeKey) {
+  const [system = "core", ...rest] = String(typeKey).split(".");
+  return `${MODULE_ID}/_tests/${slug(system, "core")}/${slug(rest.join("-"), "type")}`;
+}
+
+/** Save one test-drawer result (only on the user's explicit click). @returns {Promise<string>} stored path */
+export function saveTestExample(blob, typeKey, name = "test") {
+  return saveImageBlob(blob, { dir: testsDirFor(typeKey), name });
+}
+
 /**
  * Upload original bytes (no re-encoding) of a reference image to `ai-image-gen/_refs/<system>/<type>/`.
  * Throws for non-images and files over 20 MB.
