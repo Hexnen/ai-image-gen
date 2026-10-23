@@ -9,7 +9,8 @@ import { ImageConfigApp } from "./config-app.mjs";
 import { PickApp } from "./pick-app.mjs";
 import { saveRefFile } from "./save-image.mjs";
 import { resolveTypeKey } from "./image-types.mjs";
-import { getConfig, setConfig, isConfigured, clampCount } from "./config-store.mjs";
+import { getConfig, setConfig, isConfigured, clampCount, fitConfig } from "./config-store.mjs";
+import { supportsTransparent } from "./providers/index.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
@@ -86,6 +87,13 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     this.preview = !!prefs.preview;
     this.promptOpen = !!prefs.promptOpen;
     this.saveRef = false;
+    // One-off override of the type's transparent background; starts from the type's own setting.
+    this.transparent = !!(key && getConfig(key).transparent);
+  }
+
+  /** Overrides sent with this run (only for models that support them). */
+  #overrides(cfg) {
+    return supportsTransparent(cfg.provider, cfg.model) ? { transparent: this.transparent } : undefined;
   }
 
   get title() {
@@ -98,6 +106,8 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     const fastI = estimateTotalInfo(this.document, { count: this.count, extraRefs: this.extraRefs.length, mode: "fast" });
     const batchI = estimateTotalInfo(this.document, { count: this.count, extraRefs: this.extraRefs.length, mode: "batch" });
     const fast = fastI.cost, batch = batchI.cost;
+    const canTransparent = supportsTransparent(r.cfg.provider, r.cfg.model);
+    const effCfg = canTransparent ? fitConfig({ ...r.cfg, transparent: this.transparent }) : r.cfg;
     // One source note when both numbers come from the same place; otherwise each number says its own.
     const showBatch = r.canBatch;
     const sameSource = !showBatch || (fastI.source === batchI.source && fastI.n === batchI.n);
@@ -136,7 +146,9 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       estTag: sameSource ? sourceTag(fastI.source, fastI.n) : "",
       estFastTag: sameSource ? "" : sourceTag(fastI.source, fastI.n),
       estBatchTag: sameSource ? "" : sourceTag(batchI.source, batchI.n),
-      outputSummary: outputSummary(r.cfg),
+      outputSummary: outputSummary(effCfg),
+      canTransparent,
+      transparent: canTransparent && this.transparent,
       maxMb: MAX_EXTRA_REF_BYTES / 1048576,
       canSaveRef: game.user.isGM && !!resolveTypeKey(this.document) && this.extraRefs.length > 0,
       saveRef: this.saveRef
@@ -206,6 +218,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       this.preview = ev.target.checked;
       savePrefs({ count: this.count, preview: this.preview });
     });
+    el.querySelector("input[name=transparent]")?.addEventListener("change", (ev) => { this.transparent = ev.target.checked; this.render(); });
     el.querySelector("input[name=saveRef]")?.addEventListener("change", (ev) => { this.saveRef = ev.target.checked; });
     el.querySelector("input[name=refFiles]")?.addEventListener("change", (ev) => {
       this.#addFiles([...ev.target.files]);
@@ -251,29 +264,30 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     const refs = this.extraRefs.map((r) => r.blob);
     const refsFiles = this.saveRef ? [...refs] : [];
     const count = this.count;
+    const overrides = this.#overrides(readiness(this.document).cfg);
     this.busy = mode;
     await this.render();
     try {
       if (mode === "fast") {
         if (count === 1 && !this.preview) {
           let saved = null;
-          await runFast(this.document, this.description, { extraRefs: refs, onSaved: (st) => { saved = st; } });
+          await runFast(this.document, this.description, { extraRefs: refs, overrides, onSaved: (st) => { saved = st; } });
           ui.notifications.info(saved?.changed
             ? game.i18n.format("AIIMG.Gen.DoneSized", { name: esc(this.document.name), before: fmtBytes(saved.bytesBefore), after: fmtBytes(saved.bytesAfter) })
             : game.i18n.format("AIIMG.Gen.Done", { name: esc(this.document.name) }));
         } else {
           const description = this.description;
-          const res = await generateCandidates(this.document, description, { count, extraRefs: refs });
+          const res = await generateCandidates(this.document, description, { count, extraRefs: refs, overrides });
           if (res.failed.length) {
             ui.notifications.warn(game.i18n.format("AIIMG.Gen.SomeFailed", { failed: res.failed.length, total: count, error: safeMessage(res.failed[0].error) }));
           }
           PickApp.open({
             document: this.document, candidates: res.candidates, meta: res.meta, source: "memory",
-            regenerate: () => generateCandidates(this.document, description, { count, extraRefs: refs })
+            regenerate: () => generateCandidates(this.document, description, { count, extraRefs: refs, overrides })
           });
         }
       } else {
-        await runBatch(this.document, this.description, { count, extraRefs: refs });
+        await runBatch(this.document, this.description, { count, extraRefs: refs, overrides });
         ui.notifications.info(game.i18n.format(count > 1 ? "AIIMG.Gen.QueuedMany" : "AIIMG.Gen.Queued", { name: esc(this.document.name), n: count }));
       }
       savePrefs({ count: this.count, preview: this.preview });

@@ -5,7 +5,7 @@ import {
   UPLOAD_TIMEOUT_MS, HttpError, readError, jsonl, iterJsonl, openStream, uniqueRefs,
 } from "./util.mjs";
 import { openaiBatchCost } from "./cost.mjs";
-import { openaiSizeFor, fitOpenAIQuality } from "../providers/models.mjs";
+import { openaiSizeFor, fitOpenAIQuality, supportsTransparent } from "../providers/models.mjs";
 import { patchBatch } from "./record.mjs";
 import { ingestRows, failMissing, finishBatch, expireBatch, withLease } from "./ingest.mjs";
 import { tokensFrom } from "../call-log.mjs";
@@ -81,6 +81,7 @@ export async function submitOpenAI({ apiKey, model, items }) {
         quality: fitOpenAIQuality(model, it.quality ?? "medium"),
         n: 1,
         output_format: "png",
+        ...(it.transparent && supportsTransparent("openai", model) ? { background: "transparent" } : {}),
       },
     }));
 

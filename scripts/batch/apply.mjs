@@ -24,7 +24,7 @@ export async function applyBatchItem(item, blob, rec, savedPath) {
   try {
     if (!path) {
       // Zapisujemy to, co zapisałby Fast: rozmiar/format z konfiguracji typu (Output).
-      const optimize = outputOptsFromConfig(item.meta?.typeKey ? getConfig(item.meta.typeKey) : {});
+      const optimize = { ...outputOptsFromConfig(item.meta?.typeKey ? getConfig(item.meta.typeKey) : {}), ...(item.meta?.transparent ? { alpha: true } : {}) };
       const r = rec?.pick
         ? await saveImageBlobEx(blob, { name: item.meta?.name ?? item.id, dir: candidateDir(rec.id), optimize })
         : await saveImageBlobEx(blob, {

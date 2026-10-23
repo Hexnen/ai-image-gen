@@ -68,17 +68,19 @@ export const MODELS = {
   openai: [
     {
       id: "gpt-image-2.5-flare", label: "GPT Image 2.5 Flare", note: "fast", // OpenAI's default; default model for new OpenAI types
+      transparent: true, // OpenAI image guide: both 2.5 models take background:"transparent" with output_format png/webp
       family: "gpt-image-2.5", qualities: OPENAI_QUALITIES_25, defaultQuality: "medium",
       customSize: true, presets: PRESETS_25,
     },
     {
       id: "gpt-image-2.5-sunburst", label: "GPT Image 2.5 Sunburst", note: "detailed", // same token cost as Flare, ~50% slower (independent tests)
+      transparent: true, // same as Flare (OpenAI image guide)
       family: "gpt-image-2.5", qualities: OPENAI_QUALITIES_25, defaultQuality: "medium",
       customSize: true, presets: PRESETS_25,
     },
-    { id: "gpt-image-2", label: "GPT Image 2", family: "gpt-image-2", qualities: OPENAI_QUALITIES_OLD, defaultQuality: "medium", customSize: false, presets: PRESETS_3 },
-    { id: "gpt-image-1.5", label: "GPT Image 1.5", family: "gpt-image-1", qualities: OPENAI_QUALITIES_OLD, defaultQuality: "medium", customSize: false, presets: PRESETS_3 },
-    { id: "gpt-image-1", label: "GPT Image 1", family: "gpt-image-1", qualities: OPENAI_QUALITIES_OLD, defaultQuality: "medium", customSize: false, presets: PRESETS_3 },
+    { id: "gpt-image-2", label: "GPT Image 2", transparent: false, /* removed by OpenAI 2026-09-30 (HTTP 400; secondary source APIYI), use 2.5 */ family: "gpt-image-2", qualities: OPENAI_QUALITIES_OLD, defaultQuality: "medium", customSize: false, presets: PRESETS_3 },
+    { id: "gpt-image-1.5", label: "GPT Image 1.5", transparent: true, family: "gpt-image-1", qualities: OPENAI_QUALITIES_OLD, defaultQuality: "medium", customSize: false, presets: PRESETS_3 },
+    { id: "gpt-image-1", label: "GPT Image 1", transparent: true, family: "gpt-image-1", qualities: OPENAI_QUALITIES_OLD, defaultQuality: "medium", customSize: false, presets: PRESETS_3 },
     { id: "gpt-image-1-mini", label: "GPT Image 1 mini", family: "gpt-image-1", qualities: OPENAI_QUALITIES_OLD, defaultQuality: "medium", customSize: false, presets: PRESETS_3 },
   ],
   gemini: [
@@ -133,6 +135,14 @@ export const MODELS = {
 };
 
 export const getModel = (provider, id) => (MODELS[provider] ?? []).find((m) => m.id === id) ?? null;
+
+/**
+ * Does this model take a transparent background? Only models with an explicit `transparent: true` do (OpenAI's image
+ * guide for gpt-image-2.5 sunburst/flare, gpt-image-1/1.5). Everything else is unknown or unsupported and gets no
+ * switch: gpt-image-2 (removed by OpenAI), gpt-image-1-mini (unconfirmed), Gemini (no native alpha, only matting/chroma
+ * key after the fact) and OpenRouter models (the `background` field is not documented there).
+ */
+export const supportsTransparent = (provider, id) => provider === "openai" && getModel("openai", id)?.transparent === true;
 
 /** Pierwszy model providera (domyślny dla nowych konfiguracji). */
 export const defaultModelId = (provider) => MODELS[provider]?.[0]?.id ?? "";

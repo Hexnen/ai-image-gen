@@ -58,6 +58,7 @@ export function outputOptsFromConfig(cfg = {}, kind = "result") {
     maxEdge: Number.isFinite(edge) && edge >= 0 ? edge : DEFAULT_OUTPUT.maxEdge,
     quality: Number.isFinite(q) && q > 0 ? Math.min(1, q) : DEFAULT_OUTPUT.quality,
     format: FORMATS.includes(cfg.outFormat) ? cfg.outFormat : DEFAULT_OUTPUT.format,
+    ...(cfg.transparent ? { alpha: true } : {}),
     kind
   };
 }
@@ -122,6 +123,8 @@ async function builtin(blob, { maxEdge, quality, format }) {
  */
 export async function optimizeForSave(blob, opts = {}) {
   const o = { ...DEFAULT_OUTPUT, ...opts };
+  // `alpha: true` (transparent background): JPEG would turn transparent areas black, so use WebP instead.
+  if (o.alpha && o.format === "jpeg") o.format = "webp";
   const maxEdge = Number(o.maxEdge) > 0 ? Number(o.maxEdge) : 0;
   const quality = Math.min(1, Math.max(0.1, Number(o.quality) || DEFAULT_OUTPUT.quality));
   const format = FORMATS.includes(o.format) ? o.format : "webp";

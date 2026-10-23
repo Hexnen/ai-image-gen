@@ -47,3 +47,9 @@ These are properties of Foundry itself, not something the module can work around
 - **Provider side:** OpenAI batch input and result files are deleted after a finished batch (best effort).
   Gemini result files expire on their own. Check the provider's own retention policy for prompts and
   reference images you send.
+
+## Transparent background
+Models that support it (OpenAI `gpt-image-2.5-flare` / `-sunburst`, `gpt-image-1.5`, `gpt-image-1`) get a "Transparent background"
+switch in the type's settings and a one-off checkbox in the generate dialog. The request carries `background: "transparent"`
+with PNG output; the saved file is WebP or PNG (JPEG has no alpha, so it is switched to WebP). `gpt-image-2` is excluded
+(OpenAI removed transparency there), and Gemini and OpenRouter models have no switch because no native alpha is documented.

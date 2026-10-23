@@ -100,6 +100,17 @@
           </div>
           {{/if}}
 
+          {{#if canTransparent}}
+          <div class="aiimg-field">
+            <label class="aiimg-check">
+              <input type="checkbox" name="transparent" {{#if transparent}}checked{{/if}} {{#unless isGM}}disabled{{/unless}}>
+              <span>{{localize "AIIMG.Config.Transparent"}}</span>
+            </label>
+            <p class="hint">{{localize "AIIMG.Config.TransparentHint"}}</p>
+          </div>
+          {{/if}}
+          {{#if transparentNote}}<p class="aiimg-size-note" role="status">{{transparentNote}}</p>{{/if}}
+
           {{#if isGemini}}
           <div class="aiimg-field">
             <span class="aiimg-lbl" id="aiimg-l-isize">{{localize "AIIMG.Config.ImageSize"}}</span>
@@ -173,8 +184,8 @@
             <span class="aiimg-lbl" id="aiimg-l-fmt">{{localize "AIIMG.Config.OutFormat"}}</span>
             <div class="aiimg-seg" role="radiogroup" aria-labelledby="aiimg-l-fmt">
               {{#each outFormats}}
-              <label class="aiimg-seg-item">
-                <input type="radio" name="outFormat" value="{{id}}" {{#if selected}}checked{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
+              <label class="aiimg-seg-item{{#if disabled}} is-off{{/if}}" {{#if disabled}}data-tooltip="AIIMG.Config.NoAlpha"{{/if}}>
+                <input type="radio" name="outFormat" value="{{id}}" {{#if selected}}checked{{/if}} {{#if disabled}}disabled{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
                 <span>{{label}}</span>
               </label>
               {{/each}}

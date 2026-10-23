@@ -14,6 +14,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   defaultMode: "fast",
   defaultCount: 1,     // versions per run offered by the generate dialog (1-8)
   quality: "medium",
+  transparent: false,  // transparent background (only models with supportsTransparent)
   imageSize: "1K",     // Gemini
   thinkingLevel: "",   // Gemini; "" = domyślny modelu
   // Output: co zapisujemy na dysk (nie zmienia żądania do API). outMaxEdge 0 = bez zmniejszania.
@@ -65,6 +66,9 @@ export function normalizeOutput(cfg = {}) {
  */
 export function fitConfig(cfg) {
   const out = { ...cfg, ...normalizeOutput(cfg) };
+  // Transparent background: only for models that take it; it needs an alpha-capable file (JPEG has none).
+  out.transparent = !!cfg.transparent && providers.supportsTransparent(out.provider, out.model);
+  if (out.transparent && out.outFormat === "jpeg") out.outFormat = "webp";
   if (out.provider === "openai") {
     out.quality = providers.fitOpenAIQuality(out.model, out.quality);
   } else if (out.provider === "gemini") {
@@ -148,6 +152,7 @@ export async function setConfig(key, data) {
     defaultMode: data.defaultMode === "batch" ? "batch" : "fast",
     defaultCount: clampCount(data.defaultCount),
     quality: QUALITIES.includes(data.quality) ? data.quality : DEFAULT_CONFIG.quality,
+    transparent: !!data.transparent,
     imageSize: String(data.imageSize ?? DEFAULT_CONFIG.imageSize),
     thinkingLevel: String(data.thinkingLevel ?? ""),
     ...normalizeOutput(data)

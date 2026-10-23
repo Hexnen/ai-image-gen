@@ -1,7 +1,7 @@
 // OpenAI Images (gpt-image-*) bezpośrednio. Port z roleplay imageGen/openai.ts.
 // Bez refs: JSON /images/generations; z refs: multipart /images/edits (max 16).
 import { GPT_IMAGE_TIMEOUT_MS, withTimeout, scaledTimeout, httpError, b64ToBlob, mimeOf } from "./util.mjs";
-import { OPENAI_RATES, openaiSizeFor, fitOpenAIQuality, bucketOpenAISize, openaiPriceFloor } from "./models.mjs";
+import { OPENAI_RATES, openaiSizeFor, fitOpenAIQuality, bucketOpenAISize, openaiPriceFloor, supportsTransparent } from "./models.mjs";
 import { estimateSyncCost } from "../batch/cost.mjs";
 
 export const OPENAI_BASE = "https://api.openai.com/v1";
@@ -22,7 +22,9 @@ function requestTimeout(quality, size, n) {
 /** Zachowane dla zgodności: rozmiar-koszyk (starsze modele). */
 export const pickSize = ({ width, height, aspectRatio }) => bucketOpenAISize(width, height, aspectRatio);
 
-export async function generate({ apiKey, model, prompt, refs = [], width, height, aspectRatio, quality = "medium", n = 1, signal }) {
+export async function generate({ apiKey, model, prompt, refs = [], width, height, aspectRatio, quality = "medium", n = 1, transparent = false, signal }) {
+  // `background: "transparent"` only for models that take it; it needs PNG (or WebP) output, so we ask for PNG.
+  const alpha = !!transparent && supportsTransparent("openai", model);
   quality = fitOpenAIQuality(model, quality);
   n = Math.max(1, Math.min(10, Math.floor(Number(n)) || 1));
   if (refs.length > EDIT_REF_LIMIT) {
@@ -38,6 +40,7 @@ export async function generate({ apiKey, model, prompt, refs = [], width, height
     form.set("prompt", prompt);
     form.set("size", size);
     form.set("quality", quality);
+    if (alpha) { form.set("background", "transparent"); form.set("output_format", "png"); }
     if (n > 1) form.set("n", String(n));
     let i = 0;
     for (const blob of refs) {
@@ -55,7 +58,7 @@ export async function generate({ apiKey, model, prompt, refs = [], width, height
     res = await fetch(`${OPENAI_BASE}/images/generations`, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model, prompt, size, quality, n }),
+      body: JSON.stringify({ model, prompt, size, quality, n, ...(alpha ? { background: "transparent", output_format: "png" } : {}) }),
       signal: withTimeout(requestTimeout(quality, size, n), signal),
     });
   }

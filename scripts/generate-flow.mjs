@@ -114,17 +114,19 @@ export function buildPrompt(document, description, cfg = getConfig(resolveTypeKe
   });
 }
 
-function describe(document, description) {
+function describe(document, description, overrides = {}) {
   const key = resolveTypeKey(document);
   if (!key) throw new Error("Unsupported document.");
-  const cfg = getConfig(key);
+  // One-off overrides from the dialog (e.g. transparent background) go through fitConfig: unsupported values are dropped.
+  const cfg = Object.keys(overrides ?? {}).length ? fitConfig({ ...getConfig(key), ...overrides }) : getConfig(key);
   const prompt = buildPrompt(document, description, cfg);
   const meta = {
     system: document.documentName === "Macro" ? "core" : game.system.id,
     docType: [document.documentName, document.type].filter(Boolean).join("-"),
     name: document.name ?? "image",
     typeKey: key,
-    description: description.trim()
+    description: description.trim(),
+    ...(cfg.transparent ? { transparent: true } : {})
   };
   return { key, cfg, prompt, meta };
 }
@@ -200,6 +202,7 @@ function logBase(document, description, key, cfg, prompt, kind, refsTotal) {
     quality: cfg.provider === "openai" ? cfg.quality : undefined,
     imageSize: cfg.provider === "gemini" ? cfg.imageSize : undefined,
     thinkingLevel: cfg.provider === "gemini" ? cfg.thinkingLevel : undefined,
+    transparent: cfg.transparent || undefined,
     refsCount: refsTotal, docUuid: document.uuid, docName: document.name, typeKey: key
   };
 }
@@ -243,9 +246,9 @@ function failure(e, startMs, estShare) {
  * @returns {Promise<{candidates:{index:number, blob:Blob, cost:number, logId?:string}[],
  *   failed:{index:number, error:string}[], cost:number, meta:object, prompt:string, key:string}>}
  */
-export async function generateCandidates(document, description, { count = 1, extraRefs = [], signal } = {}) {
+export async function generateCandidates(document, description, { count = 1, extraRefs = [], signal, overrides } = {}) {
   assertCanApply(document); // zanim cokolwiek zapłacimy
-  const { key, cfg, prompt, meta } = describe(document, description);
+  const { key, cfg, prompt, meta } = describe(document, description, overrides);
   return executeGeneration({ doc: document, description, key, cfg, prompt, meta, count, extraRefs, signal, runKind: "fast" });
 }
 
@@ -297,7 +300,7 @@ async function runGeneration({ document, description, key, cfg, prompt, meta, co
   if (signal?.aborted) throw cancelledEarly();
   const common = {
     provider: cfg.provider, apiKey, model: cfg.model, prompt, refs,
-    width: cfg.width, height: cfg.height, quality: cfg.quality,
+    width: cfg.width, height: cfg.height, quality: cfg.quality, transparent: !!cfg.transparent,
     imageSize: cfg.imageSize, thinkingLevel: cfg.thinkingLevel, signal
   };
   const share = est / count;
@@ -346,7 +349,7 @@ async function runGeneration({ document, description, key, cfg, prompt, meta, co
         // tokeny OpenAI dotyczą całego żądania (n obrazów): tylko przy pojedynczej wersji
         tokens: cfg.provider === "openai" && count > 1 ? undefined : tokensFrom(r.raw) ?? undefined
       });
-      candidates.push({ index: i, blob: r.blob, cost: r.cost, logId: entry?.id });
+      candidates.push({ index: i, blob: r.blob, cost: r.cost, logId: entry?.id, ...(cfg.transparent ? { transparent: true } : {}) });
     } else {
       await logCall({ ...vbase, status: "error", durationMs: r.durationMs ?? performance.now() - t0, cost: r.cost ?? 0, costKind: r.costKind ?? "actual", error: r.error });
       failed.push({ index: i, error: r.error });
@@ -404,7 +407,8 @@ export async function generateTest(draft, key, { description = "", name = "", ty
 /** Zapisz kandydata (Blob) do folderu typu; opcjonalnie podepnij pod dokument. @returns {Promise<string>} ścieżka */
 export async function commitCandidate(document, candidate, meta, { apply = true } = {}) {
   // Rozmiar/format zapisu z konfiguracji typu (sekcja Output); obraz do API jest już wysłany, to dotyczy tylko pliku.
-  const optimize = outputOptsFromConfig(meta?.typeKey ? getConfig(meta.typeKey) : {});
+  // Alpha travels with the image (candidate/meta), not with the saved config: a one-off override may differ from it.
+  const optimize = { ...outputOptsFromConfig(meta?.typeKey ? getConfig(meta.typeKey) : {}), ...(candidate.transparent || meta?.transparent ? { alpha: true } : {}) };
   const { path, stats } = await saveImageBlobEx(candidate.blob, { ...meta, optimize, preOptimized: candidate.opt });
   candidate.saved = stats;
   if (candidate.logId) await updateCall(candidate.logId, statsPatch(stats));
@@ -413,8 +417,8 @@ export async function commitCandidate(document, candidate, meta, { apply = true 
 }
 
 /** Fast dla jednej wersji: generuj, zapisz plik i podmień obraz dokumentu. @returns {Promise<string>} ścieżka */
-export async function runFast(document, description, { signal, extraRefs = [], onSaved } = {}) {
-  const res = await generateCandidates(document, description, { count: 1, extraRefs, signal });
+export async function runFast(document, description, { signal, extraRefs = [], onSaved, overrides } = {}) {
+  const res = await generateCandidates(document, description, { count: 1, extraRefs, signal, overrides });
   const cand = res.candidates[0];
   try {
     const path = await commitCandidate(document, cand, res.meta);
@@ -437,9 +441,9 @@ export async function runFast(document, description, { signal, extraRefs = [], o
  * `pick: true` — wyniki lądują w _candidates/<batchId>/ i czekają na wybór ("awaiting-pick").
  * @returns {Promise<object>} rekord batcha
  */
-export async function runBatch(document, description, { count = 1, extraRefs = [] } = {}) {
+export async function runBatch(document, description, { count = 1, extraRefs = [], overrides } = {}) {
   assertCanApply(document); // zanim cokolwiek zapłacimy
-  const { cfg, prompt, meta } = describe(document, description);
+  const { cfg, prompt, meta } = describe(document, description, overrides);
   if (!prompt.trim()) throw new Error("Empty prompt.");
   validateRun(cfg, count, extraRefs);
   const extra = [];
@@ -447,7 +451,7 @@ export async function runBatch(document, description, { count = 1, extraRefs = [
   const refs = [...(await loadRefs(cfg.refs)), ...extra];
   const items = Array.from({ length: count }, (_, i) => ({
     id: foundry.utils.randomID(),
-    prompt, refs, width: cfg.width, height: cfg.height, quality: cfg.quality,
+    prompt, refs, width: cfg.width, height: cfg.height, quality: cfg.quality, transparent: !!cfg.transparent,
     imageSize: cfg.imageSize, thinkingLevel: cfg.thinkingLevel,
     target: { uuid: document.uuid, field: FIELD },
     meta: { ...meta, ...(count > 1 ? { variant: i + 1, variants: count } : {}) }

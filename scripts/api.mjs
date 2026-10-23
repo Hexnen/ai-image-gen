@@ -29,7 +29,7 @@ export function parseAspect(a) {
 }
 
 /** Configuration of a type with the caller's size wishes applied (explicit width/height win over an aspect ratio). */
-function configFor(typeKey, { width, height, aspectRatio } = {}) {
+function configFor(typeKey, { width, height, aspectRatio, transparent } = {}) {
   const cfg = getConfig(typeKey);
   let w = Number(width), h = Number(height);
   if (!(w > 0 && h > 0)) {
@@ -41,7 +41,7 @@ function configFor(typeKey, { width, height, aspectRatio } = {}) {
       w = h * ar;
     } else { w = cfg.width; h = cfg.height; }
   }
-  return fitConfig({ ...cfg, width: round16(w), height: round16(h), custom: false });
+  return fitConfig({ ...cfg, width: round16(w), height: round16(h), custom: false, ...(transparent !== undefined ? { transparent: !!transparent } : {}) });
 }
 
 function assertGM() {
@@ -97,6 +97,7 @@ async function toBlobs(refs) {
  * @param {string} [o.name]           file name stem and {name} in the template
  * @param {(Blob|string)[]} [o.refs]  extra reference images for this call (Blobs or Data paths), added to the type's own
  * @param {number} [o.width] [o.height] [o.aspectRatio]  size wish (the model's rules are applied)
+ * @param {boolean} [o.transparent]   transparent background (only models that support it; others ignore it)
  * @param {number} [o.count=1]        versions, 1–8
  * @param {boolean} [o.pick=false]    open the picker window and resolve with the chosen one (rejects "cancelled" if closed)
  * @param {{dir?:string, name?:string, source?:"data"}} [o.saveTo]  folder (inside Data) and file name stem

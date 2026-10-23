@@ -38,6 +38,9 @@
   <div class="aiimg-versions">
     <label class="aiimg-versions-count"><span>{{localize "AIIMG.Gen.Versions"}}</span>
       <input type="number" name="count" min="1" max="{{maxVersions}}" step="1" value="{{count}}" {{#if busy}}disabled{{/if}}></label>
+    {{#if canTransparent}}
+    <label class="aiimg-preview-opt"><input type="checkbox" name="transparent" {{#if transparent}}checked{{/if}} {{#if busy}}disabled{{/if}}> {{localize "AIIMG.Gen.Transparent"}}</label>
+    {{/if}}
     {{#if showPreview}}
     <label class="aiimg-preview-opt"><input type="checkbox" name="preview" {{#if preview}}checked{{/if}} {{#if busy}}disabled{{/if}}> {{localize "AIIMG.Gen.PreviewFirst"}}</label>
     {{/if}}

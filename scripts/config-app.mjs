@@ -58,6 +58,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
   #focusAfterRender = null;
   /** {draft, text}: size adjusted by the last provider/model change (shown only while that draft is open). */
   sizeNote = null;
+  /** {draft, text}: transparent background turned off by the last provider/model change (shown only while that draft is open). */
+  transparentNote = null;
   groupFilter = "all";
   /** Unsaved edits for the selected type; discarded on type switch. */
   draft = null;
@@ -267,6 +269,9 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       customSize,
       aspect: this.#aspectContext(cfg.width, cfg.height),
       sizeNote: this.sizeNote?.draft === this.draft ? this.sizeNote.text : "",
+      canTransparent: providers.supportsTransparent(cfg.provider, cfg.model),
+      transparent: !!cfg.transparent,
+      transparentNote: this.transparentNote?.draft === this.draft ? this.transparentNote.text : "",
       defaultCount: cfg.defaultCount,
       isFast: cfg.defaultMode === "fast",
       isBatch: cfg.defaultMode === "batch",
@@ -299,7 +304,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
         noop: edgeIsNoop(generatedSize(cfg), v)
       })),
       outPrev: this.#outPreview(cfg),
-      outFormats: FORMATS.map((v) => ({ id: v, selected: v === cfg.outFormat, label: v.toUpperCase() })),
+      // JPEG has no alpha: unavailable while the transparent background is on
+      outFormats: FORMATS.map((v) => ({ id: v, selected: v === cfg.outFormat, label: v.toUpperCase(), disabled: v === "jpeg" && !!cfg.transparent })),
       outQualityPct: Math.round((cfg.outQuality ?? 0.85) * 100),
       outOn: optimizeEnabled(),
       outVia: optimizerApi() ? game.i18n.format("AIIMG.Config.OutViaLmo", { v: game.modules.get(OPTIMIZER_ID)?.version ?? "" }) : game.i18n.localize("AIIMG.Config.OutViaBuiltin"),
@@ -321,6 +327,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     d.defaultMode = fd.defaultMode ?? d.defaultMode;
     if (fd.defaultCount !== undefined) d.defaultCount = clampCount(fd.defaultCount);
     d.quality = fd.quality ?? d.quality;
+    const tEl = form.querySelector("input[name=transparent]");
+    if (tEl) d.transparent = tEl.checked;
     d.imageSize = fd.imageSize ?? d.imageSize;
     d.thinkingLevel = fd.thinkingLevel ?? d.thinkingLevel;
     if (fd.outMaxEdge !== undefined) d.outMaxEdge = Number(fd.outMaxEdge);
@@ -343,22 +351,35 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     el.querySelectorAll("input[name=provider]").forEach((r) => r.addEventListener("change", () => {
       this.#focusAfterRender = "provider";
       this.#readForm();
-      const prev = { w: this.draft.width, h: this.draft.height };
+      const prev = { w: this.draft.width, h: this.draft.height, t: !!this.draft.transparent };
       const models = providers.listModels(this.draft.provider);
       this.draft.model = models[0]?.id ?? "";
       if (!providers.PROVIDERS[this.draft.provider]?.supportsBatch) this.draft.defaultMode = "fast";
       Object.assign(this.draft, fitConfig(this.draft));
       this.draft.custom = false;
       this.#noteSizeFit(prev);
+      this.#noteTransparentFit(prev);
       this.render();
     }));
     // Model change: re-clamp quality / size / thinking to what the new model supports.
     el.querySelector("select[name=model]")?.addEventListener("change", () => {
       this.#readForm();
-      const prev = { w: this.draft.width, h: this.draft.height };
+      const prev = { w: this.draft.width, h: this.draft.height, t: !!this.draft.transparent };
       Object.assign(this.draft, fitConfig(this.draft));
       this.draft.custom = false;
       this.#noteSizeFit(prev);
+      this.#noteTransparentFit(prev);
+      this.render();
+    });
+    // Transparent background on: JPEG has no alpha, so the saved format moves to WebP (the row says so once).
+    el.querySelector("input[name=transparent]")?.addEventListener("change", () => {
+      this.#readForm();
+      const d = this.draft;
+      this.transparentNote = null;
+      if (d.transparent && d.outFormat === "jpeg") {
+        d.outFormat = "webp";
+        this.transparentNote = { draft: d, text: game.i18n.localize("AIIMG.Config.TransparentJpeg") };
+      }
       this.render();
     });
     // Switching to "custom" must keep the current numbers; switching away applies the preset.
@@ -460,6 +481,15 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const val = el.querySelector("[data-role=outQualityVal]");
     if (val && q) val.textContent = `${q.value}%`;
     if (q && game.user.isGM) q.disabled = this.draft.outFormat === "png";
+  }
+
+  /** Remember (for this draft only) that the model change turned the transparent background off. */
+  #noteTransparentFit(prev) {
+    const d = this.draft;
+    this.transparentNote = null;
+    if (!prev.t || d.transparent) return;
+    const m = providers.listModels(d.provider).find((x) => x.id === d.model);
+    this.transparentNote = { draft: d, text: game.i18n.format("AIIMG.Config.TransparentOff", { model: m?.label ?? d.model }) };
   }
 
   /** Remember (for this draft only) that the model change adjusted the size, so the row can say so. */
