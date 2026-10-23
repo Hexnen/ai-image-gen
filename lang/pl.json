@@ -24,6 +24,7 @@
   "AIIMG.Config.Resolution": "Rozdzielczość",
   "AIIMG.Config.Width": "Szerokość (px)",
   "AIIMG.Config.Height": "Wysokość (px)",
+  "AIIMG.Config.ModelRetired": "Zapisany model {old} nie jest już dostępny. Używam {new}; zapisz, żeby to zostało.",
   "AIIMG.Config.SizeAdjusted": "Dopasowano do {model}: {from} → {to}",
   "AIIMG.Config.AspectAria": "Proporcje {ratio} ({dec}), {w} na {h} pikseli",
   "AIIMG.Config.Custom": "Własna",

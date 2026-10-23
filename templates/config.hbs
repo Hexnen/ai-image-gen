@@ -49,6 +49,7 @@
               {{#each models}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
             </select>
             {{#if modelInfo}}<p class="aiimg-model-info" data-role="modelInfo">{{modelInfo}}</p>{{/if}}
+            {{#if retiredNote}}<p class="aiimg-size-note" data-role="retiredNote" role="status">{{retiredNote}}</p>{{/if}}
           </div>
 
           <div class="aiimg-field aiimg-res">

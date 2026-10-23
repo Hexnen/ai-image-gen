@@ -24,6 +24,7 @@
   "AIIMG.Config.Resolution": "Resolution",
   "AIIMG.Config.Width": "Width (px)",
   "AIIMG.Config.Height": "Height (px)",
+  "AIIMG.Config.ModelRetired": "The saved model {old} is no longer offered. Using {new}; save to keep it.",
   "AIIMG.Config.SizeAdjusted": "Adjusted for {model}: {from} → {to}",
   "AIIMG.Config.AspectAria": "Aspect ratio {ratio} ({dec}), {w} by {h} pixels",
   "AIIMG.Config.Custom": "Custom",

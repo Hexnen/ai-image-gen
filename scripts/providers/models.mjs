@@ -2,23 +2,14 @@
 // providerów, batcha i UI. Dane z oficjalnych stron OpenAI/Google (research 2026-10).
 // Wszystko, co nie było sprawdzone z prawdziwym kluczem, jest oznaczone `unverified`.
 
-export const OPENAI_QUALITIES_OLD = ["low", "medium", "high", "auto"];
+// OpenAI: tylko rodzina gpt-image-2.5 (Flare i Sunburst); starsze modele GPT Image zostały usunięte z katalogu.
 export const OPENAI_QUALITIES_25 = ["low", "medium", "high", "xhigh", "max", "auto"];
 
-// Ceny za 1M tokenów (USD). Wspólne dla gpt-image-2 i 2.5.
+// Ceny za 1M tokenów (USD).
 export const OPENAI_RATES = {
   sync: { textIn: 5, imageIn: 8, imageOut: 30 },
   batch: { textIn: 2.5, imageIn: 4, imageOut: 15 },
 };
-
-// Cena SYNC za obraz (USD) gpt-image-2 i starszych — dolna granica szacunku i fallback, gdy odpowiedź nie ma `usage`.
-// Wpisy low/medium/high x 3 rozmiary z roleplay; reszta jest skalowana polem od 1024x1024.
-export const OPENAI_PRICES = {
-  low: { "1024x1024": 0.006, "1024x1536": 0.005, "1536x1024": 0.005 },
-  medium: { "1024x1024": 0.053, "1024x1536": 0.041, "1536x1024": 0.041 },
-  high: { "1024x1024": 0.211, "1024x1536": 0.165, "1536x1024": 0.165 },
-};
-const OPENAI_SQUARE_PRICE = { low: 0.006, medium: 0.053, high: 0.211, auto: 0.211 };
 
 // gpt-image-2.5 (sunburst i flare mają TEN SAM koszt tokenowy przy tej samej jakości i rozmiarze).
 // Tokeny wyjścia na obraz: NIEZALEŻNE POMIARY osób trzecich (nie dane OpenAI; OpenAI podaje tylko stawki za 1M tokenów
@@ -32,9 +23,6 @@ export const OPENAI_25_TOKENS = {
 };
 const PX_FLAT = 2_400_000, PX_4K = 3840 * 2160, GROWTH_4K = 1.9;
 
-/** Czy model OpenAI jest z rodziny 2.5 (tokenowy cennik z pomiarów powyżej). */
-export const isOpenAI25 = (model) => getModel("openai", model)?.family === "gpt-image-2.5";
-
 /** Ostrożna liczba tokenów wyjścia obrazu dla gpt-image-2.5. */
 export function openai25OutputTokens(quality, width, height) {
   const base = OPENAI_25_TOKENS[quality] ?? OPENAI_25_TOKENS.medium;
@@ -44,12 +32,9 @@ export function openai25OutputTokens(quality, width, height) {
   return Math.round(base * (1 + (GROWTH_4K - 1) * k));
 }
 
-export function openaiPriceFloor(quality, width, height, model) {
-  if (model && isOpenAI25(model)) return openai25OutputTokens(quality, width, height) * OPENAI_RATES.sync.imageOut / 1e6;
-  const exact = OPENAI_PRICES[quality]?.[`${width}x${height}`];
-  if (exact != null) return exact;
-  const base = OPENAI_SQUARE_PRICE[quality] ?? OPENAI_SQUARE_PRICE.medium;
-  return base * ((Number(width) || 1024) * (Number(height) || 1024)) / (1024 * 1024);
+/** Ostrożna cena SYNC obrazu OpenAI (USD): dolna granica szacunku i fallback, gdy odpowiedź nie ma `usage`. */
+export function openaiPriceFloor(quality, width, height) {
+  return openai25OutputTokens(quality, width, height) * OPENAI_RATES.sync.imageOut / 1e6;
 }
 
 /** Konserwatywny szacunek za obraz przez OpenRouter (brak cennika w kodzie): gpt-image/pro drogie, reszta tania. */
@@ -58,8 +43,7 @@ export function openrouterEstimate(modelId = "") {
   return m.startsWith("openai/") || m.includes("pro") ? 0.25 : 0.08;
 }
 
-const PRESETS_3 = ["1024x1024", "1536x1024", "1024x1536"];
-const PRESETS_25 = [...PRESETS_3, "1536x864", "2048x2048"];
+const PRESETS_25 = ["1024x1024", "1536x1024", "1024x1536", "1536x864", "2048x2048"];
 
 const ASPECTS_BASE = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"];
 const ASPECTS_WIDE = [...ASPECTS_BASE, "1:4", "4:1", "1:8", "8:1"];
@@ -69,19 +53,13 @@ export const MODELS = {
     {
       id: "gpt-image-2.5-flare", label: "GPT Image 2.5 Flare", note: "fast", // OpenAI's default; default model for new OpenAI types
       transparent: true, // OpenAI image guide: both 2.5 models take background:"transparent" with output_format png/webp
-      family: "gpt-image-2.5", qualities: OPENAI_QUALITIES_25, defaultQuality: "medium",
-      customSize: true, presets: PRESETS_25,
+      qualities: OPENAI_QUALITIES_25, defaultQuality: "medium", presets: PRESETS_25,
     },
     {
       id: "gpt-image-2.5-sunburst", label: "GPT Image 2.5 Sunburst", note: "detailed", // same token cost as Flare, ~50% slower (independent tests)
       transparent: true, // same as Flare (OpenAI image guide)
-      family: "gpt-image-2.5", qualities: OPENAI_QUALITIES_25, defaultQuality: "medium",
-      customSize: true, presets: PRESETS_25,
+      qualities: OPENAI_QUALITIES_25, defaultQuality: "medium", presets: PRESETS_25,
     },
-    { id: "gpt-image-2", label: "GPT Image 2", transparent: false, /* removed by OpenAI 2026-09-30 (HTTP 400; secondary source APIYI), use 2.5 */ family: "gpt-image-2", qualities: OPENAI_QUALITIES_OLD, defaultQuality: "medium", customSize: false, presets: PRESETS_3 },
-    { id: "gpt-image-1.5", label: "GPT Image 1.5", transparent: true, family: "gpt-image-1", qualities: OPENAI_QUALITIES_OLD, defaultQuality: "medium", customSize: false, presets: PRESETS_3 },
-    { id: "gpt-image-1", label: "GPT Image 1", transparent: true, family: "gpt-image-1", qualities: OPENAI_QUALITIES_OLD, defaultQuality: "medium", customSize: false, presets: PRESETS_3 },
-    { id: "gpt-image-1-mini", label: "GPT Image 1 mini", family: "gpt-image-1", qualities: OPENAI_QUALITIES_OLD, defaultQuality: "medium", customSize: false, presets: PRESETS_3 },
   ],
   gemini: [
     {
@@ -129,8 +107,6 @@ export const MODELS = {
     { id: "google/gemini-3.1-flash-lite-image", label: "Nano Banana 2 Lite", note: "cheapest" },
     { id: "google/gemini-3.1-flash-image", label: "Nano Banana 2" },
     { id: "google/gemini-3-pro-image", label: "Nano Banana Pro" },
-    { id: "openai/gpt-image-2", label: "GPT Image 2" },
-    { id: "openai/gpt-5.4-image-2", label: "GPT-5.4 Image 2 (via chat)" },
   ],
 };
 
@@ -138,17 +114,14 @@ export const getModel = (provider, id) => (MODELS[provider] ?? []).find((m) => m
 
 /**
  * Does this model take a transparent background? Only models with an explicit `transparent: true` do (OpenAI's image
- * guide for gpt-image-2.5 sunburst/flare, gpt-image-1/1.5). Everything else is unknown or unsupported and gets no
- * switch: gpt-image-2 (removed by OpenAI), gpt-image-1-mini (unconfirmed), Gemini (no native alpha, only matting/chroma
- * key after the fact) and OpenRouter models (the `background` field is not documented there).
+ * guide for gpt-image-2.5 sunburst/flare). Everything else is unknown or unsupported and gets no switch: Gemini (no
+ * native alpha, only matting/chroma key after the fact) and OpenRouter models (the `background` field is not
+ * documented there).
  */
 export const supportsTransparent = (provider, id) => provider === "openai" && getModel("openai", id)?.transparent === true;
 
 /** Pierwszy model providera (domyślny dla nowych konfiguracji). */
 export const defaultModelId = (provider) => MODELS[provider]?.[0]?.id ?? "";
-
-/** Czy model OpenAI przyjmuje dowolne WxH (rodzina 2.5). */
-export const openaiCustomSize = (modelId) => !!getModel("openai", modelId)?.customSize;
 
 const r16 = (v) => Math.round(v / 16) * 16;
 const MAX_RATIO = 2.9;
@@ -178,22 +151,15 @@ export function normalizeOpenAISize(width, height) {
   return { width: w, height: h };
 }
 
-/** Rozmiar dla starszych modeli OpenAI: jeden z trzech koszyków API. */
-export function bucketOpenAISize(width, height, aspectRatio) {
-  if (width && height && PRESETS_3.includes(`${width}x${height}`)) return `${width}x${height}`;
-  let r = 1;
-  if (width && height) r = width / height;
-  else if (aspectRatio && /^\d+:\d+$/.test(aspectRatio)) { const [a, b] = aspectRatio.split(":").map(Number); r = a / b; }
-  return r > 1.2 ? "1536x1024" : r < 0.83 ? "1024x1536" : "1024x1024";
-}
-
-/** Rozmiar żądania OpenAI zależnie od modelu ("WxH"). */
-export function openaiSizeFor(modelId, { width, height, aspectRatio } = {}) {
-  if (openaiCustomSize(modelId) && width && height) {
-    const n = normalizeOpenAISize(width, height);
-    return `${n.width}x${n.height}`;
+/** Rozmiar żądania OpenAI ("WxH"): dowolny rozmiar po normalizacji do reguł API; bez wymiarów z proporcji albo 1024x1024. */
+export function openaiSizeFor(_modelId, { width, height, aspectRatio } = {}) {
+  let w = Number(width), h = Number(height);
+  if (!(w > 0 && h > 0)) {
+    if (aspectRatio && /^\d+:\d+$/.test(aspectRatio)) ({ width: w, height: h } = dimsForAspect(aspectRatio));
+    else { w = 1024; h = 1024; }
   }
-  return bucketOpenAISize(width, height, aspectRatio);
+  const n = normalizeOpenAISize(w, h);
+  return `${n.width}x${n.height}`;
 }
 
 
@@ -223,15 +189,14 @@ function dimsForAspect(aspect) {
 
 /**
  * Rozmiar dozwolony dla modelu (czysta funkcja, idempotentna): OpenAI 2.5 → reguły API,
- * starsze OpenAI → jeden z 3 koszyków, Gemini/OpenRouter → najbliższy obsługiwany aspekt
+ * Gemini/OpenRouter → najbliższy obsługiwany aspekt
  * (rozmiar pikseli określa wtedy imageSize, nie WxH). Rozmiar już dozwolony zostaje bez zmian.
  */
 export function fitSizeFor(provider, modelId, width, height) {
   const w = Number(width) || 1024, h = Number(height) || 1024;
   if (provider === "openai") {
-    if (openaiCustomSize(modelId)) { const n = normalizeOpenAISize(w, h); return { ...n, changed: n.width !== w || n.height !== h }; }
-    const [bw, bh] = bucketOpenAISize(w, h).split("x").map(Number);
-    return { width: bw, height: bh, changed: bw !== w || bh !== h };
+    const n = normalizeOpenAISize(w, h);
+    return { ...n, changed: n.width !== w || n.height !== h };
   }
   const allowed = allowedAspects(provider, modelId);
   if (!allowed) return { width: w, height: h, changed: false };
@@ -247,13 +212,11 @@ export function fitSizeFor(provider, modelId, width, height) {
   return { ...out, changed: out.width !== w || out.height !== h };
 }
 
-/** Jakość dopuszczalna dla modelu (xhigh/max tylko 2.5); nieznana → domyślna. */
+/** Jakość dopuszczalna dla modelu OpenAI; nieznana → domyślna. */
 export function fitOpenAIQuality(modelId, quality) {
   const m = getModel("openai", modelId);
-  const list = m?.qualities ?? OPENAI_QUALITIES_OLD;
-  if (list.includes(quality)) return quality;
-  if (quality === "xhigh" || quality === "max") return "high";
-  return m?.defaultQuality ?? "medium";
+  const list = m?.qualities ?? OPENAI_QUALITIES_25;
+  return list.includes(quality) ? quality : (m?.defaultQuality ?? "medium");
 }
 
 /** Rozmiar Gemini dopuszczalny dla modelu (np. 0.5K → 1K dla 2.1). */

@@ -245,7 +245,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const presets = sizePresetsFor(cfg.provider, cfg.model);
     const sizeId = `${cfg.width}x${cfg.height}`;
     const customSize = !!cfg.custom || !presets.some((s) => s.id === sizeId);
-    const exactSize = cfg.provider === "openai" && !!caps?.customSize; // 2.5: any WxH (x16)
+    const exactSize = cfg.provider === "openai"; // gpt-image-2.5: any WxH (x16)
     const sizes = presets.map((s) => ({
       ...s, label: `${s.width}×${s.height}`, selected: !customSize && s.id === sizeId
     }));
@@ -283,7 +283,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       sizeMax: exactSize ? 3840 : 4096,
       exactSize,
       qualities: ALL_QUALITIES.map((q) => {
-        const ok = (caps?.qualities ?? providers.OPENAI_QUALITIES_OLD).includes(q);
+        const ok = (caps?.qualities ?? providers.OPENAI_QUALITIES_25).includes(q);
         return { id: q, selected: q === cfg.quality, label: L(`AIIMG.Quality.${q}`), disabled: !ok };
       }),
       imageSizes: ALL_IMAGE_SIZES.filter((v) => (caps?.sizes ?? []).includes(v) || v !== "0.5K").map((v) => ({
@@ -296,6 +296,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
         disabled: !(caps?.thinking ?? []).includes(v)
       })),
       modelInfo: this.#modelInfo(cfg, caps),
+      retiredNote: cfg.retiredModel ? game.i18n.format("AIIMG.Config.ModelRetired", { old: cfg.retiredModel, new: models.find((m) => m.selected)?.label ?? cfg.model }) : "",
       estPer: this.#estPer(cfg),
       outLossless: cfg.outFormat === "png",
       batchWarn: cfg.defaultMode === "batch" && !supportsBatch,
@@ -354,6 +355,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       const prev = { w: this.draft.width, h: this.draft.height, t: !!this.draft.transparent };
       const models = providers.listModels(this.draft.provider);
       this.draft.model = models[0]?.id ?? "";
+      this.draft.retiredModel = undefined; // the user chose a model: the "retired" note is no longer true
       if (!providers.PROVIDERS[this.draft.provider]?.supportsBatch) this.draft.defaultMode = "fast";
       Object.assign(this.draft, fitConfig(this.draft));
       this.draft.custom = false;
@@ -364,6 +366,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     // Model change: re-clamp quality / size / thinking to what the new model supports.
     el.querySelector("select[name=model]")?.addEventListener("change", () => {
       this.#readForm();
+      this.draft.retiredModel = undefined;
       const prev = { w: this.draft.width, h: this.draft.height, t: !!this.draft.transparent };
       Object.assign(this.draft, fitConfig(this.draft));
       this.draft.custom = false;

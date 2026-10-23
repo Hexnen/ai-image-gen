@@ -3,7 +3,7 @@
 import { redact } from "../redact.mjs";
 
 export const GEN_TIMEOUT_MS = 120_000;
-/** GPT Image 2 na quality=high potrafi mielić > 1 min. */
+/** gpt-image-2.5 na wysokiej jakości potrafi mielić > 1 min. */
 export const GPT_IMAGE_TIMEOUT_MS = 180_000;
 
 /** Timeout skalowany od obciążenia żądania (np. n obrazów, wysoka jakość, 4K), w [base, max]. */

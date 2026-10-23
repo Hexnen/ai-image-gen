@@ -17,7 +17,7 @@ const auth = (apiKey) => ({ Authorization: `Bearer ${apiKey}` });
 const EXT = { "image/png": "png", "image/webp": "webp", "image/jpeg": "jpg" };
 
 /** Rozmiar linii batcha: dla 2.5 dokładny (po normalizacji), dla starszych koszyk. */
-export const openaiSize = (width, height, model = "gpt-image-2") => openaiSizeFor(model, { width, height });
+export const openaiSize = (width, height, model = "gpt-image-2.5-flare") => openaiSizeFor(model, { width, height });
 
 async function uploadFile(apiKey, purpose, filename, blob) {
   const form = new FormData();

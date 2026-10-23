@@ -83,6 +83,15 @@ export function fitConfig(cfg) {
 
 const all = () => game.settings.get(MODULE_ID, "imageTypes") ?? {};
 
+/** Where a retired model goes: a GPT Image save moves to GPT Image 2.5 Flare (same provider), anything else to the provider's first model. */
+export function replacementModel(provider, oldId, models = providers.listModels(provider)) {
+  if (/gpt-?(\d+(\.\d+)?-)?image/i.test(String(oldId))) {
+    const flare = models.find((m) => /gpt-image-2\.5-flare$/.test(m.id));
+    if (flare) return flare.id;
+  }
+  return models[0]?.id ?? "";
+}
+
 /**
  * Referencje to ścieżki plików w Data (względne). Odrzucamy adresy http(s)/data/blob/file, litery dysków,
  * `//` i `..`: `loadRefs` pobiera je z przeglądarki GM-a i wysyła bajty do dostawcy, więc konfiguracja
@@ -121,9 +130,14 @@ export function getConfig(key) {
   if (!PROVIDER_IDS.includes(cfg.provider)) { cfg.provider = DEFAULT_CONFIG.provider; cfg.model = DEFAULT_CONFIG.model; }
   if (!QUALITIES.includes(cfg.quality)) cfg.quality = DEFAULT_CONFIG.quality; // old saves lack it
   cfg.defaultCount = clampCount(cfg.defaultCount);
-  // Heal a model that no longer belongs to the provider.
+  // A model that left the catalogue (old GPT Image 1/1.5/2 saves) is replaced, not deleted from the save: the
+  // rest of the settings stay, size and quality are fitted to the new model, and `retiredModel` lets the
+  // editor say so until the type is saved again (setConfig never stores it).
   const models = providers.listModels(cfg.provider);
-  if (models.length && !models.some((m) => m.id === cfg.model)) cfg.model = models[0].id;
+  if (models.length && !models.some((m) => m.id === cfg.model)) {
+    cfg.retiredModel = cfg.model;
+    cfg.model = replacementModel(cfg.provider, cfg.model, models);
+  }
   Object.assign(cfg, fitConfig(cfg));
   // Batch is impossible for providers without it.
   if (cfg.defaultMode === "batch" && !providers.PROVIDERS[cfg.provider]?.supportsBatch) cfg.defaultMode = "fast";

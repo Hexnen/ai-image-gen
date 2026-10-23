@@ -1,13 +1,13 @@
-// OpenAI Images (gpt-image-*) bezpośrednio. Port z roleplay imageGen/openai.ts.
+// OpenAI Images (gpt-image-2.5-flare / -sunburst) bezpośrednio. Port z roleplay imageGen/openai.ts.
 // Bez refs: JSON /images/generations; z refs: multipart /images/edits (max 16).
 import { GPT_IMAGE_TIMEOUT_MS, withTimeout, scaledTimeout, httpError, b64ToBlob, mimeOf } from "./util.mjs";
-import { OPENAI_RATES, openaiSizeFor, fitOpenAIQuality, bucketOpenAISize, openaiPriceFloor, supportsTransparent } from "./models.mjs";
+import { OPENAI_RATES, openaiSizeFor, fitOpenAIQuality, openaiPriceFloor, supportsTransparent } from "./models.mjs";
 import { estimateSyncCost } from "../batch/cost.mjs";
 
 export const OPENAI_BASE = "https://api.openai.com/v1";
 const EDIT_REF_LIMIT = 16;
 
-// Stawki za token (USD): gpt-image-2 i gpt-image-2.5 mają te same (OPENAI_RATES w models.mjs).
+// Stawki za token (USD): OPENAI_RATES w models.mjs.
 const TXT_IN = OPENAI_RATES.sync.textIn / 1e6, IMG_IN = OPENAI_RATES.sync.imageIn / 1e6, IMG_OUT = OPENAI_RATES.sync.imageOut / 1e6;
 // Fallback per obraz, gdy brak usage: openaiPriceFloor (models.mjs) albo szacunek tokenowy, co wyższe.
 
@@ -19,9 +19,6 @@ function requestTimeout(quality, size, n) {
   return scaledTimeout(GPT_IMAGE_TIMEOUT_MS, { n, factor: (TIME_FACTOR[quality] ?? 1) * area, max: 600_000 });
 }
 
-/** Zachowane dla zgodności: rozmiar-koszyk (starsze modele). */
-export const pickSize = ({ width, height, aspectRatio }) => bucketOpenAISize(width, height, aspectRatio);
-
 export async function generate({ apiKey, model, prompt, refs = [], width, height, aspectRatio, quality = "medium", n = 1, transparent = false, signal }) {
   // `background: "transparent"` only for models that take it; it needs PNG (or WebP) output, so we ask for PNG.
   const alpha = !!transparent && supportsTransparent("openai", model);
@@ -30,7 +27,7 @@ export async function generate({ apiKey, model, prompt, refs = [], width, height
   if (refs.length > EDIT_REF_LIMIT) {
     throw new Error(`OpenAI ${model}: ${refs.length} referencji przekracza limit /images/edits (${EDIT_REF_LIMIT}).`);
   }
-  // 2.5: dokładny rozmiar po normalizacji (×16, limity API); starsze: 3 koszyki.
+  // Dokładny rozmiar po normalizacji do reguł API (×16, limity).
   const size = openaiSizeFor(model, { width, height, aspectRatio });
   let res;
   const route = refs.length ? "images/edits" : "images/generations";
@@ -79,6 +76,6 @@ function costOf(model, json, quality, size, count = 1) {
   if (isFinite(inTok) && isFinite(outTok) && inTok + outTok > 0) return { cost: inCost + outTok * IMG_OUT, estimated: false };
   // Brak usage: nigdy 0 — tabela cen (skalowana polem dla nowych rozmiarów/jakości) albo szacunek tokenowy.
   const [w, h] = size.split("x").map(Number);
-  const per = Math.max(openaiPriceFloor(quality, w, h, model), estimateSyncCost("openai", model, [{ quality, width: w, height: h }]));
+  const per = Math.max(openaiPriceFloor(quality, w, h), estimateSyncCost("openai", model, [{ quality, width: w, height: h }]));
   return { cost: per * count, estimated: true };
 }
