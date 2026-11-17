@@ -23,7 +23,7 @@ export function readToolDefs() {
   return [
     {
       name: "get_entries",
-      description: "Full details of catalogue entries by ref (at most 8 refs per call): the item's rules text as the book gives it, automation names, effects, what a drawback needs; split powers: levels (one ref per level), other powers: maxLevel. Archetype and occupation refs return their book section plus structured facts (archetype: role, attributes, powers with refs; occupation: resources and talents, already in the index line); npc/sampleHero refs return the actor's attributes and items.",
+      description: "Full details of catalogue entries by ref (at most 8 refs per call): the item's rules text as the book gives it, automation names, effects, what a drawback needs; split powers: levels (one ref per level) and perLevel (each level's effects and the text it adds to Basic), other powers: maxLevel. Archetype and occupation refs return their book section plus structured facts (archetype: role, attributes, powers with refs; occupation: resources and talents, already in the index line); npc/sampleHero refs return the actor's attributes and items.",
       input_schema: {
         type: "object",
         additionalProperties: false,

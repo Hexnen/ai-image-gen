@@ -568,7 +568,7 @@ const clean = (s) => oneLine(s).replace(/\|/g, "/");
 export function indexText(cat) {
   const out = [];
   out.push("<catalog>");
-  out.push("Installed Invincible content (invincible-core). Use refs exactly as written; get_entries(refs) gives the full rules text. Columns per section header; '-' = none; fx = the item's effects on the sheet (attribute or field change); fx text = no sheet effect (rule in the summary/text); (disabled) = off until switched on in play.");
+  out.push("Installed Invincible content (invincible-core). Use refs exactly as written; get_entries(refs) gives the full rules text. Columns per section header; '-' = none; fx = the item's effects on the sheet (attribute or field change); fx text = effects not on the sheet: the rule is in the text, read it; (disabled) = a situational effect the GM switches on in play, not 'no effect'; (not transferred) = never on the hero.");
   const sec = (kind, header, line) => {
     const list = cat.byKind(kind);
     if (!list.length) return;

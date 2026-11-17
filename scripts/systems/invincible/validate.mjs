@@ -781,7 +781,7 @@ export function costLabel(c, info, ctx) {
 
 /* ================================================================== model-facing tools */
 const TOOL_DESC = {
-  submit_proposal: "Submit the proposal for the GM. It is validated (refs, the system's rules on the sheet as it would be after the change, a dry run of the write); errors come back with hints, the budget before/after and each op's cost. ok:true ends your turn and the GM sees a preview; removals and level swaps (applyConfirm) are confirmed by the GM at Apply. dryRun:true = check only: same result, nothing reaches the GM, your turn goes on; only to compare variants or to price a change you may not propose (\"what would Flight at Major cost?\"), never before a submit.\n" + PROPOSAL_GUIDE
+  submit_proposal: "Submit the proposal for the GM. It is validated (refs, the rules on the sheet as it would be after the change, a dry run of the write); errors come back with hints, the budget before/after and each op's cost. ok:true ends your turn and the GM sees a preview (applyConfirm: the removals and level swaps the GM confirms at Apply). dryRun:true = check only: same result, nothing reaches the GM, your turn goes on; only to compare variants or to price a change you may not propose (\"what would Flight at Major cost?\"), never before a submit.\n" + PROPOSAL_GUIDE
 };
 export function proposalToolDefs() {
   return MODEL_TOOL_NAMES.map((name) => ({ name, description: TOOL_DESC[name], input_schema: PROPOSAL_SCHEMA, strict: true }));

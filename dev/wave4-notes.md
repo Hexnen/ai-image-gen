@@ -114,3 +114,45 @@ Pliki: `scripts/systems/invincible/catalog.mjs` (streszczenia talentów/wad, kol
 - Zachowanie prawdziwego modelu z nowymi streszczeniami, `perLevel`, `LIMITED` i liniami zmian (runda 5); prawdziwe tokeny (`count_tokens`, T8): estymator znaki/3,5 nie widzi zysku z tabel.
 - Czy każdy limit z `LIMITED` rzeczywiście warunkuje premię: linia mówi tylko, że limit jest podpięty (celowo).
 - Szuflada T7 nie pokazuje linii `(changed: ...)` (to tylko tekst dla modelu); `scripts/build/sheet-sync.mjs` (inne pakiety) bez opisu zmian.
+
+## W4-T: jeden przebieg po tekstach prefiksu (listy W4-A-T*, W4-B-T*, luki z rund 4)
+
+Pliki: `scripts/build/harness-prompt.mjs` (system[0], `HARNESS_RULES_VERSION` 5), `scripts/systems/invincible/rules-digest.mjs` (`DIGEST_VERSION` 5, wchodzi w fingerprint prefiksu), `proposal.mjs` (tylko `PROPOSAL_GUIDE`), `validate.mjs` (tylko `TOOL_DESC.submit_proposal`), `tools.mjs` (opis `get_entries`), `catalog.mjs` (tylko linia wstępu indeksu); testy `dev/test-prompt-texts.mjs`, `dev/test-catalog-invincible.mjs`. Kod (walidator, writer, harness, `prompt.mjs`, układ cache) i wendor bez zmian. Bez toru, bez sieci.
+
+### Co zmienione
+- Listy z W4-A/W4-B: `grants` zniknęło z przewodnika (W4-A-T2); reguła limitu raz, w skrócie: „A limit pays for one level of its power (a power at Basic: one boost; the builder decides which, the summary says it)”. Replace: `gear [{ref} | {custom}]` opcjonalne, podane = cała lista gearu (reszta usunięta), pominięte = gear nietknięty (W4-A-T3). Notatka z `bonus.[attribute]` (np. Signature Item): jeden atrybut w notatce, builder ustawia efekt (W4-A-T4). Talent zawodu wymagany w każdym profilu: zamiana z listy, inaczej bez usuwania + zdanie, że MG może usunąć ręcznie; nowy zawód = talent z jego listy (W4-A-T5). Solo: `(info team.empty: nothing to fix)` (W4-A-T1). Wstęp indeksu: `fx text = effects not on the sheet: the rule is in the text, read it; (disabled) = a situational effect the GM switches on in play, not 'no effect'; (not transferred) = never on the hero` (W4-B-T1/T4); skrót tylko odsyła do kolumny fx. `get_entries`: `perLevel` (W4-B-T2). system[0]: `(changed: ...)` pod `~` i `(was: ...)` przy `-` tylko opisują zmianę (W4-B-T3); `LIMITED` w skrócie (W4-B-T3, h).
+- Luki z rund 4: (a) prośba wykonalna częściowo: wyślij część możliwą, rationale mówi, czego nie zrobiono i dlaczego, najwyżej jedno pytanie (system[0]); (b) wartość z szuflady (np. ranga dla wyższego atrybutu): bez narzędzi i bez propozycji, jedno zdanie (system[0]); skrót mówi tylko, że atrybut ponad limit wymaga innej rangi (zgodne z podpowiedzią `attr.cap` in-play); (c) ustawienia nagłówka (ranga, profil) obowiązują przy każdej prośbie, także zaraz po budowie, nigdy nie zakładać innych (system[0]); (d) MG potwierdza usunięcia i zamiany poziomów przy Apply: raz w system[0], `applyConfirm` nazwane raz w opisie submit; (e) jedna klauzula: Signature Item / Gear Dependent wiąże moce swojego źródła z przedmiotem, wspomnieć w rationale, gdy ma znaczenie; (f) język: wolny tekst w języku MG, nazwy z katalogu bez zmian „inside notes too” (system[0]), klauzule języka usunięte z przewodnika; (g) pojazdy: „not built here … (their rules: read_rules)”, bez zdania o Resources 5+; (h) pytania o liczby bohatera z karty, `LIMITED` = premia zależna od limitu: powiedz, czego limit wymaga. Tabele read_rules (W4-B-5): nic do dopisania.
+- Usunięte jako zbędne (reguła została raz): ref mocy dzielonej w skrócie (jest w przewodniku), `texts.occupation` po angielsku w skrócie (przewodnik), liczby gearu w skrócie (przewodnik/schemat), „never change it yourself” + „call no tools” przy randze (system[0]), „in the GM's language” przy notatce i osobowości (system[0]), „the system's rules” -> „the rules” w opisie submit, „needs a drawer setting changed” z listy „Ask before submitting” (osobna linia).
+
+### Rozmiar (znaki / tokeny = ceil(znaki/3,5))
+| Blok | Przed (HEAD 87cdc7a) | Po |
+|---|---|---|
+| system[0] | 3 467 / 991 | 3 869 / 1 106 |
+| system[1] skrót | 6 723 / 1 921 | 6 963 / 1 990 |
+| tools (JSON, 5) | 14 177 / 4 051 (submit 10 321) | 14 179 / 4 052 (submit 10 257) |
+| razem bez indeksu | 24 367 / 6 962 | 25 011 / 7 146 |
+| system[2] indeks | 49 681 / 14 195 | 49 771 / 14 221 (+90: linia wstępu, policzone z różnicy stałej, nie zmierzone na torze) |
+| cały prefiks | 74 048 / 21 157 | 74 782 / 21 367 (+734 zn., ~+210 tok, +1,0 %) |
+
+Przyrost to nowe reguły (a)-(h) i W4-A/B (~1,4k znaków), częściowo zrównoważone usunięciem powtórzeń (~0,7k). Prefiks zmienia się raz (nowy fingerprint przez `DIGEST_VERSION` 5); między wywołaniami bajt w bajt stały (test w procesie i w dwóch świeżych procesach).
+
+### Wybory (zachowanie tymczasowe)
+| # | Pytanie | Wybór |
+|---|---------|-------|
+| W4-T-1 | Gdzie legenda `fx` | Raz, we wstępie indeksu (obok danych); skrót: „check the index column fx”. |
+| W4-T-2 | Prośba częściowa (a) | Ogólna linia w system[0]; obejmuje też „reszty nie ruszaj” vs zmiana, którą pociągnęłaby reguła (np. nowy zawód bez wymiany talentu: zrobić, ostrzeżenie `talent.occ.list` nie blokuje, w rationale jedno pytanie). |
+| W4-T-3 | Profil edycji (c) | system[0]: ustawienia nagłówka obowiązują przy każdej prośbie, także zaraz po budowie; sekcja Profiles w skrócie bez zmian. |
+| W4-T-4 | Ranga / limit atrybutu (b) | Co zrobić: raz w system[0] (bez narzędzi, bez propozycji, jedno zdanie); skrót tylko nazywa przypadek (atrybut ponad limit = inna ranga). Zgodne z `attr.cap` in-play (test). |
+| W4-T-5 | Potwierdzenie przy Apply (d) | system[0] jedna klauzula; opis submit: `(applyConfirm: the removals and level swaps the GM confirms at Apply)`; `applyConfirmNote` w wyniku bez zmian. |
+| W4-T-6 | Język notatek (f) | system[0]: wolny tekst w języku MG, nazwy katalogu bez zmian także w notatkach; przewodnik bez klauzul języka (notatka, osobowość). Atrybut w notatce może być po polsku (walidator rozpoznaje). |
+| W4-T-7 | „write one attribute” | „put one attribute in the note”: test W2-8 pilnuje, że opis submit nie zawiera „write one” (stara reguła zamykającego zdania). |
+| W4-T-8 | Czego nie dodano | Niejasność `dryRun` przy podejrzanie błędnym usunięciu (dry4-am 4/9, dry4-nc 10), kolumna „base upgrades” (dry4-nc 15), wybór zmysłu Reduced Sense (dry4-dd 2), ostrzeżenia w wyniku po zakończonej turze (dry4-am 3): spoza listy, prefiks ma być krótki. W4-A-T6 (`setOptions` przed Apply) to RUNBOOK, nie prefiks. |
+
+### Testy
+- `test-prompt-texts` 22 (+3 W4-T: system[0] (zmiany w `sheet_update`, Apply, nagłówek, inna wartość = bez narzędzi, prośba częściowa, agnostyczność); skrót (ranga zgodna z system[0] i `attr.cap`, talent zawodu zgodny z `talent.occ.missing`, źródło + przedmiot, `LIMITED`, brak `grants` w całym prefiksie); przewodnik + narzędzia (gear, notatka z atrybutem, język raz, `perLevel`, `applyConfirm` raz, próg 16 000 znaków); zmienione asercje starych zdań: split ref, `texts.occupation`, ranga, nazwy w notatkach, `get_entries`, notatka/osobowość, limit, Basic, pojazdy (+ brak „car/motorcycle”), fx (+ brak „= no effect”), solo, `applyConfirm`, gear, `bonus.[attribute]`). Sufit bez indeksu 7 500 tok bez zmian (jest ~7 150).
+- `test-catalog-invincible` 25 (asercja wstępu indeksu: nowe `fx text`, `(disabled)`, `(not transferred)`).
+- Wszystkie `dev/test-*.mjs` zielone: ops 41, snapshot 35, validate 51, catalog 25, dry-relay 13, dry-transport 12, enhance 22, harness 36, migrate-id 18, packs 23, prompt-texts 22, transport 27, vendor load 9, vendor-sync ALL OK (wendor bajt w bajt).
+
+### Niezweryfikowane
+- Zachowanie prawdziwego modelu z nowymi zdaniami (runda 5): prośby częściowe, ranga/limit bez narzędzi, profil po budowie, `LIMITED`, `fx text`, Signature Item z atrybutem w notatce, gear w replace.
+- Rozmiar indeksu na torze (+90 znaków policzone, nie zmierzone); prawdziwe tokeny (`count_tokens`, T8).

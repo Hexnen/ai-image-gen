@@ -443,8 +443,9 @@ await test("W4-B-1/2: index talent/drawback lines carry the rule; fx 'text' = ef
   const c = await buildCatalog(s, { feedRules: false });
   const a = indexText(c);
   assert.equal(a.split("\n").find((l) => l.includes("|Mock Weakness|")), `drawbacks:${id("drwWeak")}|Mock Weakness|defined|text|blow from it deals double damage.`);
-  assert.match(a, /fx text = no sheet effect/);
-  assert.match(a, /\(disabled\) = off until switched on in play/);
+  assert.match(a, /fx text = effects not on the sheet: the rule is in the text, read it/);   // W4-T (W4-B-T1/T4)
+  assert.match(a, /\(disabled\) = a situational effect the GM switches on in play, not 'no effect'/);
+  assert.match(a, /\(not transferred\) = never on the hero/);
   // other kinds keep the 12-word first sentence
   assert.equal(c.findByName("power", "Glide Step").summaryText, "Alpha placeholder sentence about moving.");
   const { source: s2 } = fixture(); delete s2.documents;

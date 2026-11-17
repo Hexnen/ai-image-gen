@@ -129,10 +129,11 @@ await test("digest: talents (order, free hero talent, Knowledgeable variants), r
   assert.match(d, /any Knowledgeable \(subject\) entry of the catalogue counts/);
   assert.match(d, /reputation = the rank's reputation value/);
   for (const k of RANK_ORDER) assert.ok(d.includes(`|${RANKS[k].reputation}|${RANKS[k].upgrades}`), `rank table reputation for ${k}`);
-  assert.match(d, /give the power's index ref with a level, or that level's own ref/);
+  assert.match(d, /one document per level \(refs: see the submit tool\)/);   // W4-T: the ref rule lives once, in the guide
+  assert.ok(!/give the power's index ref with a level/.test(d));
   assert.match(d, /Hard Times: still write the occupation's value; each Hard Times lowers the effective Resources by 1/);   // D-3 provisional
-  assert.match(d, /texts\.occupation = its English catalogue name/);
-  assert.match(d, /call no tools and ask the GM to set it in the drawer/);
+  assert.ok(!/texts\.occupation = its English catalogue name/.test(d), "W4-T: the occupation name rule lives once, in the guide");
+  assert.match(d, /The rank is a drawer setting; an attribute above the rank's cap needs another rank/);   // W4-T (b): the no-tools rule is in system[0]
 });
 
 /* ---------------------------------------------------------------- W2-8: one text pass after wave 2 */
@@ -150,23 +151,25 @@ await test("W2-8 system[0]: proposal marker, unchanged update lines, read scope,
   assert.ok(!/one short sentence/.test(h), "W3-4: no reply after a successful submit (the turn ends)");
   assert.match(h, /name the main alternative in the rationale/);
   assert.match(h, /rationale and every free text \(descriptions, personality words, notes\) in the language of the GM's message/);   // D-7/D-12
-  assert.match(h, /catalogue names exactly as the catalogue spells them/);
+  assert.match(h, /catalogue names exactly as the catalogue spells them, inside notes too/);   // W4-T (f)
 });
 
 await test("W2-8 tools + guide: get_entries fields, submit stop, replace error paths, note/personality language, name, Basic-only limit", () => {
   const ge = desc("get_entries");
   assert.ok(!/slot\/cost note|slotNote/.test(ge), "no slot note any more (W2-4)");
-  assert.match(ge, /split powers: levels \(one ref per level\), other powers: maxLevel/);
+  assert.match(ge, /split powers: levels \(one ref per level\) and perLevel \(each level's effects and the text it adds to Basic\), other powers: maxLevel/);   // W4-B-T2
   assert.match(ge, /automation names/);
   assert.match(ge, /archetype: role, attributes, powers with refs/);
   assert.ok(!/one short sentence|write one|and stop/.test(desc("submit_proposal")), "W3-4: no closing sentence after a submit");
   assert.match(desc("submit_proposal"), /ok:true ends your turn/);
   const g = PROPOSAL_GUIDE;
   assert.match(g, /Its errors name proposal\.\* paths and the entry; their opId is the summary's/);   // W2-2
-  assert.match(g, /note = the choice shown in brackets, in the GM's language/);
-  assert.match(g, /exactly two words in the GM's language/);
+  assert.match(g, /note = the choice shown in brackets, only for a real choice/);
+  assert.match(g, /exactly two words, comma separated/);
+  assert.ok(!/in the GM's language/.test(g), "W4-T: the language rule lives once, in system[0]");
   assert.match(g, /name \(the hero name\)/);
-  assert.match(g, /a limit pays for a level of its power \(a Basic-only power: a boost\); grants is optional and never changes the cost/);   // W3-6
+  assert.match(g, /boost\/limit: powerItemId or powerOpId\. /);   // W4-A-T2: what a limit pays for = the digest's rule + the summary label
+  assert.ok(!/grants/.test(g), "W4-A-2: no grants in the guide");
   assert.ok(!/limits \[\{ref, grants\}\]/.test(g), "replace limits list no grants");
   assert.match(g, /the main alternative/);
   // after D-9 one proposal tool is ~9.7k: the cap now covers ALL tool definitions (was check+submit alone)
@@ -182,7 +185,7 @@ await test("W2-8 digest: budget legend (perOp, spentAfter, label), talent roles,
   assert.match(d, /role=hero\|occupation\|extra/);
   assert.match(d, /A new talent is always added last, so replacing the hero or occupation talent shifts roles \(warning talent\.role\.shift\)/);
   assert.match(d, /its index line gives its Resources and occupation talents, so it needs no read/);
-  assert.match(d, /\(a Basic-only power: a boost\)/);
+  assert.match(d, /A limit pays for one level of its power \(a power at Basic: one boost; the builder decides which, the summary says it\)/);   // W4-A-T2
   assert.match(d, /hero name \(name\)/);
   // Hard Times: the digest and the model-facing message say the same (-1 through the effect), neither names the book's number
   const ht = MESSAGES["drawback.hardTimes"]({ stored: 5, effective: 4, book: 3 });
@@ -227,7 +230,8 @@ await test("W3-14 digest: profiles, role keys, out of scope, slot example, freed
   // role = English key (finding 10)
   assert.match(d, /Roles \(texts\.role = one of these English keys/);
   // vehicles and other actors out of scope, in one sentence
-  assert.match(d, /minions, challenges and vehicles are out of scope: say so in one sentence/);
+  assert.match(d, /minions, challenges and vehicles are not built here: say so in one sentence \(their rules: read_rules\)/);   // W4-T (g)
+  assert.ok(!/\bcar\b|motorcycle/i.test(d), "W4-T (g): vehicle rules come from read_rules, not the digest");
   // slot example from the vendored numbers (cosmic: 38 + 2 x 5 = 48)
   const c = RANKS.cosmic;
   assert.ok(d.includes(`an empty Cosmic Champion sheet has ${c.points} + 2 x ${c.powers} = ${c.points + 2 * c.powers} points`));
@@ -235,23 +239,25 @@ await test("W3-14 digest: profiles, role keys, out of scope, slot example, freed
   // D-18, D-10, fx (W3-13), D-15, D-16, D-17
   assert.match(d, /leave the rest[^.]*: put them into attributes that fit the concept and say so in the rationale; do not ask/);
   assert.match(d, /An archetype's source missing from the catalogue: take the nearest catalogue source and say so in the rationale/);
-  assert.match(d, /Drawbacks may lower attributes: read the index column fx \(\(disabled\), \(not transferred\) = no effect\) before you pick one/);
+  assert.match(d, /Drawbacks may lower attributes: check the index column fx before you pick one/);   // W4-B-T1: the fx legend lives in the index intro
+  assert.ok(!/= no effect/.test(d), "W4-B-T1: (disabled) is not 'no effect'");
   assert.match(d, /at a build fill them, with one original NPC in relationships/);
-  assert.match(d, /A solo hero: team and teamBase empty, one sentence in the rationale, never "Solo" as a team/);
+  assert.match(d, /A solo hero: team and teamBase empty \(info team\.empty: nothing to fix\), one sentence in the rationale, never "Solo" as a team/);   // W4-A-T1
   assert.match(d, /paid from Resources; reported as info, the GM decides/);
 });
 
 await test("W3-14 tools + guide: applyConfirm, gear in replace, D-19 notes, placeholder choice, role key, Health/Resolve at build, sample heroes", () => {
   const sub = desc("submit_proposal");
-  assert.match(sub, /removals and level swaps \(applyConfirm\) are confirmed by the GM at Apply/);   // W3-10
+  assert.match(sub, /\(applyConfirm: the removals and level swaps the GM confirms at Apply\)/);   // W3-10, W4-T (d)
   const g = PROPOSAL_GUIDE;
-  assert.match(g, /gear is never touched \(add it with ops\)/);                       // finding 11: replace has no gear array
+  assert.match(g, /gear \[\{ref\} \| \{custom\}\] \(optional: given = the hero's whole gear list, the rest is removed; left out = gear untouched\)/);   // W4-A-T3
+  assert.ok(!/gear is never touched/.test(g));
   assert.match(g, /only for a real choice \(no decorative notes/);                    // D-19
-  assert.match(g, /an effect with an open choice such as bonus\.\[attribute\]: name it here, the GM sets the effect/);   // W3-9
+  assert.match(g, /an effect with bonus\.\[attribute\] \(e\.g\. Signature Item\): put one attribute in the note, the builder sets the effect from it/);   // W4-A-T4 (D-13)
   assert.match(g, /role \(an English role key\)/);
   assert.match(g, /a build sets Health\/Resolve to max itself/);                     // W3-3
   assert.match(desc("search_catalog"), /every entry except sample heroes \(kinds \["sampleHero"\]\)/);   // D-8
-  // W4-A-3: the replace schema has an optional gear array ({ref} | {custom}); the guide sentence above changes in W4-T (W4-A-T3)
+  // W4-A-3: the replace schema has an optional gear array ({ref} | {custom}); the guide sentence above says so (W4-A-T3)
   assert.deepEqual(Object.keys(proposalToolDefs()[0].input_schema.properties.proposal.properties.gear.items.properties), ["ref", "custom"]);
   // W4-A-2: no `grants` in the model-facing schema (ops and replace limits)
   const sch = JSON.stringify(proposalToolDefs()[0].input_schema);
@@ -265,6 +271,57 @@ await test("W3-14 dry-run tool result: marked dryRun, no proposalId, summary kep
   const real = toolResult("submit_proposal", r, null);
   assert.equal(real.dryRun, undefined); assert.match(real.proposalId, /^prop-/); assert.deepEqual(real.applyConfirm, r.applyConfirm);
   assert.equal(toolResult("check_proposal", r, null).dryRun, true, "internal alias");
+});
+
+/* ---------------------------------------------------------------- W4-T: one text pass after wave 4 */
+await test("W4-T system[0]: change notes, Apply confirms removals, header settings hold, another value = no tools, partial requests", () => {
+  const h = HARNESS_RULES;
+  // W4-B-T3: the change notes of a sheet_update are descriptions, not lines to fold in
+  assert.match(h, /"\(changed: field old -> new\)" under a "~" line and "\(was: \.\.\.\)" on a "-" line only describe the change/);
+  // (d) once, short
+  assert.match(h, /clicks Apply, where the GM also confirms removals and level swaps/);
+  assert.equal((h.match(/confirms removals/g) ?? []).length, 1);
+  // (c) the header's settings (rank, profile) are the truth for every request, also right after a build
+  assert.match(h, /Sheet header settings \(e\.g\. rank, profile\) are the GM's drawer settings: they hold for every request, also right after a build; never assume or change them/);
+  // (b) a request that needs another drawer value: no tools, no proposal, one sentence
+  assert.match(h, /For a request that needs another value, call no tools and send no proposal: ask in one sentence for the change in the drawer/);
+  // (a) partly doable: do the part, say what was not done and why, at most one question
+  assert.match(h, /A request possible only in part \(a rule forbids a part, the GM said to leave alone what it would change, or the sheet has nothing for it\): submit the possible part; the rationale says what was not done and why, with at most one question/);
+  // the drawer case lives in its own line, not in the "ask before submitting" list
+  assert.match(h, /Ask before submitting only when the request would remove items that are not from the catalogue or were hand-edited/);
+  assert.ok(!/Signature|LIMITED|invincible/i.test(h), "system[0] stays system-agnostic");
+});
+
+await test("W4-T digest: rank cap = drawer (agrees with system[0] and attr.cap), occupation talent, one source, LIMITED, no grants", () => {
+  const d = rulesDigest();
+  // (b) the digest names the case, system[0] says what to do; the in-play attr.cap hint says the same
+  assert.match(d, /an attribute above the rank's cap needs another rank/);
+  assert.ok(!/call no tools/.test(d), "the no-tools rule lives once, in system[0]");
+  assert.match(HARNESS_RULES, /call no tools and send no proposal/);
+  assert.match(MESSAGES["attr.cap"]({ attr: "agility", cap: 6, inPlay: true }).hint, /ask them to change the rank in the drawer/);
+  // W4-A-T5: occupation talent required in every profile; swap from the list or the GM removes it by hand (agrees with the hint)
+  assert.match(d, /It is required in every profile: to remove it, swap it for another from the list \(a new occupation: from its list\); if the GM wants none, submit no removal and say the GM can remove it by hand/);
+  const occ = MESSAGES["talent.occ.missing"]({ occupation: "Courier", list: "Quick Wits, Streetwise" }).hint;
+  assert.match(occ, /do not submit the removal/); assert.match(occ, /remove it by hand/);
+  // (e) one clause on a source tied to an item
+  assert.match(d, /a Signature Item or Gear Dependent ties every power of its source to the item \(losing it disables them\): say so in the rationale when it matters/);
+  // (h) numbers from the sheet; LIMITED = a bonus gated by its limit
+  assert.match(d, /Answer questions about the hero's numbers \(damage, Health\) from the sheet; a LIMITED line's bonus depends on its limit: say what the limit needs/);
+  assert.ok(!/grants/.test(d) && !/grants/.test(JSON.stringify(tools())), "W4-A-2: no grants anywhere in the prefix");
+  assert.equal((d.match(/drawer/g) ?? []).length, 2, "rank origin marker + the drawer setting, nothing more");
+});
+
+await test("W4-T guide + tools: note language once, gear list in replace, attribute note, perLevel, applyConfirm named once", () => {
+  const g = PROPOSAL_GUIDE;
+  assert.match(g, /gear \[\{ref\} \| \{custom\}\] \(optional: given = the hero's whole gear list/);
+  assert.match(g, /left out = gear untouched/);
+  assert.match(g, /put one attribute in the note, the builder sets the effect from it/);
+  assert.match(HARNESS_RULES, /every free text \(descriptions, personality words, notes\) in the language of the GM's message/);   // (f) free text
+  assert.match(HARNESS_RULES, /catalogue names exactly as the catalogue spells them, inside notes too/);                       // (f) catalogue names
+  assert.match(desc("get_entries"), /perLevel/);
+  const all = JSON.stringify(tools());
+  assert.equal((all.match(/applyConfirm/g) ?? []).length, 1, "applyConfirm is explained once, in the submit tool");
+  assert.ok(all.length < 16000, `all tool definitions under 16,000 chars (${all.length})`);
 });
 
 /* ---------------------------------------------------------------- size */

@@ -11,7 +11,7 @@
 import { RANKS, RANK_ORDER, ATTRS, ROLES, MAX_DRAWBACKS, FREE_TALENTS, ATTR_MIN, SLOT_VALUE, TALENT_LIMITS, DRAWBACK_LIMITS } from "./vendor/chargen/rules.mjs";
 import { htmlToText } from "./catalog.mjs";
 
-export const DIGEST_VERSION = 4;   // 3 = W2-8 text pass; 4 = W3-14 (profiles, role keys, fx, expected texts, solo, freed points, gear)
+export const DIGEST_VERSION = 5;   // 3 = W2-8 text pass; 4 = W3-14 (profiles, role keys, fx, expected texts, solo, freed points, gear); 5 = W4-T
 export const RULES_PART_CHARS = 6000;   // spec 6: cap 6,000 chars per read_rules call (longer pages come in parts)
 
 /** Book names of the ranks (the rank table below; pack.mjs re-exports them for pack.ranks()). */
@@ -28,13 +28,13 @@ export function rulesDigest() {
     "Invincible RPG (Free League), character creation and item rules as the builder enforces them. Paraphrase with numbers only; the book's own text comes from read_rules / get_entries.",
     "",
     "## Document types",
-    "Actors: superhero (player hero, full creation rules), npc (free-form); minions, challenges and vehicles are out of scope: say so in one sentence. Items: powerSource, power, boost, limit, talent, drawback, gear, vehicleWeapon, criticalInjury (never created by the builder).",
+    "Actors: superhero (player hero, full creation rules), npc (free-form); minions, challenges and vehicles are not built here: say so in one sentence (their rules: read_rules). Items: powerSource, power, boost, limit, talent, drawback, gear, vehicleWeapon, criticalInjury (never created by the builder).",
     `Attributes (exactly these six): ${ATTRS.join(", ")}. Roles (texts.role = one of these English keys; no mechanical effect): ${ROLES.join(", ")}. The system has no skills; stunts are roll outcomes described in power texts, not picks.`,
     "",
     "## Hero rank table",
     "key|name|attribute points|attribute cap|power slots|reputation|base upgrades",
     ...rankRows,
-    "Default rank: Global Guardian. The GM sets the rank in the drawer; never change it yourself. The sheet header shows rank=<key>(drawer|flag|default); (default) means nobody chose it. If the GM's message names another rank, call no tools and ask the GM to set it in the drawer.",
+    "Default rank: Global Guardian. The sheet header shows rank=<key>(drawer|flag|default); (default) means nobody chose it. The rank is a drawer setting; an attribute above the rank's cap needs another rank.",
     "",
     "## Reading VALID and budget",
     "The sheet's VALID line and the budget in tool results: budget (points) = attribute points available now (the formula below: every unused rank slot adds 2, so an empty sheet starts high); spent = sum of the six attributes, must equal budget; slots = used/rank; cap = attribute cap; drawbacks = taken/max; xsrc, xtal (extraSources, extraTalents) = paid extra power sources and talents; errors/warns = codes, numbers in brackets. Judge a draft by budget.after. perOp: points/slots = that op's own change, spentAfter = attribute sum after it, label = what it costs or pays for.",
@@ -47,21 +47,21 @@ export function rulesDigest() {
     `Every attribute is an integer from ${ATTR_MIN} to the rank cap. Points freed when the GM says to leave the rest (fewer powers or slots): put them into attributes that fit the concept and say so in the rationale; do not ask.`,
     "Slots used per power = levels above Basic + 1 + its boosts - the levels/boosts paid by its limits.",
     "Power levels: basic, major, massive, monstrous. A level needs the previous one. New heroes start at most at Major; Massive only at Cosmic Champion; Monstrous never. A power never goes above the highest level its catalogue entry lists.",
-    "Split-level powers (catalogue marks them 'split') have one document per level: give the power's index ref with a level, or that level's own ref (level omitted or the same).",
-    "Boosts and limits belong to one named power (catalogue groups them under @power). A boost costs 1 slot. A limit is always paired with one level or one boost of its power (a Basic-only power: a boost), which then costs no slot; a limit without such a pairing is invalid.",
-    "Power sources: at least one when the hero has powers; every power names one of the hero's sources; the first source is free, each extra costs 1 attribute point. An archetype's source missing from the catalogue: take the nearest catalogue source and say so in the rationale.",
-    `Talents: ${FREE_TALENTS} free (one hero talent + one occupation talent); each extra talent costs 1 attribute point. Order sets the role (sheet talent lines show role=hero|occupation|extra): 1st hero, 2nd occupation, the rest extras. A new talent is always added last, so replacing the hero or occupation talent shifts roles (warning talent.role.shift). Hero talent: from the archetype's list when you build from an archetype, otherwise any talent. Occupation talent: from the occupation's list; where it lists Knowledgeable, any Knowledgeable (subject) entry of the catalogue counts. A talent is taken once unless it says otherwise: ${limitText(TALENT_LIMITS)}. Knowledgeable counts once whatever its subject.`,
-    `Drawbacks: optional, at most ${MAX_DRAWBACKS}, each gives +1 attribute point; only once each except ${limitText(DRAWBACK_LIMITS)}. A drawback that asks for a choice (catalogue column 'needs': source = one of the hero's power sources, defined = something you define) needs a note. Drawbacks may lower attributes: read the index column fx ((disabled), (not transferred) = no effect) before you pick one.`,
-    "Derived values (never written, the sheet computes them): Health = half of (fighting + agility + strength) rounded up; Resolve = half of (reason + intuition + presence) rounded up; Slugfest = half of strength rounded up; item effects add to them.",
+    "Split-level powers (catalogue marks them 'split') have one document per level (refs: see the submit tool).",
+    "Boosts and limits belong to one named power (catalogue groups them under @power). A boost costs 1 slot. A limit pays for one level of its power (a power at Basic: one boost; the builder decides which, the summary says it), which then costs no slot; a limit with nothing to pay for is invalid.",
+    "Power sources: at least one when the hero has powers; every power names one of the hero's sources; the first source is free, each extra costs 1 attribute point; a Signature Item or Gear Dependent ties every power of its source to the item (losing it disables them): say so in the rationale when it matters. An archetype's source missing from the catalogue: take the nearest catalogue source and say so in the rationale.",
+    `Talents: ${FREE_TALENTS} free (one hero talent + one occupation talent); each extra talent costs 1 attribute point. Order sets the role (sheet talent lines show role=hero|occupation|extra): 1st hero, 2nd occupation, the rest extras. A new talent is always added last, so replacing the hero or occupation talent shifts roles (warning talent.role.shift). Hero talent: from the archetype's list when you build from an archetype, otherwise any talent. Occupation talent: from the occupation's list; where it lists Knowledgeable, any Knowledgeable (subject) entry of the catalogue counts. It is required in every profile: to remove it, swap it for another from the list (a new occupation: from its list); if the GM wants none, submit no removal and say the GM can remove it by hand. A talent is taken once unless it says otherwise: ${limitText(TALENT_LIMITS)}. Knowledgeable counts once whatever its subject.`,
+    `Drawbacks: optional, at most ${MAX_DRAWBACKS}, each gives +1 attribute point; only once each except ${limitText(DRAWBACK_LIMITS)}. A drawback that asks for a choice (catalogue column 'needs': source = one of the hero's power sources, defined = something you define) needs a note. Drawbacks may lower attributes: check the index column fx before you pick one.`,
+    "Derived values (never written, the sheet computes them): Health = half of (fighting + agility + strength) rounded up; Resolve = half of (reason + intuition + presence) rounded up; Slugfest = half of strength rounded up; item effects add to them. Answer questions about the hero's numbers (damage, Health) from the sheet; a LIMITED line's bonus depends on its limit: say what the limit needs.",
     "Stored values to write at creation: reputation = the rank's reputation value (table above; item effects add on top); resources = the occupation's Resources value. Hard Times: still write the occupation's value; each Hard Times lowers the effective Resources by 1 through its item effect.",
-    "Occupation: required; texts.occupation = its English catalogue name; its index line gives its Resources and occupation talents, so it needs no read. Personality (2 words), drive, flaw and hero name (name) are required; civilian name, appearance, relationships and team texts are expected: at a build fill them, with one original NPC in relationships. A solo hero: team and teamBase empty, one sentence in the rationale, never \"Solo\" as a team.",
+    "Occupation: required; its index line gives its Resources and occupation talents, so it needs no read. Personality (2 words), drive, flaw and hero name (name) are required; civilian name, appearance, relationships and team texts are expected: at a build fill them, with one original NPC in relationships. A solo hero: team and teamBase empty (info team.empty: nothing to fix), one sentence in the rationale, never \"Solo\" as a team.",
     "Archetypes are optional book suggestions (16), not rules; their suggested attributes and powers fit a Global Guardian budget.",
     "",
     "## NPCs",
     "Free-form: start from a stock NPC profile or an archetype; attributes 0..12 as the concept needs; powers only if they will be used; talents optional; drawbacks encouraged when they give the heroes a weakness to find; special abilities as text. Structure still holds: refs resolve, levels exist for the power, boosts/limits sit on a present power, no duplicate once-only talents.",
     "",
     "## Gear and vehicle weapons",
-    "Gear: cost (integer >= 0, paid from Resources; reported as info, the GM decides), restricted, single use, at most one attack (bonus, damage, min/max range, bypass armor). Vehicle weapons: cost and restricted. Start from a catalogue item when one fits; a custom item gets only a name, a plain description and those numbers.",
+    "Gear cost is paid from Resources; reported as info, the GM decides. Start from a catalogue item when one fits; a custom gear or vehicle weapon gets only a name, a plain description and the numbers the submit tool lists.",
     "</rules>"
   ].join("\n");
 }
