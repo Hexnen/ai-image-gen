@@ -1,0 +1,10 @@
+{
+ "note": "Vendored chargen rules core: byte-identical copy of invincible-plus-ultra scripts/chargen/{rules,state}.mjs (canonical). Never edit here; run sync.mjs.",
+ "source": "invincible-plus-ultra/scripts/chargen",
+ "algo": "sha256",
+ "files": {
+  "rules.mjs": "586909f55599b3090fa59bade6b545be16125c09686e7a8423d822df1e566b6b",
+  "stamp.mjs": "54f7798c50a702e4348fc5f4ac901ea7a217966962fffa8fa5817ab219b470fa",
+  "state.mjs": "8ed45f01e54bbe94ef733c333f87c8788fd8289ac750a575b0bcc5aa57a71e9f"
+ }
+}

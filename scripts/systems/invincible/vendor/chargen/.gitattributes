@@ -1,0 +1,2 @@
+# byte-identical vendored copy: no line-ending conversion on checkout (core.autocrlf=true would turn LF into CRLF and break sync.mjs --check)
+* -text
