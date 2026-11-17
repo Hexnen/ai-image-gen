@@ -310,9 +310,14 @@ await test("ensureSelfTest runs once; throwing selfTest = ok:false; pack without
   const r = await reg.ensureSelfTest(); await reg.ensureSelfTest();
   assert.equal(r.ok, false); assert.match(r.error, /api changed/); assert.equal(n, 1);
   assert.equal(reg.status().selfTest.ok, false);
+  // the Invincible pack has a selfTest since T6 (plus-ultra version guard): without plus-ultra it passes; a pack without one is skipped
   const s2 = spyDeps(mockGame({ modules: { [CORE_MODULE]: coreMod } }), { invincible: spyLoader({ default: invPack }) });
   const reg2 = createRegistry(s2.deps); await reg2.load();
-  assert.equal((await reg2.ensureSelfTest()).skipped, true);
+  assert.equal((await reg2.ensureSelfTest()).ok, true);
+  const { selfTest: _drop, ...noSelfTest } = invPack;
+  const s3 = spyDeps(mockGame({ modules: { [CORE_MODULE]: coreMod } }), { invincible: spyLoader({ default: noSelfTest }) });
+  const reg3 = createRegistry(s3.deps); await reg3.load();
+  assert.equal((await reg3.ensureSelfTest()).skipped, true);
 });
 
 /* ---------------------------------------------------------------- helpers + i18n */

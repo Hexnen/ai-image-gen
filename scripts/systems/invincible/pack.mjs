@@ -16,6 +16,7 @@
 import { detectModule, hasPack, systemInfo, compareVersions } from "../../build/deps.mjs";
 import { promptGroup } from "./prompt.mjs";
 import { snapshot as sheetSnapshot, diffSnapshots, nextSheetBlock } from "./snapshot.mjs";
+import { writerGroup } from "./writer-group.mjs";
 import { validateGroup } from "./validate.mjs";
 
 export const SYSTEM_ID = "invincible";
@@ -98,5 +99,11 @@ Object.assign(pack, {
 // GM deselection (validate.mjs, proposal.mjs). Also the model-facing check_proposal / submit_proposal tools, picked up by the
 // prompt group through proposalTools() / runProposalTool(). Never writes; calls pack.plan (T6) as the L3 dry run when present.
 Object.assign(pack, validateGroup(() => pack, { get game() { return g(); } }));
+
+// writer group (T6): in-place ops writer for every write (stable item ids, per-run and per-item undo journal in
+// flags.moinens-ai-gen.undo, stale and unsaved-input guards, lock), replace -> ops, selfTest (plus-ultra version guard) and
+// pack.plusUltra (soft bridge: "Full rebuild (plus-ultra)", Open in wizard, archetype/occupation lists). writer.mjs, undo.mjs,
+// replace.mjs, pu-bridge.mjs, writer-group.mjs. Writes only on apply/undo, GM only.
+Object.assign(pack, writerGroup(() => pack, { get game() { return g(); } }));
 
 export default pack;
