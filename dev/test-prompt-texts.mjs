@@ -91,7 +91,7 @@ await test("W3-14 / D-9: one proposal tool; dryRun = check only, for variants, n
   assert.deepEqual(tools().map((t) => t.name), ["get_entries", "read_document", "read_rules", "search_catalog", "submit_proposal"]);
   assert.ok(!JSON.stringify(tools()).includes("check_proposal"), "check_proposal is gone from the model-facing prefix");
   const d = desc("submit_proposal");
-  assert.match(d, /dryRun:true = check only: same result, nothing reaches the GM, your turn goes on; only to compare variants or to price a change you may not propose/);
+  assert.match(d, /dryRun:true = check only: same checks, nothing reaches the GM, your turn goes on; only to compare variants or to price a change you may not propose/);
   assert.match(d, /never before a submit/);
   assert.ok(d.endsWith(PROPOSAL_GUIDE));
   assert.match(PROPOSAL_GUIDE, /required unless dryRun/);
@@ -168,7 +168,7 @@ await test("W2-8 tools + guide: get_entries fields, submit stop, replace error p
   assert.match(g, /exactly two words, comma separated/);
   assert.ok(!/in the GM's language/.test(g), "W4-T: the language rule lives once, in system[0]");
   assert.match(g, /name \(the hero name\)/);
-  assert.match(g, /boost\/limit: powerItemId or powerOpId\. /);   // W4-A-T2: what a limit pays for = the digest's rule + the summary label
+  assert.match(g, /boost\/limit: powerItemId or powerOpId, no note \(/);   // W4-A-T2: what a limit pays for = the digest's rule + the summary label
   assert.ok(!/grants/.test(g), "W4-A-2: no grants in the guide");
   assert.ok(!/limits \[\{ref, grants\}\]/.test(g), "replace limits list no grants");
   assert.match(g, /the main alternative/);
@@ -183,7 +183,7 @@ await test("W2-8 digest: budget legend (perOp, spentAfter, label), talent roles,
   assert.match(legend, /perOp: points\/slots = that op's own change, spentAfter = attribute sum after it, label = what it costs or pays for/);
   assert.ok(!/running changes in list order/.test(legend), "old perOp wording gone");
   assert.match(d, /role=hero\|occupation\|extra/);
-  assert.match(d, /A new talent is always added last, so replacing the hero or occupation talent shifts roles \(warning talent\.role\.shift\)/);
+  assert.match(d, /Replace writes the talents list in its order; in ops a new talent is added last, so replacing the hero or occupation talent shifts roles \(warning talent\.role\.shift\)/);   // W5-A-T1 / W5-C-T3
   assert.match(d, /its index line gives its Resources and occupation talents, so it needs no read/);
   assert.match(d, /A limit pays for one level of its power \(a power at Basic: one boost; the builder decides which, the summary says it\)/);   // W4-A-T2
   assert.match(d, /hero name \(name\)/);
@@ -209,9 +209,10 @@ await test("W2-8 tool result: budget legend in the digest, so the model copy has
 await test("W3-14 system[0]: warnings do not block, turn ends on submit, held result, progress note, impersonal forms", () => {
   const h = HARNESS_RULES;
   assert.match(h, /Errors block: fix exactly those errors and submit again/);
-  assert.match(h, /Warnings do not block: fix them in the same submission when you can; never resubmit only because of a warning/);   // D-15
-  assert.match(h, /A successful submission sent without other tool calls ends your turn: write nothing after it; its rationale is your answer for the GM/);   // W3-4
-  assert.match(h, /You see its result at the start of the GM's next message/);           // W3-4 held results (W3-B-5)
+  assert.match(h, /Warnings do not block: fix them in the same submission when you can\./);   // D-15
+  assert.ok(!/never resubmit only because of a warning/.test(h), "W5-B-T1: the fix round resubmits because of a warning");
+  assert.match(h, /A successful submission sent without other tool calls ends your turn: its rationale is your answer for the GM/);   // W3-4
+  assert.match(h, /you see its result at the start of the GM's next message/);           // W3-4 held results (W3-B-5)
   assert.match(h, /Text you write before a tool call is a progress note, not your answer/);   // W3-5 (W3-B-4)
   assert.match(h, /impersonal forms, never a grammatical gender \(Polish "Dodano"\)/);
   assert.ok(!/invincible/i.test(h), "system[0] stays system-agnostic");
@@ -248,14 +249,14 @@ await test("W3-14 digest: profiles, role keys, out of scope, slot example, freed
 
 await test("W3-14 tools + guide: applyConfirm, gear in replace, D-19 notes, placeholder choice, role key, Health/Resolve at build, sample heroes", () => {
   const sub = desc("submit_proposal");
-  assert.match(sub, /\(applyConfirm: the removals and level swaps the GM confirms at Apply\)/);   // W3-10, W4-T (d)
+  assert.match(sub, /\(applyConfirm: the removals, level swaps and kept talents moved to another role that the GM confirms at Apply\)/);   // W3-10, W4-T (d), W5-C-T2
   const g = PROPOSAL_GUIDE;
   assert.match(g, /gear \[\{ref\} \| \{custom\}\] \(optional: given = the hero's whole gear list, the rest is removed; left out = gear untouched\)/);   // W4-A-T3
   assert.ok(!/gear is never touched/.test(g));
   assert.match(g, /only for a real choice \(no decorative notes/);                    // D-19
-  assert.match(g, /an effect with bonus\.\[attribute\] \(e\.g\. Signature Item\): put one attribute in the note, the builder sets the effect from it/);   // W4-A-T4 (D-13)
+  assert.match(g, /an effect with bonus\.\[attribute\] \(e\.g\. Signature Item\): put one attribute in the note \(it may name the item too: "Shield, Fighting"\), the builder sets the effect from it/);   // W4-A-T4 (D-13), W5-T
   assert.match(g, /role \(an English role key\)/);
-  assert.match(g, /a build sets Health\/Resolve to max itself/);                     // W3-3
+  assert.match(g, /a replace in the creation profile or a build on an empty sheet sets Health\/Resolve to max itself/);   // W3-3, W5-A-T4
   assert.match(desc("search_catalog"), /every entry except sample heroes \(kinds \["sampleHero"\]\)/);   // D-8
   // W4-A-3: the replace schema has an optional gear array ({ref} | {custom}); the guide sentence above says so (W4-A-T3)
   assert.deepEqual(Object.keys(proposalToolDefs()[0].input_schema.properties.proposal.properties.gear.items.properties), ["ref", "custom"]);
@@ -277,16 +278,16 @@ await test("W3-14 dry-run tool result: marked dryRun, no proposalId, summary kep
 await test("W4-T system[0]: change notes, Apply confirms removals, header settings hold, another value = no tools, partial requests", () => {
   const h = HARNESS_RULES;
   // W4-B-T3: the change notes of a sheet_update are descriptions, not lines to fold in
-  assert.match(h, /"\(changed: field old -> new\)" under a "~" line and "\(was: \.\.\.\)" on a "-" line only describe the change/);
+  assert.match(h, /indented lines in brackets \(e\.g\. "\(changed: field old -> new\)" under a "~" line\) and "\(was: \.\.\.\)" on a "-" line only describe, they are not sheet lines/);   // + W5-B-T4 (VALID note)
   // (d) once, short
   assert.match(h, /clicks Apply, where the GM also confirms removals and level swaps/);
   assert.equal((h.match(/confirms removals/g) ?? []).length, 1);
   // (c) the header's settings (rank, profile) are the truth for every request, also right after a build
   assert.match(h, /Sheet header settings \(e\.g\. rank, profile\) are the GM's drawer settings: they hold for every request, also right after a build; never assume or change them/);
   // (b) a request that needs another drawer value: no tools, no proposal, one sentence
-  assert.match(h, /For a request that needs another value, call no tools and send no proposal: ask in one sentence for the change in the drawer/);
-  // (a) partly doable: do the part, say what was not done and why, at most one question
-  assert.match(h, /A request possible only in part \(a rule forbids a part, the GM said to leave alone what it would change, or the sheet has nothing for it\): submit the possible part; the rationale says what was not done and why, with at most one question/);
+  assert.match(h, /For a request that needs another value, even for one part, call no tools and send no proposal: ask in one sentence for the change in the drawer/);
+  // (a) partly doable: do the part, say what was not done and why, at most one question (W5-T: the drawer rule wins)
+  assert.match(h, /A request possible only in part for another reason \(a rule forbids a part, the GM said to leave alone what it would change, or the sheet has nothing for it\): submit the possible part; the rationale says what was not done and why, with at most one question/);
   // the drawer case lives in its own line, not in the "ask before submitting" list
   assert.match(h, /Ask before submitting only when the request would remove items that are not from the catalogue or were hand-edited/);
   assert.ok(!/Signature|LIMITED|invincible/i.test(h), "system[0] stays system-agnostic");
@@ -300,7 +301,8 @@ await test("W4-T digest: rank cap = drawer (agrees with system[0] and attr.cap),
   assert.match(HARNESS_RULES, /call no tools and send no proposal/);
   assert.match(MESSAGES["attr.cap"]({ attr: "agility", cap: 6, inPlay: true }).hint, /ask them to change the rank in the drawer/);
   // W4-A-T5: occupation talent required in every profile; swap from the list or the GM removes it by hand (agrees with the hint)
-  assert.match(d, /It is required in every profile: to remove it, swap it for another from the list \(a new occupation: from its list\); if the GM wants none, submit no removal and say the GM can remove it by hand/);
+  assert.match(d, /one hero talent \+ one occupation talent, both required in every profile/);   // W5-T: the hero talent too
+  assert.match(d, /To remove it, swap it for another from the list \(a new occupation: from its list\); if the GM wants none, submit no removal and say the GM can remove it by hand/);
   const occ = MESSAGES["talent.occ.missing"]({ occupation: "Courier", list: "Quick Wits, Streetwise" }).hint;
   assert.match(occ, /do not submit the removal/); assert.match(occ, /remove it by hand/);
   // (e) one clause on a source tied to an item
@@ -315,13 +317,49 @@ await test("W4-T guide + tools: note language once, gear list in replace, attrib
   const g = PROPOSAL_GUIDE;
   assert.match(g, /gear \[\{ref\} \| \{custom\}\] \(optional: given = the hero's whole gear list/);
   assert.match(g, /left out = gear untouched/);
-  assert.match(g, /put one attribute in the note, the builder sets the effect from it/);
+  assert.match(g, /put one attribute in the note \([^)]*\), the builder sets the effect from it/);
   assert.match(HARNESS_RULES, /every free text \(descriptions, personality words, notes\) in the language of the GM's message/);   // (f) free text
   assert.match(HARNESS_RULES, /catalogue names exactly as the catalogue spells them, inside notes too/);                       // (f) catalogue names
   assert.match(desc("get_entries"), /perLevel/);
   const all = JSON.stringify(tools());
   assert.equal((all.match(/applyConfirm/g) ?? []).length, 1, "applyConfirm is explained once, in the submit tool");
   assert.ok(all.length < 16000, `all tool definitions under 16,000 chars (${all.length})`);
+});
+
+/* ---------------------------------------------------------------- W5-T: one text pass after wave 5 */
+await test("W5-T system[0] + submit tool: the fix round (W5-B-1), never an empty reply (B2), version tags", async () => {
+  const h = HARNESS_RULES;
+  assert.match(h, /If its result comes back at once instead, it has a warning to fix and you get one fix step: send ONE corrected submission \(it ends your turn whatever its result\) or answer in one sentence why the warning stays/);
+  assert.match(h, /Whenever you answer after a tool result, write words, never an empty reply/);
+  assert.ok(!/write nothing after it/.test(h), "B2: no invitation to an empty answer");
+  assert.match(desc("submit_proposal"), /ok:true ends your turn \(with a warning to fix: after one fix step\)/);
+  // the tags that mark the text versions (the digest's goes into the pack fingerprint)
+  const { HARNESS_RULES_VERSION } = await import("../scripts/build/harness-prompt.mjs");
+  const { DIGEST_VERSION } = await import("../scripts/systems/invincible/rules-digest.mjs");
+  assert.equal(HARNESS_RULES_VERSION, 6); assert.equal(DIGEST_VERSION, 6);
+  assert.ok(!/invincible|talent/i.test(h), "system[0] stays system-agnostic");
+});
+
+await test("W5-T digest + guide + hints: levels in every profile, slugfest damage, nearest drawback, team-base upgrades, notes, talent order, confirms", async () => {
+  const d = rulesDigest();
+  assert.match(d, /Hero powers in every profile: at most Major; Massive only at Cosmic Champion; Monstrous never/);
+  assert.ok(!/New heroes start/.test(d));
+  assert.match(MESSAGES["power.level.massive"]({ name: "X" }, { rank: "global" }).hint, /in-play profile does not allow it either/);   // STRUCTURAL: new Massive blocks in-play too
+  assert.match(d, /their damage \(PREPARED slugfestDamage\) = half of strength rounded up \+ damage effects/);
+  assert.match(d, /slugfest bonus effects add to the roll only/);
+  assert.match(d, /\(e\.g\. debts\): take the nearest \(money trouble: Hard Times; someone after the hero: Targeted\)/);
+  assert.match(d, /\|reputation\|team-base upgrades/);
+  const g = PROPOSAL_GUIDE;
+  assert.match(g, /when the GM named none, invent one that fits/);
+  assert.match(g, /boost\/limit: powerItemId or powerOpId, no note \(its choice, e\.g\. a sense, goes in choiceNotes\)/);
+  assert.match(g, /then extras; written in this order, kept talents are moved\)/);   // W5-A-T3 / W5-C-T4
+  // the note rule matches the converter: a boost/limit with a note is refused (proposal.mjs `bad("note")`)
+  const src = fs.readFileSync(path.join(ROOT, "scripts/systems/invincible/proposal.mjs"), "utf8");
+  assert.match(src, /if \(!\["power", "talent", "drawback"\]\.includes\(type\)\) bad\("note"\)/);
+  // W5-C-T1: the note in the submit result names the reorder confirms too
+  const { APPLY_CONFIRM_NOTE } = await import("../scripts/systems/invincible/validate.mjs");
+  assert.match(APPLY_CONFIRM_NOTE, /removals, level swaps and kept talents moved to another role/);
+  assert.ok(!/rank\.defaulted/.test(d + HARNESS_RULES + JSON.stringify(tools())), "W5-B-2: rank.defaulted is info, never named as a warning");
 });
 
 /* ---------------------------------------------------------------- size */

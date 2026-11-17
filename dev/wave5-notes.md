@@ -342,3 +342,71 @@ Kod: HEAD `0b737d5` + ta zmiana. Nie ruszane: `module.json` (URL-e repo = decyzj
 - Prawdziwa tura (zdarzenia symulowane), IME na żywo (kod nie tworzy textarea w trakcie tury), czytnik ekranu,
   PL interfejs na żywo, szuflada przy dolnej krawędzi na żywo (Foundry sam przycina pozycję arkusza; pokrywa test węzła),
   dwie szuflady naraz (id z prefiksem tylko z kodu), hook `registerPacks` z prawdziwym modułem zewnętrznym.
+
+## W5-T: przebieg po tekstach prefiksu (po W5-A/B/C/G)
+
+Pliki: `scripts/build/harness-prompt.mjs` (system[0], `HARNESS_RULES_VERSION` 6), `scripts/systems/invincible/rules-digest.mjs`
+(`DIGEST_VERSION` 6, wchodzi w fingerprint pakietu `prompt.mjs`), `proposal.mjs` (tylko `PROPOSAL_GUIDE`), `validate.mjs` (tylko
+`TOOL_DESC.submit_proposal`, `APPLY_CONFIRM_NOTE`, podpowiedź `power.level.massive`); test `dev/test-prompt-texts.mjs` (+2, 9
+asercji zmienionych). Kod (harness, walidator, writer, `prompt.mjs`, układ cache), indeks katalogu i wendor bez zmian. Bez toru,
+bez sieci. Każdy punkt najpierw sprawdzony w kodzie (miejsca w tabeli).
+
+### Tabela: punkt -> zastosowane / nie
+| Punkt | Wynik | Co / dlaczego (sprawdzone w kodzie) |
+|---|---|---|
+| W5-B-T1 sprzeczność system[0] z rundą poprawki | zastosowane | `harness.mjs:713-726`: przyjęty submit sam kończy turę, chyba że ostrzeżenie „do poprawy” (`isActionableWarning`) -> jeden krok poprawki, w nim każdy submit kończy turę. Usunięte „never resubmit only because of a warning” i „write nothing after it”; nowe: wynik od razu = ostrzeżenie do poprawy, JEDNA poprawiona propozycja albo jedno zdanie, czemu zostaje. |
+| B2 / W5-G (pusta odpowiedź) | zastosowane | `harness.mjs:684` `isEmptyAnswer` -> `emptyReply`, MG nie dostaje słowa: „Whenever you answer after a tool result, write words, never an empty reply.” |
+| W5-B-T2 opis submit | zastosowane | „ok:true ends your turn (with a warning to fix: after one fix step)”. |
+| W5-B-T3 `rank.defaulted` = info | nie (nic nieaktualnego) | `validate.mjs` `finish`: info przy randze domyślnej; prefiks nigdzie nie nazywa go ostrzeżeniem (nowa asercja: kod nie występuje w prefiksie). Skrót mówi tylko „(default) means nobody chose it”. |
+| W5-B-T4 notatka pod VALID po zmianie rangi, `removed`/`none` | zastosowane (uogólnione) | `snapshot.mjs:446-454` (wcięta linia w nawiasie). system[0]: „indented lines in brackets (e.g. "(changed: ...)" under a "~" line) ... only describe, they are not sheet lines” obejmuje notatkę VALID; `removed`/`none` same się tłumaczą, bez zdania. |
+| W5-B-T5 / forma podsumowania limitu (poziom + boost) | nie | `validate.mjs limitPays` (W5-B-3) mówi, co limit opłaca i który boost zostaje na slocie; skrót już ma „the summary says it”. Zdanie by tylko powtarzało. |
+| W5-A-T1 / W5-C-T3 kolejność talentów w skrócie | zastosowane | `talentShifts` w replace = `[]` (W5-C), writer zapisuje kolejność listy (W5-A-3): „Replace writes the talents list in its order; in ops a new talent is added last, so replacing ... shifts roles (warning talent.role.shift)”. |
+| W5-A-T2 podpowiedź `talent.role.shift` | nie (nieaktualne) | Ostrzeżenie jest już tylko w ops (W5-C), gdzie obecna podpowiedź pasuje. |
+| W5-A-T3 / W5-C-T4 przewodnik replace `talents` | zastosowane | „(hero talent first, then the occupation talent, then extras; written in this order, kept talents are moved)”. Potwierdzenie zmiany roli: w opisie submit (applyConfirm), nie powtarzane. |
+| W5-A-T4 replace w creation = budowa, witalność max | zastosowane | `writer.mjs:790` `p.build` = creation i (replace albo pusty/wyczyszczony aktor + dodania): „a replace in the creation profile or a build on an empty sheet sets Health/Resolve to max itself”. |
+| W5-A-T5 / W5-C-T1 / W5-C-T2 potwierdzenie przestawienia | zastosowane (opis submit + `APPLY_CONFIRM_NOTE`) | `applyConfirmList` (`validate.mjs:685`) daje `reorder talent "X" a -> b`. Opis submit: „the removals, level swaps and kept talents moved to another role that the GM confirms at Apply”; notatka wyniku tak samo. system[0] („confirms removals and level swaps”) zostaje: niepełne, ale prawdziwe, i agnostyczne (bez słowa „talent”). |
+| W5-G-T1 strict w tekstach | nie (nic do zmiany) | Prefiks nigdzie nie twierdzi, że API wymusza schemat (sprawdzone: opis submit, przewodnik, skrót). |
+| Konflikt „inna wartość z szuflady” vs „wykonalne częściowo” | zastosowane: szuflada wygrywa | Kod: `rank.differs` („Ask the GM to set the rank in the drawer; do not rebalance”), `attr.cap` in-play („ask them to change the rank in the drawer”). system[0]: „needs another value, even for one part, call no tools ... ask”; częściowe tylko „for another reason”. |
+| Talent bohatera wymagany (też w creation) | zastosowane | `rules.mjs:216` `talent.hero.missing` = błąd w każdym profilu (in-play: nowy błąd blokuje): „one hero talent + one occupation talent, both required in every profile”. |
+| Treść notatki można wymyślić | zastosowane | „note = the choice ..., only for a real choice (no decorative notes; when the GM named none, invent one that fits)”. |
+| Co podnosi obrażenia / slugfest kości vs obrażenia | zastosowane | System `base-actor.mjs:86-87`: `slugfest.damage` = ceil(STR/2) + efekty obrażeń; `actor-sheet.mjs:720-740`: rzut Fighting, premie `slugfest.bonus` idą do rzutu; `slugfest.max` = ceil(STR/2) + premia. Skrót: „Slugfest attacks roll Fighting; their damage (PREPARED slugfestDamage) = half of strength rounded up + damage effects (e.g. Strike); slugfest bonus effects add to the roll only; a weapon has its own damage.” Zastąpiło „Slugfest = half of strength rounded up”. |
+| Twierdzenie o Monstrous | zastosowane | `power.level.monstrous` i `power.level.massive` są w `STRUCTURAL` (`validate.mjs:41-44`): nowe zawsze blokują, także in-play. „New heroes start at most at Major ...” -> „Hero powers in every profile: at most Major; Massive only at Cosmic Champion; Monstrous never”. Podpowiedź `power.level.massive` mówiła „ask the GM about the rank / the in-play profile” (in-play tego nie dopuszcza): teraz „Massive needs the cosmic rank, which only the GM sets in the drawer (the in-play profile does not allow it either)”. NPC bez zmian (dowolny poziom wpisu, `npc.threat` info). |
+| Długi (Targeted / Hard Times, brak wady „dług”) | zastosowane | Lista wad paczki (`invincible-plus-ultra/scripts/i18n/item-ids.mjs`): brak wady długu. Skrót: „A trait with no drawback of its own (e.g. debts): take the nearest (money trouble: Hard Times; someone after the hero: Targeted) and say so in the rationale.” |
+| Notatka Signature Item | zastosowane | `attributeFromNote` (`proposal.mjs:572`) bierze notatkę z dokładnie jednym atrybutem wśród innych słów, więc nazwa przedmiotu może zostać: „put one attribute in the note (it may name the item too: "Shield, Fighting")”. |
+| Pole Reduced Sense | zastosowane (ogólnie) | Reduced Sense to LIMIT; boost/limit nie ma notatki (`proposal.mjs:610` `bad("note")` = błąd). Przewodnik: „boost/limit: powerItemId or powerOpId, no note (its choice, e.g. a sense, goes in choiceNotes)”. |
+| Semantyka `dryRun` | zastosowane (jedno słowo) | `toolResult` dry runu nie ma `proposalId` ani `applyConfirm` (test W3-14), więc „same result” -> „same checks”. Reszta zdania prawdziwa (`harness` `isSubmitCall`: nie pending, tura trwa, poza limitami błędnych). Runda poprawki nie zmienia dry runu (nigdy jej nie włącza). |
+| Kolumna „base upgrades” | zastosowane | `rules.mjs:9` / `upgrades.over` („team-base upgrades”): nagłówek tabeli rang „team-base upgrades”. |
+| `rank.defaulted` cicha informacja | nie (= W5-B-T3) | Jak wyżej. |
+| Notatka pod VALID po zmianie rangi | zastosowane (= W5-B-T4) | Jak wyżej. |
+| Lista talentów replace = kolejność wyniku; reorder wymaga potwierdzenia | zastosowane (= W5-A-T1/T3, W5-C-T1/T2) | Jak wyżej. |
+| Wiadomość MG niewysłana (`unsent`, B4) | nie | Model nigdy jej nie widzi (nie trafia do historii); to sprawa szuflady (W5-G-D1), nie prefiksu. |
+
+### Rozmiar (znaki / tokeny est. = ceil(znaki/3,5) na blok)
+| Blok | Przed (HEAD 11c0a83) | Po |
+|---|---|---|
+| system[0] | 3 869 / 1 106 | 4 180 / 1 195 |
+| system[1] skrót | 6 963 / 1 990 | 7 348 / 2 100 |
+| tools (JSON, 5) | 14 165 / 4 048 | 14 504 / 4 144 |
+| razem bez indeksu | 24 997 / 7 144 | 26 032 / 7 439 (sufit testu 7 500) |
+| system[2] indeks | 49 771 / 14 221 (bez zmian; liczba z W4-T) | bez zmian |
+| cały prefiks | ~74 768 / ~21 365 | ~75 803 / ~21 660 (+1 035 zn., ~+295 tok, +1,4 %) |
+
+Przyrost: runda poprawki (+~310 w system[0]), obrażenia slugfest, najbliższa wada, oba talenty wymagane (+~385 w skrócie), boost/limit bez notatki, wymyślona notatka, Signature Item, kolejność talentów, budowa w replace, applyConfirm (+~340 w narzędziach). Usunięte: „never resubmit ...”, „write nothing after it”, „Slugfest = half of strength”. Spec 9.2: 16-23k tok całego prefiksu, nadal w zakresie. Prefiks zmienia się raz (nowy fingerprint: `DIGEST_VERSION` 6 + inne bajty system[0]/narzędzi w `prefixFingerprint`); między wywołaniami bajt w bajt stały (test w procesie i w dwóch świeżych procesach).
+
+### Wybory (zachowanie tymczasowe)
+| # | Pytanie | Wybór |
+|---|---|---|
+| W5-T-a | Szuflada vs częściowe | Szuflada wygrywa (zgodnie z podpowiedziami `rank.differs` i `attr.cap`): część wymagająca innej rangi/profilu = pytanie bez narzędzi; częściowe tylko z innego powodu (reguła zabrania przy każdym ustawieniu, MG kazał zostawić, karta nie ma czego zmienić). |
+| W5-T-b | Jak model rozpoznaje krok poprawki | Po tym, że wynik submitu przyszedł od razu (bez wiadomości MG); system[0] nie wymienia kodów „do poprawy” (lista żyje w walidatorze). |
+| W5-T-c | system[0] o potwierdzeniu przestawienia | Bez zmian (agnostyczne, test pilnuje braku „talent”); pełna lista w opisie submit i w `applyConfirmNote`. |
+| W5-T-d | Długi | Przykład w skrócie (Hard Times / Targeted) zamiast osobnej reguły mapowania; nazwy z katalogu, bez tekstu książki. |
+| W5-T-e | Reduced Sense | Reguła ogólna (boost/limit bez notatki, wybór w choiceNotes) zamiast zdania o jednym limicie. |
+
+### Testy
+- `test-prompt-texts` 24 (+2 W5-T: runda poprawki i brak pustej odpowiedzi w system[0], opis submit, wersje 6/6, system[0] bez „talent”; skrót: poziomy w każdym profilu + podpowiedź `power.level.massive`, obrażenia slugfest, najbliższa wada, `team-base upgrades`; przewodnik: wymyślona notatka, boost/limit bez notatki (zgodne z `bad("note")` w `proposal.mjs`), kolejność talentów; `APPLY_CONFIRM_NOTE`; `rank.defaulted` nigdzie w prefiksie. Zmienione asercje: dryRun „same checks”, kolejność talentów, ostrzeżenia/koniec tury, applyConfirm, notatka z atrybutem (2), witalność w budowie, linie opisowe `sheet_update`, szuflada „even for one part” / częściowe „for another reason”, talenty wymagane, boost/limit).
+- Wszystkie `dev/test-*.mjs` zielone: ops 54, snapshot 37, validate 56, catalog 25, drawer-model 15, dry-relay 13, dry-transport 12, enhance 22, harness 48, migrate-id 19, packs 24, prompt-texts 24, transport 30, vendor load 9, vendor-sync ALL OK (wendor bajt w bajt).
+
+### Niezweryfikowane
+- Prawdziwy model z nowymi zdaniami (runda poprawki: czy poprawia albo pisze jedno zdanie, a nie pustą odpowiedź; pytanie o rangę przy prośbie częściowej; długi; obrażenia).
+- Rozmiar indeksu na torze (bez zmian w kodzie indeksu, więc liczba z W4-T); prawdziwe tokeny (`count_tokens`).
+- Dane paczki (lista wad, Reduced Sense jako limit, Signature Item jako moc) czytane z `invincible-plus-ultra/scripts/i18n/item-ids.mjs`, nie z paczek na żywo.

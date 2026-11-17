@@ -89,7 +89,7 @@ export const MESSAGES = Object.freeze({
   "source.duplicate": (p) => ({ message: `Power source "${p.name}" is taken twice.`, hint: "One copy is enough; point both powers at it." }),
   "power.level.invalid": (p) => ({ message: `Power "${p.name}" has an invalid level (${p.level}).`, hint: "Levels: basic, major, massive, monstrous." }),
   "power.level.monstrous": (p) => ({ message: `Power "${p.name}" is Monstrous; no hero starts with a Monstrous power.`, hint: "Use Major (Massive only at Cosmic Champion)." }),
-  "power.level.massive": (p, c) => ({ message: `Power "${p.name}" is Massive; only Cosmic Champions start with Massive powers (rank: ${c.rank}).`, hint: "Lower it to Major, or ask the GM about the rank / the in-play profile." }),
+  "power.level.massive": (p, c) => ({ message: `Power "${p.name}" is Massive; only Cosmic Champions start with Massive powers (rank: ${c.rank}).`, hint: "Lower it to Major; Massive needs the cosmic rank, which only the GM sets in the drawer (the in-play profile does not allow it either)." }),
   "power.level.none": (p) => ({ message: `Power "${p.name}" has no level above ${lv(p.max)}.`, hint: `Use at most ${lv(p.max)}.` }),
   "power.source.missing": (p) => ({ message: `Power "${p.name}" names no power source of this hero.`, hint: "Point it at one of the hero's power sources." }),
   "limit.grant.missing": (p) => ({ message: `A limit on "${p.name}" does not say what it pays for.`, hint: "A limit pays for one level or one boost of its power." }),
@@ -685,7 +685,7 @@ export function applyConfirmList(proj, reorders = []) {
   for (const r of reorders ?? []) out.push(`reorder talent "${baseName(r.name)}" ${r.from} -> ${r.to}`);
   return out;
 }
-export const APPLY_CONFIRM_NOTE = "The GM confirms these at Apply (removals and level swaps); nothing to do for you.";
+export const APPLY_CONFIRM_NOTE = "The GM confirms these at Apply (removals, level swaps and kept talents moved to another role); nothing to do for you.";
 const opIdOf = (proj, info) => Object.entries(proj.opInfo).find(([, v]) => v === info)?.[0];
 const planIssue = (e) => (typeof e === "string" ? { code: "plan.error", message: e, hint: "Check the sheet and resubmit." } : { code: String(e?.code ?? "plan.error"), path: e?.path, opId: e?.opId, params: e?.params ?? {}, ...(MESSAGES[e?.code] ? {} : { message: String(e?.message ?? e?.code ?? "plan error"), hint: String(e?.hint ?? "Check the sheet and resubmit.") }) });
 async function resolveLookup(l) {
@@ -845,7 +845,7 @@ export function costLabel(c, info, ctx) {
 
 /* ================================================================== model-facing tools */
 const TOOL_DESC = {
-  submit_proposal: "Submit the proposal for the GM. It is validated (refs, the rules on the sheet as it would be after the change, a dry run of the write); errors come back with hints, the budget before/after and each op's cost. ok:true ends your turn and the GM sees a preview (applyConfirm: the removals and level swaps the GM confirms at Apply). dryRun:true = check only: same result, nothing reaches the GM, your turn goes on; only to compare variants or to price a change you may not propose (\"what would Flight at Major cost?\"), never before a submit.\n" + PROPOSAL_GUIDE
+  submit_proposal: "Submit the proposal for the GM. It is validated (refs, the rules on the sheet as it would be after the change, a dry run of the write); errors come back with hints, the budget before/after and each op's cost. ok:true ends your turn (with a warning to fix: after one fix step) and the GM sees a preview (applyConfirm: the removals, level swaps and kept talents moved to another role that the GM confirms at Apply). dryRun:true = check only: same checks, nothing reaches the GM, your turn goes on; only to compare variants or to price a change you may not propose (\"what would Flight at Major cost?\"), never before a submit.\n" + PROPOSAL_GUIDE
 };
 /**
  * B1 (bughunt-1, PROVISIONAL, owner decides after one real request): `strict` on the proposal tool. Internal constant, no
