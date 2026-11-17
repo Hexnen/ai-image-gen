@@ -156,3 +156,9 @@
 - W5-A-V2: `applyConfirm` wymienia `reorder talent "X" hero -> occupation` (zachowany talent odtwarzany w innej roli; zgodne z `plan.reorders[].roleChange`, test walidator vs writer).
 - W5-A-V3: szuflada: dialog Apply nazywa `reorder` („Przestaw talent …: talent bohatera → talent zawodu”), karta ma sekcję „Kolejność talentów” z `plan.reorders`, baner po Apply ma linie `vitals` i `reordered` (pl/en, 13 kluczy). W5-B-6: nazwy w `ops[]` (także zamiana poziomu z notatką) sprawdzone, punkt zamknięty.
 - Testy: validate 56, ops 54, snapshot 37, drawer-model 13, reszta zielona, wendor OK. Teksty dla W5-T (W5-C-T1..T4: `APPLY_CONFIRM_NOTE`, opis submit, skrót, przewodnik), wybory W5-C-a..d, niezweryfikowane (bez toru): `dev/wave5-notes.md` (W5-C).
+
+## 2026-11-17 W5-E: szuflada bez zakładki z boku
+- Polecenie właściciela: brak „metki” z boku karty; szufladę otwiera i zamyka tylko przycisk `fa-robot` w nagłówku arkusza (i X w jej pasku tytułu). Zamknięta nic nie pokazuje z boku.
+- Przycisk niesie stan: wciśnięty = otwarta, żółta kropka = propozycja czeka, niebieska pulsująca = AI pracuje / zapis; podpowiedź i `aria-label` mówią to samo. Zamknięta szuflada z propozycją lub w trakcie tury zostaje ukryta i subskrybuje sesję; inaczej zamyka się od razu bez animacji.
+- `DOCK` bez `tab`, `dockGeometry(rect, view)`; panel przylega (0 px po obu stronach, zmierzone na torze 8), wąsko zajmuje całe wolne miejsce. Klucze `Tab*` usunięte, `OpenPending`/`OpenWorking` dodane. Zrzuty `dev/screenshots/11..13`.
+- Testy: drawer-model 15, wszystkie zielone. Szczegóły, pomiary, niezweryfikowane: `dev/wave5-notes.md` (W5-E).

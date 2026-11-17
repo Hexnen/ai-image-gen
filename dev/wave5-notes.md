@@ -198,3 +198,32 @@ Pliki: `scripts/systems/invincible/validate.mjs`, `scripts/build/drawer-model.mj
 
 ### Niezweryfikowane
 - Jasny motyw (świat toru ma ciemny); przeciąganie rogu arkusza myszą (sprawdzone `setPosition`, ten sam obserwator).
+
+## W5-E: bez zakładki z boku, tylko przycisk w nagłówku arkusza
+
+Polecenie właściciela: „I nie chcę metki z boku karty, tylko u góry obok innych buttonów w nagłówku”.
+
+### Co zmienione
+- `templates/builder-drawer.hbs`: część `tab` usunięta. `drawer-app.mjs`: `PARTS.tab`, akcja `toggle` i wszystkie rendery części `tab` usunięte; nowe `setOpen(open)`, `keepAlive`, `working`, `syncHeaderState(sheet)`; `toggleFor` i przycisk X w pasku tytułu idą przez `setOpen`.
+- Zamknięta szuflada nic nie pokazuje z boku: `dock()` ukrywa ją (`hidden`) gdy `!isOpen`, CSS `.maig-drawer:not(.open) { display: none }`. Zamknięta z propozycją lub w trakcie tury/zapisu zostaje (ukryta, subskrybuje sesję) i aktualizuje przycisk; bez tego od razu wypada z mapy i zamyka się bez animacji (`close({animate:false})`).
+- Przycisk `fa-robot` w nagłówku przejął stan zakładki: `aria-pressed` = otwarta (żółta ikona jak dotąd), klasa `has-pending` = żółta kropka (propozycja czeka), `is-working` = niebieska pulsująca kropka (tura AI albo zapis trwa; bez animacji przy `prefers-reduced-motion`); podpowiedź i `aria-label`: „Kreator AI” / „Kreator AI: propozycja czeka” / „Kreator AI: pracuje…” (`headerButtonState` w modelu).
+- Nieprzeczytane: pominięte (zakładka tego nie miała; tura bez propozycji kończy się i tak w otwartej rozmowie).
+- Panel przylega do arkusza bez kolumny zakładki: `DOCK` bez `tab`, `dockGeometry(rect, view)` (bez parametru `open`), szerokość = panel; wąsko panel = całe wolne miejsce (min 300). Siatka szuflady jedna kolumna, `::before` bez krawędzi po stronie arkusza (wynik W5-D zachowany).
+- X w pasku tytułu zostaje (zamyka, fokus wraca na przycisk w nagłówku). Wpis w menu trzech kropek bez zmian.
+- Klucze: usunięte `MAIG.Drawer.Tab`, `MAIG.Drawer.TabPending`; dodane `MAIG.Drawer.OpenPending`, `MAIG.Drawer.OpenWorking` (en/pl). CSS zakładki (`.maig-tab*`, obszary `tab`) usunięty.
+- Przy okazji: nowa szuflada otwierana z `open:false` (sesja w pamięci z propozycją) startowała otwarta (`isOpen` w konstruktorze = true); teraz konstruktor daje `false`, `openFor` otwiera tylko z `open:true`. Sesja w pamięci w trakcie tury (`busy`) też dostaje ukrytą szufladę przy renderze arkusza.
+
+### Testy
+- `test-drawer-model` 15 (+2: `headerButtonState`; brak zakładki w hbs/app/css i kluczy `Tab*`; `dockGeometry` przepisany: brak `DOCK.tab`, krawędź = krawędź arkusza z obu stron, 330/330 = panel 330 bez nachodzenia, dokładnie 420 po prawej zostaje po prawej).
+- Wszystkie `dev/test-*.mjs` zielone: ops 54, snapshot OK, validate 56, catalog 25, drawer-model 15, dry-relay 13, dry-transport 12, enhance 22, harness 40, migrate-id 18, packs 23, prompt-texts 22, transport 27, vendor load 9, vendor-sync ALL OK.
+
+### Próba na żywo (tor 8, kod z żywego folderu, relay na sucho, świat przywrócony, slot oddany)
+- Viewport 1400x850, aktor `ZZ-AIGEN-headerbtn` (usunięty). Zamknięta: 0 elementów `.maig-drawer`, przycisk przed copyUuid, podpowiedź „Kreator AI” (`dev/screenshots/11-header-button-closed.png`).
+- Klik przycisku: szuflada otwarta, części head/log/card/composer, brak `.maig-tab`, `aria-pressed=true`, fokus w polu wiadomości (`12-header-button-open.png`). `getBoundingClientRect`: prawa strona arkusz right 820 = szuflada left 820 = head/log left 820 (0 px); lewa (`flip`, arkusz left 600): szuflada right 600 (0 px); wąsko (arkusz 330..1070): panel 330 px, 1070..1400, bez nachodzenia; minimalizacja chowa, przywrócenie 0 px.
+- W trakcie tury X: szuflada zostaje ukryta (`display:none`), przycisk `is-working`, podpowiedź „Kreator AI: pracuje…”, fokus na przycisku; po turze bez propozycji kropka znika.
+- Propozycja zaakceptowana przy zamkniętej szufladzie (tura `submitted`; „model” na sucho: imię cywilne w profilu W grze, po dwóch odrzuconych próbach zmiany zawodu przez `talent.occ.missing`): przycisk `has-pending`, żółta kropka `rgb(255,231,42)`, podpowiedź/`aria-label` „Kreator AI: propozycja czeka” (`13-header-badge-pending.png`, pod spodem powiększony nagłówek). Otwarcie pokazuje kartę, ponowne zamknięcie trzyma kropkę, Odrzuć ją zdejmuje.
+- Znalezione i poprawione na żywo: zamknięcie bez propozycji czekało na animację `close()` (~1-2,5 s), w tym czasie drawer był w mapie i następny klik trafiał w zamykaną aplikację (klik nie otwierał). Teraz ukrycie i wyjęcie z mapy od razu + `close({animate:false})`; 4 szybkie kliknięcia co 400 ms: otwarte/zamknięte/otwarte/zamknięte, zawsze 0 lub 1 element.
+
+### Niezweryfikowane
+- Jasny motyw; czytnik ekranu (stan tylko przez `aria-label`/`aria-pressed`); wpis w menu trzech kropek po zmianie (ta sama funkcja `toggleFor`); zrzuty mają niską rozdzielczość (panel przeglądarki ~800 px, viewport skalowany; 13 w 800x485).
+- Sesja zaczęta z kodu (`openSession`+`send`) przy braku szuflady nie zapala `is-working`, dopóki arkusz się nie przerysuje (w UI tura zawsze startuje z szuflady).

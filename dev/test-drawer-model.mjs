@@ -30,23 +30,50 @@ await test("renderText escapes everything, keeps only bold / lists / breaks", ()
 await test("dockGeometry: right edge, flip left, shrink, clamp, height below the header", () => {
   const view = { width: 1600, height: 900 };
   const r = (left, width, top = 100, height = 700) => ({ left, right: left + width, top, height, bottom: top + height });
-  const a = M.dockGeometry(r(200, 700), view, true);
-  assert.deepEqual([a.left, a.flip, a.width], [900, false, 32 + M.DOCK.panel]);
+  assert.equal(M.DOCK.tab, undefined, "W5-E: no tab column");
+  const a = M.dockGeometry(r(200, 700), view);
+  assert.deepEqual([a.left, a.flip, a.width], [900, false, M.DOCK.panel]);   // flush: left = sheet right
   assert.equal(a.top, 100 + M.DOCK.header);
   assert.equal(a.height, 700 - M.DOCK.header);
-  const b = M.dockGeometry(r(800, 700), view, true);          // no room right (100), room left (800)
+  const b = M.dockGeometry(r(800, 700), view);                // no room right (100), room left (800)
   assert.equal(b.flip, true);
-  assert.equal(b.left, 800 - (32 + M.DOCK.panel));
-  const c = M.dockGeometry(r(400, 900), { width: 1700, height: 900 }, true);   // 400 left, 400 right: shrink
-  assert.equal(c.panelW, 400 - 32);
+  assert.equal(b.left + b.width, 800);                         // flush: right = sheet left
+  const c = M.dockGeometry(r(400, 900), { width: 1700, height: 900 });   // 400 left, 400 right: shrink, no tab reserve
+  assert.equal(c.panelW, 400);
+  assert.equal(c.width, 400);
   assert.ok(c.left >= 0 && c.left + c.width <= 1700);
-  const d = M.dockGeometry(r(0, 1500), view, true);           // nothing fits: min panel, clamped on screen
+  const n = M.dockGeometry(r(330, 940), { width: 1600, height: 900 });   // 330 / 330: panel fills the room, no overlap
+  assert.equal(n.width, 330);
+  assert.ok(n.left === 0 || n.left === 1270);
+  const n2 = M.dockGeometry(r(420, 760), { width: 1600, height: 900 });  // exactly a panel right: stays right
+  assert.deepEqual([n2.flip, n2.left, n2.width], [false, 1180, 420]);
+  const d = M.dockGeometry(r(0, 1500), view);                 // nothing fits: min panel, clamped on screen
   assert.equal(d.panelW, M.DOCK.minPanel);
   assert.ok(d.left >= 0 && d.left + d.width <= 1600);
-  const e = M.dockGeometry(r(200, 700), view, false);          // closed: tab only
-  assert.equal(e.width, 32);
-  const f = M.dockGeometry(r(200, 700, 500, 700), view, true);  // sheet runs below the window: the drawer stays inside
+  const f = M.dockGeometry(r(200, 700, 500, 700), view);       // sheet runs below the window: the drawer stays inside
   assert.ok(f.top + f.height <= 900);
+});
+
+await test("headerButtonState: pressed when open, pending dot, working wins the tooltip", () => {
+  const L = (k) => k;
+  assert.deepEqual(M.headerButtonState({}, L), { pressed: false, pending: false, working: false, tooltip: "MAIG.Drawer.Open" });
+  assert.deepEqual(M.headerButtonState({ open: true }, L), { pressed: true, pending: false, working: false, tooltip: "MAIG.Drawer.Open" });
+  assert.equal(M.headerButtonState({ pending: true }, L).tooltip, "MAIG.Drawer.OpenPending");
+  const w = M.headerButtonState({ pending: true, busy: true }, L);
+  assert.deepEqual([w.pending, w.working, w.tooltip], [true, true, "MAIG.Drawer.OpenWorking"]);
+});
+
+await test("W5-E: no side tab left in the template, app or stylesheet", () => {
+  const hbs = readFileSync(join(ROOT, "templates/builder-drawer.hbs"), "utf8");
+  const app = readFileSync(join(ROOT, "scripts/build/drawer-app.mjs"), "utf8");
+  const css = readFileSync(join(ROOT, "styles/builder-drawer.css"), "utf8");
+  assert.ok(!/part\.tab|maig-tab/.test(hbs));
+  assert.ok(!/\btab:\s*\{|"tab"|maig-tab/.test(app));
+  assert.ok(!/maig-tab|grid-area:\s*tab/.test(css));
+  for (const f of ["lang/en.json", "lang/pl.json"]) {
+    const j = JSON.parse(readFileSync(join(ROOT, f), "utf8"));
+    assert.ok(!("MAIG.Drawer.Tab" in j) && !("MAIG.Drawer.TabPending" in j), f);
+  }
 });
 
 const items = [

@@ -1,9 +1,4 @@
-{{#if part.tab}}
-<button type="button" class="maig-tab{{#if hasCard}} has-card{{/if}}" data-action="toggle" aria-expanded="{{#if isOpen}}true{{else}}false{{/if}}" aria-label="{{title}}" data-tooltip="{{#if hasCard}}{{localize 'MAIG.Drawer.TabPending'}}{{else}}{{title}}{{/if}}" data-tooltip-direction="LEFT">
-  <i class="fa-solid fa-robot" aria-hidden="true"></i><span class="maig-tab-label">{{localize "MAIG.Drawer.Tab"}}</span>
-  {{#if hasCard}}<span class="maig-tab-badge" aria-hidden="true"></span><span class="visually-hidden">{{localize "MAIG.Drawer.TabPending"}}</span>{{/if}}
-</button>
-{{else if part.head}}
+{{#if part.head}}
 <header class="maig-head">
   <div class="maig-titlebar">
     <h2 class="maig-title"><span>{{title}}</span>{{#if mode}}<span class="maig-mode">{{packLabel}} · {{mode}}</span>{{/if}}</h2>

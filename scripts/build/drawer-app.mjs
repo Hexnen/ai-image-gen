@@ -4,7 +4,8 @@
 // Loaded by a dynamic import from module.mjs (GM branch of `ready`); a failure here never touches image generation.
 //
 // Entry points: a header button on supported actor sheets (fa-robot, idempotent, re-checked on every render) and a 3-dot entry
-// (getHeaderControlsActorSheetV2); api.build.openDrawer(actor) opens it from code.
+// (getHeaderControlsActorSheetV2); api.build.openDrawer(actor) opens it from code. There is no side tab (W5-E): closed, the
+// drawer is hidden (or closed) and the header button carries its state (pressed = open, dot = proposal waiting, pulse = working).
 // View-model: drawer-model.mjs (pure, node-tested). Template: templates/builder-drawer.hbs (one file, one branch per part).
 // Styles: styles/builder-drawer.css.
 
@@ -47,7 +48,6 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
     tag: "aside",
     window: { frame: false, positioned: false },
     actions: {
-      toggle: BuilderDrawer.#onToggle,
       collapse: BuilderDrawer.#onCollapse,
       send: BuilderDrawer.#onSend,
       stop: BuilderDrawer.#onStop,
@@ -61,7 +61,6 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
   };
 
   static PARTS = {
-    tab: { template: TEMPLATE },
     head: { template: TEMPLATE },
     log: { template: TEMPLATE, scrollable: [""] },
     card: { template: TEMPLATE, scrollable: [""] },
@@ -73,7 +72,7 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
     if (!sheet?.document || !canUse(sheet.document)) return null;
     let d = drawers.get(sheet.id);
     if (!d) { d = new BuilderDrawer(sheet); drawers.set(sheet.id, d); }
-    d.isOpen = open || d.isOpen;
+    if (open) d.isOpen = true;
     await d.ready();
     await d.render({ force: true });
     if (open) d.focusInput();
@@ -84,7 +83,35 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
     super({ id: `${MODULE_ID}-builder-${foundry.utils.randomID(8)}` });
     this.sheet = sheet;
     this.actor = sheet.document;
-    this.isOpen = true;
+    this.isOpen = false;
+  }
+
+  /** "apply" | "undo" | "discard" while the drawer writes (header button state) */
+  get working() { return this.#working; }
+
+  /** Closed but still worth keeping (hidden, subscribed): a proposal waits or a turn / write runs; the header button shows it. */
+  get keepAlive() { return !!this.pendingCard || !!this.session?.busy || !!this.#working; }
+
+  /**
+   * Open / close from the header button or the title-bar X. Closed: hidden at once; kept (subscribed) while keepAlive,
+   * else forgotten at once and closed without animation (a closing app answered the next click in the live check).
+   */
+  async setOpen(open) {
+    this.isOpen = !!open;
+    if (this.isOpen) {
+      await this.render({ parts: ["head", "log", "card", "composer"] });
+      this.focusInput();
+    } else {
+      this.element?.classList.remove("open");
+      this.dock();
+      if (!this.keepAlive) {
+        if (drawers.get(this.sheet?.id) === this) drawers.delete(this.sheet.id);
+        syncHeaderState(this.sheet);
+        await this.close({ animate: false });
+        return;
+      }
+    }
+    syncHeaderState(this.sheet);
   }
 
   session = null;
@@ -237,7 +264,7 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
       case "turn-start":
         this.#live = { start: Date.now(), requests: 0, tools: 0, usd: 0, text: "" };
         this.#flash = null;
-        this.#queue("log", "composer", "head", "tab");
+        this.#queue("log", "composer", "head");
         this.#tick(true);
         break;
       case "request-start":
@@ -272,17 +299,17 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
         break;
       case "proposal":
         this.#invalidatePreview();
-        this.#queue("log", "card", "tab");
+        this.#queue("log", "card");
         break;
       case "turn-end":
         this.#live = null;
         this.#tick(false);
-        this.#queue("log", "card", "composer", "head", "tab");
+        this.#queue("log", "card", "composer", "head");
         break;
       case "conversation":
         this.#invalidatePreview();
         this.#flash = null;
-        this.#queue("log", "card", "composer", "head", "tab");
+        this.#queue("log", "card", "composer", "head");
         break;
       case "state":
         this.#queue("composer");
@@ -351,6 +378,7 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
     if (parts.includes("head")) this.#wireHead();
     if (parts.includes("log")) this.#wireLog();
     this.dock();
+    syncHeaderState(this.sheet);
   }
 
   #wireComposer() {
@@ -392,16 +420,16 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
     requestAnimationFrame(() => this.element?.querySelector?.("textarea[name=message]")?.focus());
   }
 
-  /** Glue to the sheet: right edge (left when no room), below its header, same z-index; hidden while minimised. */
+  /** Glue to the sheet: flush to its right edge (left when no room), below its header, same z-index; hidden while closed or minimised. */
   dock() {
     const el = this.element;
     const sh = this.sheet?.element;
     if (!el) return;
     const gone = !sh || !sh.isConnected;
-    const hidden = gone || sh.classList.contains("minimized") || sh.classList.contains("minimizing");
+    const hidden = gone || !this.isOpen || sh.classList.contains("minimized") || sh.classList.contains("minimizing");
     el.hidden = hidden;
     if (hidden) return;
-    const g = M.dockGeometry(sh.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight }, !!this.isOpen);
+    const g = M.dockGeometry(sh.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight });
     el.classList.toggle("flip", g.flip);
     el.style.left = `${g.left}px`;
     el.style.top = `${g.top}px`;
@@ -426,17 +454,11 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
 
   /* ------------------------------------------------------------------------------------------------ actions */
 
-  static async #onToggle() {
-    this.isOpen = !this.isOpen;
-    if (!this.isOpen && !this.pendingCard) return this.close();
-    await this.render({ parts: ["tab", "head", "log", "card", "composer"] });
-    if (this.isOpen) this.focusInput();
-  }
-
+  /** title-bar X: close the panel; focus goes back to the header button it opens from */
   static async #onCollapse() {
-    this.isOpen = false;
-    if (!this.pendingCard) return this.close();
-    return this.render({ parts: ["tab"] });
+    const sheet = this.sheet;
+    await this.setOpen(false);
+    sheet?.element?.querySelector?.("[data-maig-builder]")?.focus?.();
   }
 
   static #onSend() { return this.#send(); }
@@ -527,7 +549,7 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
       if (r?.ok) await this.#afterWrite("apply", before, t0);
       this.#working = null;
       this.#invalidatePreview();
-      this.#queue("log", "card", "composer", "head", "tab");
+      this.#queue("log", "card", "composer", "head");
     }
   }
 
@@ -537,7 +559,7 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
     if (!s || !card || this.#working) return;
     this.#working = "discard";
     try { await s.markProposal(card.proposalId, "discarded"); this.#setFlash("info", L("MAIG.Drawer.Flash.discarded")); }
-    finally { this.#working = null; this.#invalidatePreview(); this.#queue("log", "card", "composer", "tab"); }
+    finally { this.#working = null; this.#invalidatePreview(); this.#queue("log", "card", "composer"); }
   }
 
   static async #onUndo() {
@@ -574,7 +596,7 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
       if (r?.ok) await this.#afterWrite("undo", before, t0);
       this.#working = null;
       this.#invalidatePreview();
-      this.#queue("log", "card", "composer", "head", "tab");
+      this.#queue("log", "card", "composer", "head");
     }
   }
 }
@@ -607,38 +629,49 @@ function syncButton(app, element) {
   const existing = header.querySelector("[data-maig-builder]");
   if (!canUse(sheet.document)) { existing?.remove(); return; }
   const d = drawers.get(sheet.id);
-  if (existing) { existing.setAttribute("aria-pressed", String(!!d?.isOpen)); }
-  else {
+  if (!existing) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = `header-control icon ${ICON} maig-header-btn`;
     btn.dataset.maigBuilder = "";
-    btn.dataset.tooltip = L("MAIG.Drawer.Open");
-    btn.setAttribute("aria-label", L("MAIG.Drawer.Open"));
-    btn.setAttribute("aria-pressed", String(!!d?.isOpen));
     btn.addEventListener("click", (ev) => { ev.preventDefault(); ev.stopPropagation(); toggleFor(sheet); });
     const anchor = header.querySelector('[data-action="copyUuid"]') ?? header.querySelector('[data-action="close"]');
     if (anchor) anchor.before(btn); else header.append(btn);
   }
-  // a session already in memory with a proposal waiting: show the collapsed tab (spec 4.1)
+  // a session already in memory with a proposal waiting or a turn running: a hidden drawer follows it, the button shows it (spec 4.1)
   if (!d) {
     const s = build()?.getSession?.(sheet.document);
-    if (s && M.cardProposal(s.pendingProposal, s.proposals, s.transcript())) BuilderDrawer.openFor(sheet, { open: false }).catch(() => {});
+    if (s && (s.busy || M.cardProposal(s.pendingProposal, s.proposals, s.transcript()))) BuilderDrawer.openFor(sheet, { open: false }).catch(() => {});
   } else d.dock();
+  syncHeaderState(sheet);
+}
+
+/**
+ * The header button carries the drawer's state (W5-E, no side tab): aria-pressed = open, `has-pending` = a proposal waits
+ * (yellow dot), `is-working` = a turn or a write runs (pulsing dot); the tooltip / label say the same.
+ */
+function syncHeaderState(sheet) {
+  const btn = sheet?.element?.querySelector?.("[data-maig-builder]");
+  if (!btn) return;
+  const d = drawers.get(sheet.id);
+  let s = d?.session ?? null;
+  if (!s) { try { s = build()?.getSession?.(sheet.document) ?? null; } catch { s = null; } }
+  let pending = false;
+  try { pending = !!(s && M.cardProposal(s.pendingProposal, s.proposals, s.transcript())); } catch { pending = false; }
+  const st = M.headerButtonState({ open: !!d?.isOpen, pending, busy: !!s?.busy || !!d?.working }, L);
+  btn.setAttribute("aria-pressed", String(st.pressed));
+  btn.classList.toggle("has-pending", st.pending);
+  btn.classList.toggle("is-working", st.working);
+  btn.dataset.tooltip = st.tooltip;
+  btn.setAttribute("aria-label", st.tooltip);
 }
 
 /** Header button / 3-dot entry: open, or close when open. */
 export async function toggleFor(sheet) {
   const d = drawers.get(sheet.id);
-  if (d?.isOpen) {
-    d.isOpen = false;
-    if (!d.pendingCard) await d.close(); else await d.render({ parts: ["tab"] });
-  } else if (d) {
-    d.isOpen = true;
-    await d.render({ parts: ["tab", "head", "log", "card", "composer"] });
-    d.focusInput();
-  } else await BuilderDrawer.openFor(sheet, { open: true });
-  sheet.element?.querySelector?.("[data-maig-builder]")?.setAttribute("aria-pressed", String(!!drawers.get(sheet.id)?.isOpen));
+  if (d) await d.setOpen(!d.isOpen);
+  else await BuilderDrawer.openFor(sheet, { open: true });
+  syncHeaderState(sheet);
 }
 
 function syncAll() {

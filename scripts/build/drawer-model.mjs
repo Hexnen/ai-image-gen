@@ -3,32 +3,42 @@
 // comes back with Handlebars. Everything the model wrote is escaped here (renderText); no HTML from the model reaches the DOM.
 // Node tests: dev/test-drawer-model.mjs.
 
-/** Width / height constants of the drawer (docking, dock()). */
-export const DOCK = Object.freeze({ tab: 32, panel: 420, minPanel: 300, header: 38, minHeight: 160 });
+/** Width / height constants of the drawer (docking, dock()). No side tab (W5-E): the panel is the whole drawer. */
+export const DOCK = Object.freeze({ panel: 420, minPanel: 300, header: 38, minHeight: 160 });
 
 /**
- * Where the drawer goes next to the sheet (right edge, else left, else shrink; never off-screen).
- * rect = the sheet's bounding rect, view = { width, height } of the window, open = panel shown.
+ * Where the open drawer goes next to the sheet (right edge, else left, else shrink; never off-screen). Closed, the drawer
+ * is hidden (it opens from the sheet's header button only).
+ * rect = the sheet's bounding rect, view = { width, height } of the window.
  * -> { left, top, width, height, flip, panelW }
  */
-export function dockGeometry(rect, view, open, d = DOCK) {
+export function dockGeometry(rect, view, d = DOCK) {
   const roomR = view.width - rect.right;
   const roomL = rect.left;
   let flip = false;
   let panelW = d.panel;
-  if (open && roomR < d.tab + d.panel) {
-    if (roomL >= d.tab + d.panel) flip = true;
+  if (roomR < d.panel) {
+    if (roomL >= d.panel) flip = true;
     else {
       flip = roomL > roomR;
-      panelW = Math.max(d.minPanel, Math.min(d.panel, Math.max(roomL, roomR) - d.tab));
+      panelW = Math.max(d.minPanel, Math.min(d.panel, Math.max(roomL, roomR)));
     }
-  } else if (!open && roomR < d.tab && roomL >= d.tab) flip = true;
-  const width = open ? d.tab + panelW : d.tab;
+  }
+  const width = panelW;
   let left = flip ? rect.left - width : rect.right;
   left = Math.max(0, Math.min(left, view.width - width));
   const top = rect.top + d.header;
   const height = Math.max(d.minHeight, Math.min(rect.height - d.header, view.height - top));
   return { left, top, width, height, flip, panelW };
+}
+
+/**
+ * State of the robot button in the sheet header (W5-E: it carries what the side tab used to: open, a proposal waiting, a
+ * turn still running). -> { pressed, pending, working, tooltip }
+ */
+export function headerButtonState({ open = false, pending = false, busy = false } = {}, L = (k2) => k2) {
+  const tooltip = busy ? L("MAIG.Drawer.OpenWorking") : pending ? L("MAIG.Drawer.OpenPending") : L("MAIG.Drawer.Open");
+  return { pressed: !!open, pending: !!pending, working: !!busy, tooltip };
 }
 
 const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
