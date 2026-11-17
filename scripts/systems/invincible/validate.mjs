@@ -347,6 +347,14 @@ export async function validateProposal(doc, input, opts = {}) {
   const res = { ok: false, layer: "L0", profile, errors: [], warnings: [], info: [], autoFixed: [], budget: null };
   const finish = (layer, raw, ctx = {}) => {
     res.layer = layer;
+    // W5-B-2: rank.defaulted is a quiet info (the default rank is used and nothing conflicts); a warning only when the result
+    // is refused (an error may come from the default rank) or the proposal names another rank (rank.differs)
+    const rd = [...raw.warnings, ...raw.info].filter((i) => i.code === "rank.defaulted");
+    if (rd.length) {
+      const loud = raw.errors.length > 0 || raw.warnings.some((i) => i.code === "rank.differs");
+      raw = { ...raw, warnings: raw.warnings.filter((i) => i.code !== "rank.defaulted"), info: raw.info.filter((i) => i.code !== "rank.defaulted") };
+      (loud ? raw.warnings : raw.info).unshift(rd[0]);
+    }
     res.errors = raw.errors.map((i) => describe(i, ctx));
     res.warnings = raw.warnings.map((i) => describe(i, ctx));
     res.info = raw.info.map((i) => describe(i, ctx));
@@ -414,7 +422,8 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
     return r;
   };
   // P1-G: nobody chose a rank (no drawer rank, no plus-ultra flag): say so instead of validating as Global silently
-  if (isHero && rankFrom === "default") acc.warnings.push({ code: "rank.defaulted", path: "rank", params: { rank } });
+  // W5-B-2: info here; `finish` makes it a warning when the result is refused or names another rank
+  if (isHero && rankFrom === "default") acc.info.push({ code: "rank.defaulted", path: "rank", params: { rank } });
 
   // baseline (spec 7.5.3: the same pipeline on the unchanged actor)
   const base = project(null, [], { catalog, plain: basePlain });
@@ -738,7 +747,9 @@ export function perOpCost(basePlain, ops, catalog, rank, before) {
       const l = all.find((x) => x._id === itemId);
       const pw = l ? all.find((x) => x._id === l.system?.power) : null;
       if (!pw) return null;
-      return { power: baseName(pw.name), grants: limitReading(pw) };
+      // W5-B-3: the power's level and its boosts on the final sheet (a level-paying limit leaves the boosts on slots)
+      const boosts = fin.actor.items.filter((x) => x.type === "boost" && x.system?.power === pw._id).map((x) => baseName(x.name));
+      return { power: baseName(pw.name), grants: limitReading(pw), level: powerLevel(pw.system), boosts };
     }
   };
   return ops.map((op) => {
@@ -751,6 +762,19 @@ export function perOpCost(basePlain, ops, catalog, rank, before) {
 }
 /** W3-6: what a limit pays for as the reader (and so the budget) reads it: a level when its power is above Basic, else a boost */
 export const limitReading = (power) => (power && LEVEL_WORDS.indexOf(powerLevel(power.system)) > 0 ? "level" : "boost");
+const cap1 = (w) => (w ? `${w[0].toUpperCase()}${w.slice(1)}` : "");
+/**
+ * W5-B-3: what an added limit pays for, in the sheet's reading (limitReading). A power at Basic: "pays for a boost of "X"". Above
+ * Basic: "pays for a level of "X"" (W3-6), and when the power also has boosts both facts, so the model can tell the GM which:
+ * "pays for the level Major of "X"; the boost "Y" stays paid by a slot" (Massive and up: "a level (Massive)").
+ */
+export function limitPays(lim, slots = "") {
+  const par = slots ? ` (no slot for it; ${slots})` : "";
+  if (lim.grants !== "level" || !lim.boosts?.length) return `pays for a ${lim.grants} of "${lim.power}"${par}`;
+  const lvl = lim.level === "major" ? `the level ${cap1(lim.level)}` : `a level (${cap1(lim.level)})`;
+  const b = lim.boosts.map((n) => `"${n}"`).join(", ");
+  return `pays for ${lvl} of "${lim.power}"${par}; the boost${lim.boosts.length > 1 ? `s ${b} stay paid by slots` : ` ${b} stays paid by a slot`}`;
+}
 const signed = (n, unit) => `${n > 0 ? "+" : ""}${n} ${unit}${Math.abs(n) === 1 ? "" : "s"}`;
 /** -> "hero talent (free)", "occupation talent (free)", "extra talent -1 pt", "drawback +1 pt", "extra power source -1 pt",
     "+1 slot (slots 3/4) -2 pts", "pays for a boost of \"X\" (no slot for it; slots 2/4) +2 pts", "attributes spent 12 -> 34",
@@ -763,7 +787,7 @@ export function costLabel(c, info, ctx) {
   if (info?.kind === "actor" && spent) return [spent, c.slots ? `${signed(c.slots, "slot")} (slots ${c.slotsAfter}/${c.rankPowers})` : "", pts].filter(Boolean).join(", ");
   // W2-5: a limit pays for one level or boost of its power: say so instead of "-1 slot", which read like a slot refund
   const lim = info?.type === "limit" && c.slots && ctx.limitOf ? ctx.limitOf(info.itemId) : null;
-  if (lim && info.kind === "add" && c.slots < 0) return `pays for a ${lim.grants} of "${lim.power}" (no slot for it; slots ${c.slotsAfter}/${c.rankPowers})${pts ? ` ${pts}` : ""}`;
+  if (lim && info.kind === "add" && c.slots < 0) return `${limitPays(lim, `slots ${c.slotsAfter}/${c.rankPowers}`)}${pts ? ` ${pts}` : ""}`;
   if (lim && info.kind === "remove" && c.slots > 0) return `limit gone: the ${lim.grants} of "${lim.power}" it paid for needs a slot again (slots ${c.slotsAfter}/${c.rankPowers})${pts ? ` ${pts}` : ""}`;
   const role = (name) => (c.points ? `${name} ${pts}` : `${name} (free)`);
   if (info?.kind === "add" && info.type === "talent" && !c.slots) {
@@ -785,6 +809,20 @@ const TOOL_DESC = {
 };
 export function proposalToolDefs() {
   return MODEL_TOOL_NAMES.map((name) => ({ name, description: TOOL_DESC[name], input_schema: PROPOSAL_SCHEMA, strict: true }));
+}
+/**
+ * W5-B-1: warnings of an accepted submit that the model can fix in one more submit (the harness then keeps the turn open for one
+ * fix round). Not counted: info (never), the quiet codes, warnings whose hint says there is nothing to do, and these codes: the
+ * GM's business or already intended (drawer rank, slots over the rank by choice, hand-edited removals the GM sees, a cut note,
+ * an NPC threat, a sensitive field the GM asked for).
+ */
+export const NO_FIX_WARNINGS = Object.freeze(new Set(["rank.defaulted", "rank.differs", "slots.over", "remove.handEdited", "note.cut", "npc.threat", "field.sensitive", "baseline.tolerated", "budget.delta", "gear.cost", "effect.filled"]));
+const NO_FIX_HINT = /^(nothing to (fix|do)|information only|fine if|in-play: )/i;
+export const isActionableWarning = (w) => !!w?.code && !QUIET_CODES.has(w.code) && !NO_FIX_WARNINGS.has(w.code) && !!String(w.hint ?? "").trim() && !NO_FIX_HINT.test(String(w.hint).trim());
+/** model-facing submit result -> the actionable warnings (empty for a refused or dry-run result) */
+export function actionableWarnings(name, res) {
+  if (!res || res.ok !== true || res.dryRun === true) return [];
+  return (Array.isArray(res.warnings) ? res.warnings : []).filter(isActionableWarning);
 }
 /** D-9: check_proposal (internal alias) or submit_proposal with dryRun:true */
 export const isDryRun = (name, input) => name === "check_proposal" || input?.dryRun === true;
@@ -826,6 +864,7 @@ export function validateGroup(getPack, deps = {}) {
   return {
     validate: (doc, proposal, o = {}) => run(doc, proposal, o),
     proposalTools: () => proposalToolDefs(),
+    actionableWarnings: (name, res) => actionableWarnings(name, res),   // W5-B-1 (the harness's fix round)
     async runProposalTool(name, input, ctx = {}) {
       if (!TOOL_NAMES.includes(name)) return { ok: false, errors: [{ code: "tool.unknown", message: `Unknown tool "${name}".`, hint: "" }] };
       const o = ctx.options ?? {};

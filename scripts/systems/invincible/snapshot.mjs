@@ -294,6 +294,7 @@ export function parseSheet(text) {
     const h = l.match(/^<sheet\b[^>]*?doc="((?:[^"\\]|\\.)*)"[^>]*?fp=(\w+)/);
     if (h) { doc = h[1]; fp = h[2]; continue; }
     if (/^<\/?sheet/.test(l)) continue;
+    if (/^\s/.test(l)) continue;   // indented notes ("  (changed: ...)", W5-B-5 "  (rank changed ...)") are not sheet lines
     lines.set(lineKey(l), l);
   }
   return { doc, fp, lines };
@@ -313,7 +314,7 @@ const removedLabel = (key, oldLine) => {
 };
 /* ---- W4-B-6: what changed inside a "~" line (dry run 4: "resources 2" vanished from PREPARED and "Hard Times -1" from BONUS
    with nothing saying so). Under each "~ <new line>" an indented "  (changed: ...)" line lists the fields whose value differs:
-   "field old -> new" ("-" = absent), "+flag" / "-flag" for bare words; long values (> DELTA_VALUE chars) only "field changed".
+   "field old -> new" (W5-B-4: "x -> removed" / "none -> y" when absent on one side), "+flag" / "-flag" for bare words; long values (> DELTA_VALUE chars) only "field changed".
    applyUpdate ignores indented lines, so the folded picture stays the same. */
 export const DELTA_VALUE = 60;
 export const DELTA_CHARS = 240;
@@ -342,11 +343,12 @@ export function lineFields(line) {
   }
   return { kv, flags };
 }
-/** old line, new line -> "changed: a 1 -> 2, b 3 -> -, +flag" | "" */
+/** old line, new line -> "changed: a 1 -> 2, b 3 -> removed, c none -> 4, +flag" | "" (W5-B-4: words, not "-", for a value
+    that went away or came new: "-" is also a real value on the sheet, e.g. src=-) */
 export function lineDelta(oldLine, newLine) {
   const a = lineFields(oldLine), b = lineFields(newLine);
   const parts = [];
-  const show = (v) => (v === undefined ? "-" : v);
+  const show = (v, side) => (v === undefined ? (side === "new" ? "removed" : "none") : v);
   for (const k of [...new Set([...a.kv.keys(), ...b.kv.keys()])]) {
     const x = a.kv.get(k), y = b.kv.get(k);
     if (x === y) continue;
@@ -355,7 +357,7 @@ export function lineDelta(oldLine, newLine) {
       parts.push(`${k} ${[...xs.filter((c) => !ys.includes(c)).map((c) => `-${c}`), ...ys.filter((c) => !xs.includes(c)).map((c) => `+${c}`)].join(" ")}`);
       continue;
     }
-    parts.push((x?.length ?? 0) > DELTA_VALUE || (y?.length ?? 0) > DELTA_VALUE ? `${k} changed` : `${k} ${show(x)} -> ${show(y)}`);
+    parts.push((x?.length ?? 0) > DELTA_VALUE || (y?.length ?? 0) > DELTA_VALUE ? `${k} changed` : `${k} ${show(x, "old")} -> ${show(y, "new")}`);
   }
   for (const f of a.flags) if (!b.flags.has(f)) parts.push(`-${f}`);
   for (const f of b.flags) if (!a.flags.has(f)) parts.push(`+${f}`);
@@ -370,14 +372,15 @@ const removedText = (key, oldLine) => {
   const was = String(oldLine).slice(key.length).trim();
   return was ? `${key} (was: ${was.length > 120 ? `${was.slice(0, 119)}…` : was})` : key;
 };
-/** -> "<sheet_update ...>...</sheet_update>" text (or "<sheet_unchanged/>") */
-export function formatUpdate(oldLines, fresh, { doc, base } = {}) {
+/** -> "<sheet_update ...>...</sheet_update>" text (or "<sheet_unchanged/>"); validNote (W5-B-5): an indented note under "~ VALID" */
+export function formatUpdate(oldLines, fresh, { doc, base, validNote = "" } = {}) {
   const o = toLines(oldLines);
   const d = diffLines(o, fresh.lines);
   if (!d.count) return "<sheet_unchanged/>";
+  const note = (l) => (validNote && lineKey(l) === "VALID" ? [`  (${validNote})`] : []);
   const body = [
-    ...d.changed.flatMap((l) => { const x = lineDelta(o.get(lineKey(l)) ?? "", l); return x ? [`~ ${l}`, `  (${x})`] : [`~ ${l}`]; }),
-    ...d.added.map((l) => `+ ${l}`), ...d.removed.map((k) => `- ${removedText(k, o.get(k))}`)
+    ...d.changed.flatMap((l) => { const x = lineDelta(o.get(lineKey(l)) ?? "", l); return [`~ ${l}`, ...(x ? [`  (${x})`] : []), ...note(l)]; }),
+    ...d.added.flatMap((l) => [`+ ${l}`, ...note(l)]), ...d.removed.map((k) => `- ${removedText(k, o.get(k))}`)
   ];
   return `${header("sheet_update", doc ?? "", fresh.fingerprint, base ? ` base=${base}` : "")}\n${body.join("\n")}\n</sheet_update>`;
 }
@@ -416,21 +419,42 @@ export function sameLines(a, b) {
  * supersedes.
  */
 export function nextSheetBlock(held, fresh, { limits = LIMITS } = {}) {
+  const validNote = held?.lines ? settingNote(held.lines, fresh.lines) : "";
   const full = (reason) => ({
     kind: "full", reason,
-    text: held ? markSupersedes(fresh.text) : fresh.text,
+    text: withValidNote(held ? markSupersedes(fresh.text) : fresh.text, validNote),
     held: { lines: new Map(fresh.lines), fullLineCount: fresh.lines.size, diffs: 0, fingerprint: fresh.fingerprint, doc: docOf(fresh) }
   });
   if (!held?.lines) return full("first");
-  if (sameLines(held.lines, fresh.lines)) return { kind: "unchanged", text: "<sheet_unchanged/>", reason: "same", held };
+  // W5-B-4: GM-only lines (the undo journal flag) never make an update on their own and are never sent in one; the full block
+  // still shows them. held keeps what the model has.
+  const heldM = modelLines(held.lines), freshM = modelLines(fresh.lines);
+  if (sameLines(heldM, freshM)) return { kind: "unchanged", text: "<sheet_unchanged/>", reason: "same", held };
   if ((held.diffs ?? 0) >= limits.maxDiffs) return full("diff-count");
-  const d = diffLines(held.lines, fresh.lines);
-  const text = formatUpdate(held.lines, fresh, { doc: held.doc ?? docOf(fresh), base: held.fingerprint });
+  const d = diffLines(heldM, freshM);
+  const text = formatUpdate(heldM, { ...fresh, lines: freshM }, { doc: held.doc ?? docOf(fresh), base: held.fingerprint, validNote });
   const tooMany = d.count > limits.diffRatio * Math.max(1, fresh.lines.size);
   const tooBig = estimateTokens(text) > limits.diffTokens;
   if (tooMany || tooBig) return full(tooMany ? "drift-lines" : "drift-tokens");
   return { kind: "update", text, reason: "diff", held: { ...held, lines: applyUpdate(held.lines, text), diffs: (held.diffs ?? 0) + 1, fingerprint: fresh.fingerprint } };
 }
+/** W5-B-4: line keys that are for the GM only (undo status): never sent in a sheet_update, never a change on their own */
+export const GM_ONLY_KEYS = Object.freeze(new Set(["FLAG undo"]));
+const modelLines = (m) => { const o = new Map(toLines(m)); for (const k of GM_ONLY_KEYS) o.delete(k); return o; };
+/**
+ * W5-B-5: the drawer's rank / profile changed since the sheet the model holds (ACTOR line) and the new VALID line reports
+ * problems -> "rank changed global -> street: VALID checks the existing build against the new setting" ("" otherwise). The
+ * VALID result is the hero built before the change, judged under the new rank, not a fault of the last proposal.
+ */
+export function settingNote(heldLines, freshLines) {
+  const a = toLines(heldLines).get("ACTOR") ?? "", b = toLines(freshLines).get("ACTOR") ?? "", v = toLines(freshLines).get("VALID") ?? "";
+  if (!a || !b || !/\b(errors|warns)=/.test(v)) return "";
+  const get = (l, k) => l.match(new RegExp(`\\b${k}=([\\w-]+)`))?.[1] ?? null;
+  const ch = ["rank", "profile"].filter((k) => get(a, k) !== get(b, k) && get(b, k)).map((k) => `${k} changed ${get(a, k) ?? "none"} -> ${get(b, k)}`);
+  return ch.length ? `${ch.join(", ")}: VALID checks the existing build against the new setting` : "";
+}
+/** a full block's text with the W5-B-5 note as an indented line under VALID (not a sheet line: parseSheet / held skip it) */
+const withValidNote = (text, note) => (note ? String(text).replace(/^(VALID .*)$/m, (l) => `${l}\n  (${note})`) : text);
 /** add supersedes="all earlier sheet blocks" to a full block's header (idempotent) */
 export const markSupersedes = (text) => String(text).replace(/^<sheet\b([^>]*)>/, (m, a) => (/supersedes=/.test(a) ? m : `<sheet${a} supersedes=${quote(SUPERSEDES)}>`));
 const docOf = (fresh) => String(fresh.text ?? "").match(/^<sheet\b[^>]*?doc="((?:[^"\\]|\\.)*)"/)?.[1] ?? null;

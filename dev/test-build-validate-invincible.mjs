@@ -14,7 +14,8 @@ import {
   expectFor, checkStale, toPlainActor, gearPatch, textToHtml
 } from "../scripts/systems/invincible/proposal.mjs";
 import {
-  validateProposal, validateGroup, proposalToolDefs, MESSAGES, describe, STRUCTURAL, superheroIssues, stateOf
+  validateProposal, validateGroup, proposalToolDefs, MESSAGES, describe, STRUCTURAL, superheroIssues, stateOf,
+  actionableWarnings, isActionableWarning, NO_FIX_WARNINGS, limitPays
 } from "../scripts/systems/invincible/validate.mjs";
 import { validatePack } from "../scripts/build/registry.mjs";
 import { CATALOG_ROWS, makeLookup, typicalHero, bigNpc, actor as mkActor, fromCatalog, item, idGen } from "./fixtures/invincible-sheets.mjs";
@@ -882,8 +883,8 @@ await test("P1-G: no suggest when the proposal names another rank; rank.defaulte
   const r2 = await VO(blankHero(), rep(fullBuild({ attributes: { fighting: 6, agility: 7, strength: 5, reason: 5, intuition: 5, presence: 2 } })), { rank: "global" });
   assert.ok(r2.errors.find((x) => x.code === "attr.unspent").suggest, "same rank: the reconciled vector is still offered");
   const d = await VO(blankHero(), rep(fullBuild()));
-  has(d, "rank.defaulted", "warnings");
-  assert.match(d.warnings.find((w) => w.code === "rank.defaulted").message, /validated as global \(the default\)/);
+  has(d, "rank.defaulted", "info");   // W5-B-2: a quiet info when nothing conflicts
+  assert.match(d.info.find((w) => w.code === "rank.defaulted").message, /validated as global \(the default\)/);
   assert.ok(!codes(await VO(blankHero(), rep(fullBuild()), { rank: "global" }), "warnings").includes("rank.defaulted"));
   assert.ok(!codes(await V(typicalHero(), ops({ op: "updateActor", opId: "a", set: { texts: { drive: "x" } } })), "warnings").includes("rank.defaulted"), "plus-ultra flag counts as a chosen rank");
   assert.ok(!codes(await V(smallNpc(), ops({ op: "updateActor", opId: "a", set: { name: "Y" } })), "warnings").includes("rank.defaulted"), "npc: no rank budget");
@@ -926,7 +927,7 @@ await test("W3-7: Hard Times info only when drawbacks / Resources are touched or
   assert.equal(ht(await V(hard, ops({ op: "updateItem", opId: "u", itemId: idOf(hard, "Lean Times"), set: { note: "Invented" } }), { profile: "in-play" })), true, "a drawback changed");
   // rank.defaulted: no order to ask
   const d = await VO(blankHero(), rep(fullBuild()));
-  assert.equal(d.warnings.find((w) => w.code === "rank.defaulted").hint, "Nothing to do unless the GM's message names another rank; then ask them to set it in the drawer.");
+  assert.equal(d.info.find((w) => w.code === "rank.defaulted").hint, "Nothing to do unless the GM's message names another rank; then ask them to set it in the drawer.");
   // npc.name.blank: empty relationships = no NPC relationship written; an "NPC:" line without a name = nameless
   const none = await VO(blankHero(), rep(fullBuild({ texts: { ...fullBuild().texts, relationships: "" } })), { rank: "global" });
   const nb = none.warnings.find((w) => w.code === "npc.name.blank");
@@ -1095,6 +1096,63 @@ await test("W4-A-5: talent.occ.missing says what to do (another talent from the 
   // an occupation the catalogue does not know: generic wording
   const m = MESSAGES["talent.occ.missing"]({});
   assert.match(m.hint, /add an occupation talent from the occupation's list as the second talent/);
+});
+
+/* ================================================================== wave 5, group B (dry runs 5 and 6) */
+await test("W5-B-2: rank.defaulted is a quiet info; a warning only when the result is refused or the proposal names another rank", async () => {
+  // the default rank fits and nothing conflicts: info, also in the model's submit result; never in the warnings
+  const d = await VO(blankHero(), rep(fullBuild()));
+  assert.equal(d.ok, true, JSON.stringify(d.errors));
+  assert.ok(codes(d, "info").includes("rank.defaulted")); assert.ok(!codes(d, "warnings").includes("rank.defaulted"));
+  const sub = await group(catOcc).runProposalTool("submit_proposal", rep(fullBuild()), { doc: blankHero(), options: {} });
+  assert.equal(sub.ok, true);
+  assert.ok(sub.info.some((w) => w.code === "rank.defaulted") && !sub.warnings.some((w) => w.code === "rank.defaulted"));
+  // refused under the default rank (an error may come from the rank): warning, once
+  const bad = await VO(blankHero(), rep(fullBuild({ attributes: { fighting: 6, agility: 7, strength: 5, reason: 5, intuition: 5, presence: 2 } })));
+  assert.equal(bad.ok, false);
+  assert.equal(bad.warnings.filter((w) => w.code === "rank.defaulted").length, 1); assert.ok(!codes(bad, "info").includes("rank.defaulted"));
+  // the proposal names another rank than the effective (default) one: rank.differs + rank.defaulted both warnings
+  const other = await VO(blankHero(), rep(fullBuild({ rank: "street" })));
+  assert.ok(codes(other, "warnings").includes("rank.differs")); assert.ok(codes(other, "warnings").includes("rank.defaulted"));
+  // a chosen rank: no remark at all (unchanged)
+  const chosen = await VO(blankHero(), rep(fullBuild()), { rank: "global" });
+  assert.ok(![...codes(chosen, "warnings"), ...codes(chosen, "info")].includes("rank.defaulted"));
+});
+
+await test("W5-B-3: a limit on a power with a level AND a boost says both facts in the summary", async () => {
+  const P = fullBuild();
+  P.powers[0] = { ref: ref("power", "Glide Wings"), level: "major", source: "s1", boosts: [{ ref: ref("boost", "Silent Flight", "Glide Wings") }], limits: [{ ref: ref("limit", "Loud", "Glide Wings") }] };
+  const r = await VO(blankHero(), rep(P), { rank: "global" });
+  const lim = r.budget.perOp.find((c) => r.opInfo[c.opId].type === "limit" && r.opInfo[c.opId].name === "Loud");
+  assert.match(lim.label, /^pays for the level Major of "Glide Wings" \(no slot for it; slots \d+\/4\); the boost "Silent Flight" stays paid by a slot/);
+  if (r.ok) assert.match(r.summary, /add limit "Loud" cost: pays for the level Major of "Glide Wings" .*the boost "Silent Flight" stays paid by a slot/);
+  // no boost on the power: the W3-6 wording stays
+  const plain = r.budget.perOp.find((c) => r.opInfo[c.opId].type === "limit" && r.opInfo[c.opId].name === "Needs Charging");
+  assert.match(plain.label, /^pays for a level of "Spark Bolt" \(no slot for it; slots \d+\/4\)/);
+  // pure function: Massive, several boosts, Basic power
+  assert.equal(limitPays({ grants: "level", power: "X", level: "massive", boosts: ["A", "B"] }, "slots 3/4"), 'pays for a level (Massive) of "X" (no slot for it; slots 3/4); the boosts "A", "B" stay paid by slots');
+  assert.equal(limitPays({ grants: "boost", power: "X", level: "basic", boosts: ["A"] }), 'pays for a boost of "X"');
+  assert.equal(limitPays({ grants: "level", power: "X", level: "major", boosts: [] }, "slots 2/3"), 'pays for a level of "X" (no slot for it; slots 2/3)');
+});
+
+await test("W5-B-1: actionable warnings of an accepted submit (the harness's fix round): hints that ask for a fix, never info / quiet / no-fix codes", async () => {
+  const w = (code, hint) => ({ code, message: "m", hint });
+  const res = { ok: true, warnings: [w("talent.occ.list", "Order talents hero talent, occupation talent, extras; pick the occupation talent from that list."),
+    w("talent.role.shift", MESSAGES["talent.role.shift"]({ name: "X", from: "hero", to: "occupation" }).hint),
+    w("team.empty", "Nothing to fix (a solo hero keeps team and teamBase empty)."), w("slots.over", "Fine if intended (2 attribute points per extra slot)."),
+    w("rank.differs", "Ask the GM to set the rank in the drawer; do not rebalance for the other rank."), w("remove.handEdited", "The GM sees it in the preview; say why in choiceNotes."),
+    w("effect.placeholder", "Nothing to fix: the note names the choice"), w("x.nohint", "")],
+    info: [w("drawback.hardTimes", "Nothing to fix.")] };
+  assert.deepEqual(actionableWarnings("submit_proposal", res).map((x) => x.code), ["talent.occ.list", "talent.role.shift"]);
+  assert.deepEqual(actionableWarnings("submit_proposal", { ...res, ok: false }), [], "refused: the normal error loop");
+  assert.deepEqual(actionableWarnings("submit_proposal", { ...res, dryRun: true }), [], "dry run: never");
+  for (const c of ["rank.defaulted", "slots.over", "remove.handEdited", "note.cut", "gear.cost"]) assert.ok(NO_FIX_WARNINGS.has(c));
+  assert.equal(isActionableWarning(w("drawback.note.missing", MESSAGES["drawback.note.missing"]({ name: "X" }).hint)), true);
+  // the group exposes it (pack.actionableWarnings through Object.assign in pack.mjs); a clean default-rank build has none
+  const g = group(catOcc);
+  assert.equal(typeof g.actionableWarnings, "function");
+  const sub = await g.runProposalTool("submit_proposal", rep(fullBuild()), { doc: blankHero(), options: {} });
+  assert.equal(sub.ok, true); assert.deepEqual(g.actionableWarnings("submit_proposal", sub), [], JSON.stringify(sub.warnings));
 });
 
 console.log(`\n${passed} passed${process.exitCode ? " (with failures)" : ""}`);

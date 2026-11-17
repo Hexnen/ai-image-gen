@@ -12,6 +12,8 @@
 //            setting endTurnOnSubmit, default on) WITHOUT another request; its tool_result blocks are HELD in
 //            record.heldToolResults (not in messages) and lead the NEXT GM message (held results, sheet, marker, text),
 //            so the history never has two user messages in a row and stays a strict append-only prefix.
+//         -> W5-B-1: unless an accepted submit's result has an actionable warning: then ONE more request (fix round, in the
+//            limits) with the results appended; in it any batch with a real submit ends the turn whatever its result.
 // The turn's `text` is the text of the assistant message that ended the turn without a tool call (W3-5); text written
 // before a tool call is `progress[]` (and a "progress" transcript item), never part of `text`.
 // History is append-only (spec 5.2): nothing appended is ever edited, reordered or removed; the store refuses edits.
@@ -55,6 +57,7 @@ export const EVENT_TYPES = Object.freeze([
   "tool-end",         // { id, name, ok, isError, summary }
   "proposal",         // { pending } successful submit
   "submit-failed",    // { id, name, input, errors, consecutive }
+  "fix-round",        // { ids } W5-B-1: an accepted submit had actionable warnings; one more request so the model can fix them
   "notice",           // { code, level, message, data }
   "turn-end",         // TurnSummary
   "conversation",     // { conversationId } new conversation started
@@ -99,6 +102,20 @@ export const isSubmitTool = (name) => /^submit_/.test(String(name ?? ""));
 /** D-9 (W3-14): a submit_* call with input.dryRun true (or a result marked dryRun) is a check: never pending, never ends the
  *  turn, never counts towards the invalid-submit caps (what check_proposal was). */
 export const isSubmitCall = (name, input, res) => isSubmitTool(name) && input?.dryRun !== true && res?.dryRun !== true;
+/** W5-B-1: a hint that says there is nothing to do (generic rule for packs without `actionableWarnings`) */
+const NO_FIX_HINT = /^(nothing to (fix|do)|information only|fine if)/i;
+/**
+ * W5-B-1: number of actionable warnings in an ACCEPTED real submit's result: the pack decides (`pack.actionableWarnings(name,
+ * res)` -> array), else warnings with a hint that is not "nothing to do". Info entries never count; dry runs and refused
+ * submits are 0.
+ */
+export function actionableCount(pack, x) {
+  if (!x || x.isError || x.res?.ok !== true || !isSubmitCall(x.use?.name, x.use?.input, x.res)) return 0;
+  try {
+    if (typeof pack?.actionableWarnings === "function") { const a = pack.actionableWarnings(x.use.name, x.res); return Array.isArray(a) ? a.length : Number(a) || 0; }
+  } catch { return 0; }
+  return (Array.isArray(x.res.warnings) ? x.res.warnings : []).filter((w) => String(w?.hint ?? "").trim() && !NO_FIX_HINT.test(String(w.hint).trim())).length;
+}
 
 /** Stable signature of a failed submission's errors (identical-failure cap). */
 export function errorSignature(res, fallback = "") {
@@ -528,6 +545,7 @@ export class Session {
       this.emit("user-message", { index: idx });
 
       let consecutiveInvalid = 0, identical = 0, lastSig = null;
+      let fixRound = false;   // W5-B-1: at most one fix round per GM message
       for (;;) {
         if (signal.aborted) { reason = "stopped"; break; }
         if (turn.requests >= s.maxRequests) { reason = "cap"; cap = "requests"; break; }
@@ -593,8 +611,20 @@ export class Session {
         if (!results || signal.aborted) { reason = "stopped"; break; } // unanswered: answered at the next GM message
         const resultsTurn = h.tr.toolResultsTurn(results.map((x) => ({ toolUseId: x.use.id, content: x.content, isError: x.isError })));
         // W3-4 (D-5): only submit_* calls, all accepted -> the turn ends here; the results wait for the next GM message
-        const endOnSubmit = s.endTurnOnSubmit && results.length > 0
+        let endOnSubmit = s.endTurnOnSubmit && results.length > 0
           && results.every((x) => isSubmitCall(x.use.name, x.use.input, x.res) && !x.isError && x.res?.ok === true);
+        // W5-B-1 (provisional): an accepted submit whose result carries an actionable warning keeps the turn open for ONE fix
+        // round (the model sees the result now, not one GM message late); in that round any batch with a real submit ends the
+        // turn whatever its result. The extra request counts in every limit; no fix round when the request / tool caps are
+        // already reached (the turn then ends on the submit as before).
+        if (s.endTurnOnSubmit && fixRound && results.some((x) => isSubmitCall(x.use.name, x.use.input, x.res))) endOnSubmit = true;
+        else if (endOnSubmit && !fixRound && turn.requests < s.maxRequests && turn.toolCalls + uses.length < s.maxToolCalls
+          && results.some((x) => actionableCount(pack, x) > 0)) {
+          endOnSubmit = false;
+          fixRound = true;
+          turn.fixRound = true;
+          this.emit("fix-round", { ids: results.map((x) => x.use.id) });
+        }
         if (!endOnSubmit) await this.#append(resultsTurn);
         turn.toolCalls += uses.length;
 
@@ -670,6 +700,7 @@ export class Session {
       ok: turn.reason === "done" || turn.reason === "submitted", reason: turn.reason, cap, turn: turn.turn, requests: turn.requests, toolCalls: turn.toolCalls,
       usage: plain(turn.usage), usd: turn.usd, text: finalText, progress, stop: lastStop, sheet: turn.sheet,
       proposal: turn.proposalId ? plain(this.record.pendingProposal) : null,
+      ...(turn.fixRound ? { fixRound: true } : {}),
       ...(error ? { error } : {}),
       ...(cap === "invalidSubmits" || cap === "identicalInvalid" ? { lastDraft: plain(this.record.lastFailedSubmit ?? null) } : {})
     };

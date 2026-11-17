@@ -1018,4 +1018,99 @@ await test("W3-5 text = last assistant message only; progress = texts before too
   assert.deepEqual(r2.progress, ["Still looking.", "Still looking."]);
 });
 
+// ------------------------------------------------------------------------------------------- W5-B-1 fix round
+const FIX_W = { code: "talent.occ.list", message: "The occupation talent is not on the list.", hint: "Pick the occupation talent from that list." };
+const QUIET_W = { code: "team.empty", message: "solo", hint: "Nothing to fix (a solo hero)." };
+/** submit results in order: warnings per call (an entry of `false` = a refused submit) */
+function warnPack(perCall, extra = {}) {
+  let n = 0;
+  return makePack({ sheet: makeSheet(), extra, runTool: async (name) => {
+    if (name !== "submit_proposal") return { ok: true };
+    const w = perCall[Math.min(n, perCall.length - 1)]; n++;
+    return w === false ? { ok: false, errors: [{ code: "attr.over", message: "too many" }] } : { ok: true, proposalId: `p${n}`, summary: "s", warnings: w, info: [{ code: "rank.defaulted", message: "default", hint: "Nothing to do." }] };
+  } });
+}
+const sub = (id) => reply({ tools: [{ id, name: "submit_proposal", input: { ops: [{ opId: id }] } }] });
+
+await test("W5-B-1 fix round: no actionable warning -> the turn ends on the submit; quiet / 'nothing to fix' / info never count", async () => {
+  for (const w of [[], [QUIET_W], [{ code: "x", message: "m", hint: "" }]]) {
+    const fetchImpl = fakeModel([sub("a1"), reply({ text: "never" })]);
+    const { deps } = makeDeps({ pack: warnPack([w]), fetchImpl });
+    const s = await createHarness(deps).openSession(ACTOR);
+    const r = await s.send("build");
+    assert.equal(r.reason, "submitted"); assert.equal(r.requests, 1); assert.equal(fetchImpl.calls.length, 1); assert.equal(r.fixRound, undefined);
+    assert.deepEqual(s.record.heldToolResults.map((b) => b.tool_use_id), ["a1"]);
+  }
+});
+
+await test("W5-B-1 fix round: an actionable warning -> ONE more request with the result; the fix submit ends the turn even with warnings; history valid", async () => {
+  const fetchImpl = fakeModel([sub("b1"), sub("b2"), reply({ text: "never" })]);
+  const { deps } = makeDeps({ pack: warnPack([[FIX_W], [FIX_W]]), fetchImpl });
+  const s = await createHarness(deps).openSession(ACTOR);
+  const rounds = [];
+  s.on("fix-round", (x) => rounds.push(x));
+  const r = await s.send("build");
+  assert.equal(r.reason, "submitted"); assert.equal(r.ok, true); assert.equal(r.fixRound, true);
+  assert.equal(r.requests, 2, "one extra request, no third"); assert.equal(fetchImpl.calls.length, 2); assert.equal(r.toolCalls, 2);
+  assert.deepEqual(rounds, [{ ids: ["b1"] }]);
+  // the second request saw the first submit's result (warning included) at once
+  const seen = fetchImpl.calls[1].body.messages.at(-1);
+  assert.equal(seen.role, "user"); assert.equal(seen.content[0].tool_use_id, "b1"); assert.match(seen.content[0].content, /talent\.occ\.list/);
+  assert.equal(r.proposal.proposalId, "p2", "the fix submit is the pending proposal");
+  assert.deepEqual(s.record.heldToolResults.map((b) => b.tool_use_id), ["b2"], "the fix submit's result waits for the next GM message");
+  assertValidHistory(s.messages, { allowOpenTail: true });
+  // the next GM message: held result first, then the turn goes on normally (a new fix round is possible per GM message)
+  const f2 = fakeModel([reply({ text: "ok" })]);
+  const s2 = await createHarness({ ...deps, fetchImpl: f2 }).openSession(ACTOR);
+  const r2 = await s2.send("thanks");
+  assert.equal(r2.reason, "done"); assertValidHistory(f2.calls[0].body.messages);
+});
+
+await test("W5-B-1 fix round: text-only answer ends 'done'; a refused fix submit still ends the turn (earlier proposal stays pending)", async () => {
+  let fetchImpl = fakeModel([sub("c1"), reply({ text: "The warning is intended." })]);
+  let { deps } = makeDeps({ pack: warnPack([[FIX_W]]), fetchImpl });
+  let r = await (await createHarness(deps).openSession(ACTOR)).send("build");
+  assert.equal(r.reason, "done"); assert.equal(r.text, "The warning is intended."); assert.equal(r.requests, 2); assert.equal(r.proposal.proposalId, "p1");
+  fetchImpl = fakeModel([sub("c2"), sub("c3"), reply({ text: "never" })]);
+  ({ deps } = makeDeps({ pack: warnPack([[FIX_W], false]), fetchImpl }));
+  const s = await createHarness(deps).openSession(ACTOR2);
+  r = await s.send("build");
+  assert.equal(r.reason, "submitted"); assert.equal(r.requests, 2); assert.equal(fetchImpl.calls.length, 2);
+  assert.equal(r.proposal.proposalId, "p1", "the refused fix leaves the accepted proposal pending");
+  assert.deepEqual(s.record.heldToolResults.map((b) => b.tool_use_id), ["c3"]);
+  assert.match(s.record.heldToolResults[0].content, /"ok":false/);
+});
+
+await test("W5-B-1 fix round: setting off unchanged; request cap reached -> no fix round; the pack's own rule wins over the generic one", async () => {
+  // endTurnOnSubmit off: the old extra request (no fix-round flag)
+  let fetchImpl = fakeModel([sub("d1"), reply({ text: "after" })]);
+  let { deps } = makeDeps({ pack: warnPack([[FIX_W]]), fetchImpl, settings: { endTurnOnSubmit: false } });
+  let r = await (await createHarness(deps).openSession(ACTOR)).send("build");
+  assert.equal(r.reason, "done"); assert.equal(r.requests, 2); assert.equal(r.text, "after"); assert.equal(r.fixRound, undefined);
+  // maxRequests 1: the submit ends the turn as before
+  fetchImpl = fakeModel([sub("d2"), reply({ text: "never" })]);
+  ({ deps } = makeDeps({ pack: warnPack([[FIX_W]]), fetchImpl, settings: { maxRequests: 1 } }));
+  r = await (await createHarness(deps).openSession(ACTOR)).send("build");
+  assert.equal(r.reason, "submitted"); assert.equal(r.requests, 1); assert.equal(r.fixRound, undefined);
+  // maxToolCalls 1: no room for the fix submit -> ends
+  fetchImpl = fakeModel([sub("d3"), reply({ text: "never" })]);
+  ({ deps } = makeDeps({ pack: warnPack([[FIX_W]]), fetchImpl, settings: { maxToolCalls: 1 } }));
+  r = await (await createHarness(deps).openSession(ACTOR)).send("build");
+  assert.equal(r.reason, "submitted"); assert.equal(r.requests, 1);
+  // pack.actionableWarnings decides: [] -> ends although the hint asks for a fix; ["x"] -> fix round although no hint
+  fetchImpl = fakeModel([sub("d4"), reply({ text: "never" })]);
+  ({ deps } = makeDeps({ pack: warnPack([[FIX_W]], { actionableWarnings: () => [] }), fetchImpl }));
+  r = await (await createHarness(deps).openSession(ACTOR)).send("build");
+  assert.equal(r.reason, "submitted"); assert.equal(r.requests, 1);
+  fetchImpl = fakeModel([sub("d5"), reply({ text: "fixed nothing" })]);
+  ({ deps } = makeDeps({ pack: warnPack([[QUIET_W]], { actionableWarnings: (n, res) => res.warnings }), fetchImpl }));
+  r = await (await createHarness(deps).openSession(ACTOR)).send("build");
+  assert.equal(r.requests, 2); assert.equal(r.fixRound, true);
+  // a dry run with warnings is never a fix round trigger
+  fetchImpl = fakeModel([reply({ tools: [{ id: "d6", name: "submit_proposal", input: { ops: [], dryRun: true } }] }), reply({ text: "priced" })]);
+  ({ deps } = makeDeps({ pack: makePack({ sheet: makeSheet(), runTool: async () => ({ ok: true, dryRun: true, warnings: [FIX_W] }) }), fetchImpl }));
+  r = await (await createHarness(deps).openSession(ACTOR)).send("price it");
+  assert.equal(r.reason, "done"); assert.equal(r.fixRound, undefined);
+});
+
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);

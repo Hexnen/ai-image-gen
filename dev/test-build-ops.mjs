@@ -859,12 +859,13 @@ await test("P1-F/P1-G: writer group passes rank + profile to the replace convers
   assert.ok(r2.warnings.some((w) => w.code === "rank.defaulted"), "concise result (W2-7) carries the validation's warnings");
   const r2v = await g.apply(blank(), prop, { verbose: true });
   assert.ok(r2v.validation.warnings.some((w) => w.code === "rank.defaulted"));
-  // no rank but a proposal that fits Global: written, with the rank.defaulted warning in the result
+  // no rank but a proposal that fits Global: written; W5-B-2: rank.defaulted is then a quiet info of the validation, not a
+  // warning of the result (it stays a warning only on a refusal, above, or when the proposal names another rank)
   const PG = { ...P, attributes: { fighting: 7, agility: 7, strength: 4, reason: 4, intuition: 6, presence: 5 }, powers: [...P.powers, { ref: refOf("power", "Mind Static"), source: "s" }] };
   const c = blank();
   const r3 = await g.apply(c, { ...prop, proposal: PG }, {});
   assert.equal(r3.ok, true, `${r3.message} ${JSON.stringify(r3.errors)}`);
-  assert.ok(r3.warnings.some((w) => w.code === "rank.defaulted"));
+  assert.ok(!r3.warnings.some((w) => w.code === "rank.defaulted"));
   assert.equal(c._source.system.reputation, 2);
 });
 

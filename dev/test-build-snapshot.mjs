@@ -555,9 +555,9 @@ await test("W4-B-6: '~' lines carry what changed inside them; removed one-key li
   const rows = up.split("\n");
   const at = (re) => rows.findIndex((l) => re.test(l));
   const p = at(/^~ PREPARED /);
-  assert.ok(p > 0, up); assert.match(rows[p + 1], /^ {2}\(changed: .*resources 2 -> -/, rows[p + 1]);
+  assert.ok(p > 0, up); assert.match(rows[p + 1], /^ {2}\(changed: .*resources 2 -> removed/, rows[p + 1]);   // W5-B-4: a word, not "-"
   const b = at(/^~ BONUS /);
-  assert.ok(b > 0, up); assert.match(rows[b + 1], /^ {2}\(changed: resources Lean Times -1 -> -\)$/);
+  assert.ok(b > 0, up); assert.match(rows[b + 1], /^ {2}\(changed: resources Lean Times -1 -> removed\)$/);
   assert.match(up, new RegExp(`^- I ${lean.id} "Lean Times"$`, "m"), "removed item named with '-'");
   assert.ok(sameLines(applyUpdate(s0.lines, up), s1.lines), "indented delta lines do not change the fold");
   // nextSheetBlock keeps folding to the fresh picture
@@ -576,6 +576,62 @@ await test("W4-B-6: '~' lines carry what changed inside them; removed one-key li
   const gone = formatUpdate(k0, { lines: new Map([["ATTR", "ATTR fighting 1"]]), fingerprint: "f" });
   assert.match(gone, /^- BONUS \(was: resources: Mock -1\)$/m);
   assert.ok(sameLines(applyUpdate(k0, gone), new Map([["ATTR", "ATTR fighting 1"]])));
+});
+
+/* ---------------------------------------------------------------- wave 5, group B */
+await test("W5-B-4: the undo FLAG never rides in a sheet_update (nor makes one); removed / new values read 'removed' / 'none'", async () => {
+  const { lineDelta } = await import("../scripts/systems/invincible/snapshot.mjs");
+  const undo = (n) => ({ ...typicalHero()._source.flags, "moinens-ai-gen": { undo: { runs: Array.from({ length: n }, (_, i) => ({ runId: `r${i + 1}`, at: i, ops: [] })) } } });
+  const a = typicalHero();
+  const s0 = snap(a);
+  assert.ok(!s0.lines.has("FLAG undo"));
+  const n0 = nextSheetBlock(null, s0);
+  // the first Apply adds the flag only: unchanged for the model (held keeps what the model has)
+  const s1 = snap(rebuild(a, { flags: undo(1) }));
+  assert.match(s1.text, /^FLAG undo runs=1 last=r1$/m, "the full block still shows it");
+  const n1 = nextSheetBlock(n0.held, s1);
+  assert.equal(n1.kind, "unchanged"); assert.equal(n1.held, n0.held);
+  // a real change + a new undo run: the update carries the change, never the FLAG line
+  const s2 = snap(rebuild(a, { flags: undo(2), system: { attributes: { fighting: { value: 7 } } } }));
+  const n2 = nextSheetBlock(n1.held, s2);
+  assert.equal(n2.kind, "update"); assert.ok(!/FLAG/.test(n2.text), n2.text); assert.match(n2.text, /^~ ATTR /m);
+  // the full block after a reset keeps the line; thresholds unchanged (8 diffs -> full)
+  const full = nextSheetBlock({ ...n2.held, diffs: LIMITS.maxDiffs }, snap(rebuild(a, { flags: undo(3), system: { attributes: { fighting: { value: 8 } } } })));
+  assert.equal(full.kind, "full"); assert.match(full.text, /supersedes=/); assert.match(full.text, /^FLAG undo runs=3 last=r3$/m);
+  // the pu flag (rank) is the model's business: still sent
+  const pu = snap(rebuild(a, { flags: { "invincible-plus-ultra": { chargen: { v: 1, rank: "street", archetype: "Speedster" } } } }));
+  assert.match(nextSheetBlock(n0.held, pu).text, /FLAG pu rank=street/);
+  // removed / added values
+  assert.equal(lineDelta("PREPARED healthMax 9 resources 2", "PREPARED healthMax 9"), "changed: resources 2 -> removed");
+  assert.equal(lineDelta("PREPARED healthMax 9", "PREPARED healthMax 9 resources 4"), "changed: resources none -> 4");
+});
+
+await test("W5-B-5: after a drawer rank / profile change the VALID line says it checks the existing build against the new setting", () => {
+  const a = typicalHero();
+  const n0 = nextSheetBlock(null, snap(a, { rank: "global" }));
+  assert.ok(!/rank changed/.test(n0.text), "first block: nothing to compare");
+  const teen = snap(a, { rank: "teen" });
+  assert.match(teen.text, /^VALID .*errors=/m);
+  const r = nextSheetBlock(n0.held, teen);
+  const rows = r.text.split("\n");
+  const v = rows.findIndex((l) => /^(~ )?VALID /.test(l));
+  assert.ok(v >= 0, r.text);
+  const note = rows.slice(v + 1).find((l) => /rank changed/.test(l));
+  assert.equal(note, "  (rank changed global -> teen: VALID checks the existing build against the new setting)", r.text);
+  assert.ok(sameLines(r.held.lines, teen.lines), "the note is not a sheet line (fold / held unchanged)");
+  assert.ok(!parseSheet(r.kind === "full" ? r.text : teen.text).lines.has(""), "parseSheet skips indented notes");
+  // the next message under the same rank: no note
+  const again = nextSheetBlock(r.held, snap(rebuild(a, { system: { attributes: { fighting: { value: 5 } } } }), { rank: "teen" }));
+  assert.ok(!/rank changed/.test(again.text), again.text);
+  // profile change on a sheet with errors; a full block (supersedes) carries the note under VALID too
+  const bad = rebuild(a, { system: { attributes: { fighting: { value: 9 } } } });
+  const h0 = nextSheetBlock(null, snap(bad));
+  const ip = nextSheetBlock({ ...h0.held, diffs: LIMITS.maxDiffs }, snap(bad, { profile: "in-play" }));
+  assert.equal(ip.kind, "full");
+  assert.match(ip.text, /^VALID baseline profile=in-play .*\n {2}\(profile changed creation -> in-play: VALID checks the existing build against the new setting\)$/m);
+  // a rank change on a sheet with no errors or warnings: no note
+  const okRank = nextSheetBlock(n0.held, snap(a, { rank: "cosmic" }));
+  if (!/^(~ )?VALID .*(errors|warns)=/m.test(okRank.text)) assert.ok(!/rank changed/.test(okRank.text));
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);
