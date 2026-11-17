@@ -186,11 +186,11 @@ export class LogApp extends HandlebarsApplicationMixin(ApplicationV2) {
   static #stamp() { return new Date().toISOString().slice(0, 10); }
 
   static #onExportCsv() {
-    foundry.utils.saveDataToFile(toCSV(this.#filtered()), "text/csv", `ai-image-gen-log-${LogApp.#stamp()}.csv`);
+    foundry.utils.saveDataToFile(toCSV(this.#filtered()), "text/csv", `moinens-ai-gen-log-${LogApp.#stamp()}.csv`);
   }
 
   static #onExportJson() {
-    foundry.utils.saveDataToFile(toJSON(this.#filtered()), "application/json", `ai-image-gen-log-${LogApp.#stamp()}.json`);
+    foundry.utils.saveDataToFile(toJSON(this.#filtered()), "application/json", `moinens-ai-gen-log-${LogApp.#stamp()}.json`);
   }
 
   static async #onClear() {

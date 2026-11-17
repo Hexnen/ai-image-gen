@@ -23,7 +23,7 @@ const keyOf = (provider) => { try { return getKey(provider); } catch { return ""
 function warnNoKey(rec) {
   if (warnedNoKey.has(rec.provider)) return;
   warnedNoKey.add(rec.provider);
-  console.warn(`ai-image-gen | batch ${rec.id}: no ${rec.provider} API key on this client, results are not collected here`);
+  console.warn(`moinens-ai-gen | batch ${rec.id}: no ${rec.provider} API key on this client, results are not collected here`);
   try {
     ui.notifications?.warn(game.i18n.format("AIIMG.BatchNoKey", { provider: foundry.utils.escapeHTML(String(rec.provider)) }));
   } catch { /* UI jeszcze niegotowe */ }
@@ -44,7 +44,7 @@ export async function checkBatches({ force = false } = {}) {
       try {
         await impl.check(apiKey, rec);
       } catch (e) {
-        console.warn(`ai-image-gen | batch ${rec.id} check failed (will retry)`, e);
+        console.warn(`moinens-ai-gen | batch ${rec.id} check failed (will retry)`, e);
       }
       await enforceMaxAge(rec.id);
     }
@@ -64,7 +64,7 @@ async function enforceMaxAge(id) {
 
 export function startPoller() {
   if (timer || !game.user?.isGM) return;
-  pruneBatches().catch((e) => console.warn("ai-image-gen | prune failed", e));
+  pruneBatches().catch((e) => console.warn("moinens-ai-gen | prune failed", e));
   checkBatches();
   timer = setInterval(() => checkBatches(), CHECK_EVERY_MS);
 }

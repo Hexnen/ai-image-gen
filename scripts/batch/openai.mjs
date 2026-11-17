@@ -63,7 +63,7 @@ export async function submitOpenAI({ apiKey, model, items }) {
         files.push(id);
         refInput.set(blob, { file_id: id });
       } catch (e) {
-        console.warn("ai-image-gen | OpenAI vision upload failed, falling back to image_url", e);
+        console.warn("moinens-ai-gen | OpenAI vision upload failed, falling back to image_url", e);
         dataUrlFallback = true;
         refInput.set(blob, { image_url: `data:${mime};base64,${await blobToB64(blob)}` });
       }
@@ -95,7 +95,7 @@ export async function submitOpenAI({ apiKey, model, items }) {
         "Use fewer or smaller reference images, or fewer versions."
       );
     }
-    const inputId = await uploadFile(apiKey, "batch", `ai-image-gen-${Date.now()}.jsonl`, body);
+    const inputId = await uploadFile(apiKey, "batch", `moinens-ai-gen-${Date.now()}.jsonl`, body);
     files.push(inputId);
     const res = await fetch(`${OPENAI_BASE}/batches`, {
       method: "POST",

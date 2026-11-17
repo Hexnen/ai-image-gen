@@ -1,5 +1,5 @@
 // Zapis wygenerowanego obrazu do Data/ i podpięcie go pod dokument (wspólne dla fast i batch).
-import { MODULE_ID } from "./constants.mjs";
+import { DATA_ROOT } from "./constants.mjs";
 import { optimizeForSave, optimizeEnabled, REF_OUTPUT, fmtBytes } from "./optimize.mjs";
 
 const FP = () => foundry.applications.apps.FilePicker.implementation;
@@ -67,7 +67,7 @@ export async function saveImageBlobEx(blob, { system = "core", docType = "Docume
   else if (optimize && optimizeEnabled()) { stats = await optimizeForSave(blob, optimize); data = stats.blob; }
   else data = webp ? await blobToWebp(blob) : blob;
   const type = (await sniffBlob(data)) ?? (data.type || "image/png");
-  const dir = dirOverride ?? `${MODULE_ID}/${slug(system, "core")}/${slug(docType, "doc")}`;
+  const dir = dirOverride ?? `${DATA_ROOT}/${slug(system, "core")}/${slug(docType, "doc")}`;
   await ensureDir(dir);
   const filename = `${slug(name)}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}.${EXT[type] ?? "png"}`;
   const file = new File([data], filename, { type });
@@ -92,13 +92,13 @@ const REF_EXT = { "image/png": "png", "image/webp": "webp", "image/jpeg": "jpg" 
 /** Folder for the permanent references of an image type key (`<system>.<Doc>.<type>`). */
 export function refsDirFor(typeKey) {
   const [system = "core", ...rest] = String(typeKey).split(".");
-  return `${MODULE_ID}/_refs/${slug(system, "core")}/${slug(rest.join("-"), "type")}`;
+  return `${DATA_ROOT}/_refs/${slug(system, "core")}/${slug(rest.join("-"), "type")}`;
 }
 
 /** Folder for saved test samples of an image type key (`ai-image-gen/_tests/<system>/<type>`). */
 export function testsDirFor(typeKey) {
   const [system = "core", ...rest] = String(typeKey).split(".");
-  return `${MODULE_ID}/_tests/${slug(system, "core")}/${slug(rest.join("-"), "type")}`;
+  return `${DATA_ROOT}/_tests/${slug(system, "core")}/${slug(rest.join("-"), "type")}`;
 }
 
 /** Save one test-drawer result (only on the user's explicit click). @returns {Promise<{path:string, stats:object}>} */

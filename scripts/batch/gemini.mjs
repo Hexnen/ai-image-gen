@@ -47,7 +47,7 @@ export async function submitGemini({ apiKey, model, items }) {
   let n = 0;
   for (const blob of uniqueRefs(items)) {
     const mime = await mimeOf(blob);
-    const f = await uploadFile(apiKey, `ai-image-gen-ref-${Date.now()}-${n++}`, blob, mime);
+    const f = await uploadFile(apiKey, `moinens-ai-gen-ref-${Date.now()}-${n++}`, blob, mime);
     ups.set(blob, { uri: f.uri, mime });
   }
   // Wszystkie modele Gemini idą przez batchGenerateContent (oficjalnie jedyny batch obrazów).
@@ -77,13 +77,13 @@ export async function submitGemini({ apiKey, model, items }) {
     };
   });
   const input = await uploadFile(
-    apiKey, `ai-image-gen-${Date.now()}.jsonl`,
+    apiKey, `moinens-ai-gen-${Date.now()}.jsonl`,
     new Blob([jsonl(lines)], { type: "application/jsonl" }), "application/jsonl",
   );
   const res = await fetch(`${GEMINI_BASE}/v1beta/models/${model}:batchGenerateContent`, {
     method: "POST",
     headers: { ...hdr(apiKey), "Content-Type": "application/json" },
-    body: JSON.stringify({ batch: { display_name: `ai-image-gen-${Date.now()}`, input_config: { file_name: input.name } } }),
+    body: JSON.stringify({ batch: { display_name: `moinens-ai-gen-${Date.now()}`, input_config: { file_name: input.name } } }),
     signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
   });
   if (!res.ok) throw new HttpError(`Gemini batch create ${res.status}: ${await readError(res)}`, res.status);

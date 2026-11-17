@@ -357,7 +357,7 @@ async function runGeneration({ document, description, key, cfg, prompt, meta, co
   }
   // Koszt jest realny (albo szacowany po timeoucie) nawet gdy zapis się nie uda. Błąd księgowania (rozłączenie,
   // uprawnienia) nie może odebrać opłaconych obrazów: tylko ostrzeżenie.
-  try { await recordCost(total); } catch (e) { console.warn("ai-image-gen | could not record cost", total, e); }
+  try { await recordCost(total); } catch (e) { console.warn("moinens-ai-gen | could not record cost", total, e); }
   if (!candidates.length) {
     const e = new Error(failed[0]?.error ?? "Generation failed.");
     e.aiimgLogged = true;

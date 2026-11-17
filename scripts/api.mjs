@@ -1,10 +1,10 @@
-// Public API for other modules: `game.modules.get("ai-image-gen").api` (see README, "API for other modules").
+// Public API for other modules: `game.modules.get("moinens-ai-gen").api` (see README, "API for other modules").
 //
 // Other modules register their own image types (they show up in the config window under their own group, with the
 // usual provider/model/size/prompt settings) and ask for images with `generateImage`. It goes through the same core as
 // the Fast mode: budget reservation and limits, the call log (with a `caller` field), optimization on save and
 // `optimized: true` uploads. It never touches a document: the caller gets file paths back.
-import { MODULE_ID } from "./constants.mjs";
+import { MODULE_ID, DATA_ROOT } from "./constants.mjs";
 import { getKey } from "./settings.mjs";
 import { getVirtualType } from "./image-types.mjs";
 import { getConfig, fitConfig, renderPrompt, isConfigured } from "./config-store.mjs";
@@ -130,7 +130,7 @@ export async function generateImage(o = {}) {
   const res = await run(count);
   let cost = res.cost;
 
-  const dir = saveTo?.dir ?? `${MODULE_ID}/${owner}/${slug(typeKey.split(".").slice(1).join("-"), "image")}`;
+  const dir = saveTo?.dir ?? `${DATA_ROOT}/${owner}/${slug(typeKey.split(".").slice(1).join("-"), "image")}`;
   const outOpts = { ...outputOptsFromConfig(cfg) };
   for (const k of ["maxEdge", "quality", "format"]) if (output?.[k] !== undefined) outOpts[k] = output[k];
   const commit = async (cand) => {

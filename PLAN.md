@@ -1,4 +1,4 @@
-# ai-image-gen: plan (Foundry v14)
+# Moinens AI Gen (dawniej ai-image-gen): plan (Foundry v14)
 
 Źródło wzorców: repo Hexnen/roleplay (workshop). Porty z TS/Node do czystego JS w przeglądarce:
 - src/lib/roleplay/imageGen/{openai,gemini,openrouter,shared}.ts: sync (fast)

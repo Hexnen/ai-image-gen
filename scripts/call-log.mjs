@@ -3,14 +3,14 @@
 // Log NIE zawiera kluczy API ani nagłówków (błędy są oczyszczane w `redact`).
 // Zapis jest bezpieczny dla danych: przed nadpisaniem pliku miesiąca czytamy jego aktualną zawartość
 // i scalamy po id (drugi GM mógł dopisać wpisy), a błąd odczytu NIGDY nie kończy się nadpisaniem pustym.
-import { MODULE_ID } from "./constants.mjs";
+import { MODULE_ID, DATA_ROOT } from "./constants.mjs";
 import { redact } from "./redact.mjs";
 import { ensureDir } from "./save-image.mjs";
 
 export { redact };
 
 const FP = () => foundry.applications.apps.FilePicker.implementation;
-const DIR = `${MODULE_ID}/_log`;
+const DIR = `${DATA_ROOT}/_log`;
 
 export const LOG_FIELDS = [
   "id", "ts", "durationMs", "kind", "status", "provider", "model", "route", "prompt", "description",

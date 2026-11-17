@@ -65,7 +65,7 @@ export async function generate({ apiKey, model, prompt, refs = [], width, height
       return await viaInteractions(ctx);
     } catch (e) {
       if (!e?.fallbackOk) throw e;
-      console.warn("ai-image-gen | Interactions API unavailable for", model, "- falling back to generateContent", e.message);
+      console.warn("moinens-ai-gen | Interactions API unavailable for", model, "- falling back to generateContent", e.message);
       return viaGenerateContent(ctx, "generateContent (fallback from interactions)");
     }
   }

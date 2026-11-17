@@ -1,4 +1,4 @@
-import { MODULE_ID } from "./constants.mjs";
+import { MODULE_ID, OLD_MODULE_ID } from "./constants.mjs";
 import { registerSettings, getKey } from "./settings.mjs";
 import * as limits from "./limits.mjs";
 import * as providers from "./providers/index.mjs";
@@ -15,8 +15,16 @@ import { registerSheetButtons } from "./sheet-button.mjs";
 import { registerContextMenus } from "./context-menu.mjs";
 import { openPickForBatch } from "./pick-app.mjs";
 import { runMigrations } from "./migrate.mjs";
+import { migrateFromAiImageGen } from "./migrate-id.mjs";
 import { syncOptimizerProfile } from "./optimize.mjs";
 import { generateImage, estimateGeneration } from "./api.mjs";
+
+/**
+ * The old module (id "ai-image-gen") is enabled at the same time: this one stays dormant (no API, no poller, no buttons,
+ * no settings copy) so the same batch is never ingested twice and the copy is not taken from values that still change.
+ * Evaluated lazily: game.modules is ready from `init` on.
+ */
+const oldModuleActive = () => !!game.modules.get(OLD_MODULE_ID)?.active;
 
 /** GM-owe powiadomienie: batch z wieloma wersjami czeka na wybór (klik w powiadomienie otwiera okno). */
 function notifyPick(rec) {
@@ -27,12 +35,18 @@ function notifyPick(rec) {
 }
 
 Hooks.once("init", () => {
-  registerSettings();
+  registerSettings();   // always: the settings must exist for the later copy and for the config window
+  if (oldModuleActive()) return;
   registerSheetButtons();
   registerContextMenus();
 });
 
 Hooks.once("ready", async () => {
+  if (oldModuleActive()) {
+    if (game.user.isGM) ui.notifications.warn(game.i18n.localize("AIIMG.Rename.BothActive"), { permanent: true });
+    console.warn(`${MODULE_ID} | "${OLD_MODULE_ID}" is still active: this module stays idle until it is disabled`);
+    return;
+  }
   // Every client: only what is needed to register image types (harmless; the registry lives in memory).
   const api = {
     apiVersion: 1,
@@ -54,9 +68,11 @@ Hooks.once("ready", async () => {
       batch, callLog
     });
   }
+  // Settings copied from the old id first (keys, limits, types, batch slots), then the schema migrations on the new namespace.
+  if (game.user.isGM) await migrateFromAiImageGen();
   game.modules.get(MODULE_ID).api = api;
-  Hooks.callAll("aiImageGen.ready", api); // modules that started earlier can now register their types
-  // local-media-optimizer (jeśli jest): profil folderu ai-image-gen/ z naszymi domyślnymi limitami.
+  Hooks.callAll("aiImageGen.ready", api); // hook name kept from the old id: modules that started earlier can now register their types
+  // local-media-optimizer (jeśli jest): profil folderu danych ai-image-gen/ (DATA_ROOT) z naszymi domyślnymi limitami.
   syncOptimizerProfile();
   if (game.user.isGM) {
     try { await runMigrations(); }
@@ -78,7 +94,7 @@ Hooks.once("ready", async () => {
 
 // Left-hand toolbar buttons (GM only). v14: controls is a record keyed by control name.
 Hooks.on("getSceneControlButtons", (controls) => {
-  if (!game.user.isGM) return;
+  if (!game.user.isGM || oldModuleActive()) return;
   // Own control category (no canvas layer): the three buttons live here, not under Token Controls.
   const group = controls[MODULE_ID] = {
     name: MODULE_ID,

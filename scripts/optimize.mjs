@@ -6,10 +6,10 @@
 // (jedna implementacja i jedne ustawienia kodowania), a w ready rejestrujemy w nim profil folderu `ai-image-gen/`.
 // Wgrywamy z `{ optimized: true }`, żeby jego hook uploadu nie kodował pliku drugi raz. Bez niego działa
 // wbudowany fallback (canvas -> WebP/JPEG/PNG). Nigdy nie powiększa; gdy wynik nie jest mniejszy, zostaje oryginał.
-import { MODULE_ID } from "./constants.mjs";
+import { MODULE_ID, DATA_ROOT } from "./constants.mjs";
 
 export const OPTIMIZER_ID = "local-media-optimizer";
-export const PROFILE_ID = "ai-image-gen";
+export const PROFILE_ID = DATA_ROOT; // profile id in local-media-optimizer: unchanged by the rename
 export const MIN_OPTIMIZER_VERSION = "1.1.0";
 
 export const DEFAULT_OUTPUT = Object.freeze({ maxEdge: 0, quality: 0.85, format: "webp" });
@@ -155,7 +155,7 @@ export function syncOptimizerProfile() {
     if (!api?.registerProfile) return false;
     if (!optimizeEnabled()) { api.unregisterProfile?.(PROFILE_ID); return false; }
     api.registerProfile(PROFILE_ID, {
-      label: "AI Image Gen", prefix: `${MODULE_ID}/`,
+      label: "Moinens AI Gen", prefix: `${DATA_ROOT}/`,
       maxEdge: PROFILE_EDGE, quality: DEFAULT_OUTPUT.quality, format: DEFAULT_OUTPUT.format
     });
     return true;

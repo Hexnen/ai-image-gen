@@ -1,6 +1,6 @@
 {
-  "id": "ai-image-gen",
-  "title": "AI Image Gen",
+  "id": "moinens-ai-gen",
+  "title": "Moinens AI Gen",
   "description": "Generate images for actors, items and macros with OpenAI, Gemini or OpenRouter (fast or batch).",
   "version": "0.1.0",
   "compatibility": {

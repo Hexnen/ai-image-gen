@@ -89,7 +89,7 @@ export async function refreshLearned() {
     const { readLog } = await import("./call-log.mjs");
     setLearned(summarize(await readLog()));
   } catch (e) {
-    console.warn("ai-image-gen | cost learning: could not read the log", e);
+    console.warn("moinens-ai-gen | cost learning: could not read the log", e);
   }
   return learned;
 }

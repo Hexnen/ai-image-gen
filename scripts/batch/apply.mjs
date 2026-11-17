@@ -4,9 +4,10 @@
 import { saveImageBlobEx, applyImage } from "../save-image.mjs";
 import { getConfig } from "../config-store.mjs";
 import { outputOptsFromConfig } from "../optimize.mjs";
+import { DATA_ROOT } from "../constants.mjs";
 
 /** Katalog kandydatów batcha z wieloma wersjami (Foundry nie pozwala modułowi kasować plików). */
-export const candidateDir = (batchId) => `ai-image-gen/_candidates/${batchId}`;
+export const candidateDir = (batchId) => `${DATA_ROOT}/_candidates/${batchId}`;
 
 /** Trwały błąd: dokument docelowy już nie istnieje, ponowienie nic nie da. */
 export const isPermanentApplyError = (e) => /Document not found/i.test(String(e?.message ?? e));

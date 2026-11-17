@@ -1,4 +1,4 @@
-import { MODULE_ID, PROVIDER_IDS } from "./constants.mjs";
+import { MODULE_ID, PROVIDER_IDS, MIGRATED_CLIENT, MIGRATED_WORLD } from "./constants.mjs";
 import { SLOTS, slotKey } from "./batch/record.mjs";
 import { syncOptimizerProfile } from "./optimize.mjs";
 import { DEFAULT_MODEL as ENHANCE_DEFAULT_MODEL, DEFAULT_EFFORT as ENHANCE_DEFAULT_EFFORT, EFFORTS } from "./enhance/anthropic.mjs";
@@ -89,6 +89,13 @@ export function registerSettings() {
   });
   game.settings.register(MODULE_ID, "schema", {
     scope: "world", config: false, type: new NumberField({ initial: 0, nullable: false })
+  });
+  // Jednorazowa kopia ustawień ze starego id "ai-image-gen" (migrate-id.mjs): flaga per przeglądarka GM-a i per świat.
+  game.settings.register(MODULE_ID, MIGRATED_CLIENT, {
+    scope: "client", config: false, type: new BooleanField({ initial: false })
+  });
+  game.settings.register(MODULE_ID, MIGRATED_WORLD, {
+    scope: "world", config: false, type: new BooleanField({ initial: false })
   });
   // Jeden rekord batcha na ustawienie: zapis jednego nie nadpisuje innych. onChange odpala się na
   // każdym kliencie, więc UI (okno batchy, przypomnienie o wyborze) odświeża się też u drugiego GM-a.

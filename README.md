@@ -1,4 +1,6 @@
-# AI Image Gen (Foundry VTT v14)
+# Moinens AI Gen (Foundry VTT v14)
+
+Formerly **AI Image Gen** (module id `ai-image-gen`); the id is now `moinens-ai-gen`. See "Rename from ai-image-gen" below.
 
 Generate images for actors, items and macros with OpenAI, Gemini or OpenRouter, in "Now" (sync) or batch mode (up to 24 h, about half price).
 Per image type (system + document + subtype) you configure the model, size, quality, prompt template and
@@ -6,8 +8,10 @@ reference images. The plan and status live in [PLAN.md](PLAN.md).
 
 ## API for other modules
 
-`game.modules.get("ai-image-gen").api` (GM only for anything that spends money; `apiVersion: 1`). Modules that start
-earlier than this one can wait for the `aiImageGen.ready` hook (it passes the API).
+`game.modules.get("moinens-ai-gen").api` (GM only for anything that spends money; `apiVersion: 1`). Modules that start
+earlier than this one can wait for the `aiImageGen.ready` hook (it passes the API; the hook names `aiImageGen.*` were kept
+on purpose). Modules that should also work with the old id look it up as
+`game.modules.get("moinens-ai-gen") ?? game.modules.get("ai-image-gen")` (take the one that is active and has an `api`).
 
 - `registerImageType({ key, label, group, owner, requiresRef?, defaults? })`: adds an image type of your own
   (key `<your-module-id>.<name>`; it must not look like a document type). It appears in the config window under its own
@@ -30,7 +34,7 @@ earlier than this one can wait for the `aiImageGen.ready` hook (it passes the AP
 These are properties of Foundry itself, not something the module can work around:
 
 - **Files under `Data/` are public to anyone who knows the URL.** Foundry serves the user Data folder
-  without a login. That includes `ai-image-gen/_log/*.json` (your prompts, descriptions, document names and
+  without a login. That includes `ai-image-gen/_log/*.json` (the data folder keeps its old name after the rename) (your prompts, descriptions, document names and
   costs), `_refs/` (reference images), `_candidates/` (batch results waiting for a pick) and `_tests/`.
   Nobody can list them, but a guessed or leaked address works. Do not put anything in a prompt or reference
   that must stay secret from people who can reach your server.
@@ -68,3 +72,19 @@ key** (client setting, like the other keys). The model (`claude-sonnet-5-5` by d
 (`medium` by default) are world settings. The call goes straight from the GM's browser (`anthropic-dangerous-direct-browser-access`);
 it is not written to the call log and does not count towards the image budget limits. The system prompt lives in
 `scripts/enhance/anthropic.mjs`; tests with a mocked fetch: `node dev/test-enhance.mjs`. Open choices: `dev/enhance-notes.md`.
+
+## Rename from ai-image-gen
+The module id changed from `ai-image-gen` to `moinens-ai-gen` (title "Moinens AI Gen"). Foundry requires the module
+folder to carry the id, so the folder is `Data/modules/moinens-ai-gen`.
+
+- **Settings are copied once, old values are never deleted.** On its first start without the old module, each GM browser
+  copies its own API keys (OpenAI, Gemini, OpenRouter, Anthropic) from `localStorage` to `localStorage` (they never leave
+  that browser), plus the generate-dialog preferences and the test-drawer samples. The first GM in a world copies the
+  world settings: limits, optimization switch, Claude model/effort, usage counters, image-type configuration, schema and
+  every batch slot. A value is copied only while the new setting still holds its default. Re-enabling the old module
+  brings back the old state. Code: `scripts/migrate-id.mjs`, tests: `node dev/test-migrate-id.mjs`.
+- **Images stay where they are.** The data folder is still `Data/ai-image-gen/` (`DATA_ROOT` in `scripts/constants.mjs`),
+  so existing actor/item images, the call log, references, test samples and batch candidates keep working.
+- **Hooks keep their names** (`aiImageGen.ready`, `aiImageGen.batchUpdate`, `aiImageGen.logUpdate`).
+- **Both enabled at once:** if the old `ai-image-gen` is still active, Moinens AI Gen stays idle (no API, no batch poller,
+  no buttons, no copy) and shows one GM warning, so a batch is never collected twice.

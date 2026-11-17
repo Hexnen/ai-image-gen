@@ -1,5 +1,5 @@
 // Testy klienta Anthropic (ulepszanie opisów) z podstawionym fetch. Bez sieci, bez prawdziwego klucza.
-// Uruchom: node modules/ai-image-gen/dev/test-enhance.mjs
+// Uruchom: node dev/test-enhance.mjs (z folderu modułu)
 import assert from "node:assert/strict";
 import {
   enhanceDescription, buildRequest, buildUserMessage, parseResponse, cleanText, kindForStatus,

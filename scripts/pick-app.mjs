@@ -1,4 +1,4 @@
-import { MODULE_ID } from "./constants.mjs";
+import { MODULE_ID, DATA_ROOT } from "./constants.mjs";
 import { commitCandidate } from "./generate-flow.mjs";
 import { applyImage } from "./save-image.mjs";
 import { getBatch, patchBatch } from "./batch/record.mjs";
@@ -103,7 +103,7 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
       keep: this.#keep,
       busy: this.#busy,
       error: this.#error,
-      folder: this.batchId ? `ai-image-gen/_candidates/${this.batchId}` : ""
+      folder: this.batchId ? `${DATA_ROOT}/_candidates/${this.batchId}` : ""
     };
   }
 
@@ -239,7 +239,7 @@ export class PickApp extends HandlebarsApplicationMixin(ApplicationV2) {
     if (this.source === "disk") {
       if (!(await this.#stillAwaiting())) return;
       await this.#finishBatch({ status: "done", picked: null, discarded: true });
-      ui.notifications.info(t("AIIMG.Pick.DiscardedDisk", { folder: `ai-image-gen/_candidates/${this.batchId}` }));
+      ui.notifications.info(t("AIIMG.Pick.DiscardedDisk", { folder: `${DATA_ROOT}/_candidates/${this.batchId}` }));
     }
     this.#decided = true;
     return this.close({ force: true }); // close() tells the handoff caller "cancelled" (once)
