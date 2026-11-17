@@ -96,6 +96,9 @@ const PROPOSAL_LINE = /<proposal\s+id="([^"]*)"\s+status="([^"]*)"\s*\/>/gi;
 
 /** Submit tools (`submit_*`) feed the consecutive / identical invalid caps and set the pending proposal. */
 export const isSubmitTool = (name) => /^submit_/.test(String(name ?? ""));
+/** D-9 (W3-14): a submit_* call with input.dryRun true (or a result marked dryRun) is a check: never pending, never ends the
+ *  turn, never counts towards the invalid-submit caps (what check_proposal was). */
+export const isSubmitCall = (name, input, res) => isSubmitTool(name) && input?.dryRun !== true && res?.dryRun !== true;
 
 /** Stable signature of a failed submission's errors (identical-failure cap). */
 export function errorSignature(res, fallback = "") {
@@ -591,13 +594,13 @@ export class Session {
         const resultsTurn = h.tr.toolResultsTurn(results.map((x) => ({ toolUseId: x.use.id, content: x.content, isError: x.isError })));
         // W3-4 (D-5): only submit_* calls, all accepted -> the turn ends here; the results wait for the next GM message
         const endOnSubmit = s.endTurnOnSubmit && results.length > 0
-          && results.every((x) => isSubmitTool(x.use.name) && !x.isError && x.res?.ok === true);
+          && results.every((x) => isSubmitCall(x.use.name, x.use.input, x.res) && !x.isError && x.res?.ok === true);
         if (!endOnSubmit) await this.#append(resultsTurn);
         turn.toolCalls += uses.length;
 
         let stopForSubmit = null;
         for (const x of results) {
-          if (!isSubmitTool(x.use.name)) continue;
+          if (!isSubmitCall(x.use.name, x.use.input, x.res)) continue;
           if (!x.isError && x.res?.ok === true) {
             consecutiveInvalid = 0; identical = 0; lastSig = null;
             const pendingProposal = {

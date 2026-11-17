@@ -1,5 +1,5 @@
-// Invincible validation pipeline (spec 7, 7.4, 7.5, 10.3; task T5) + the model-facing proposal tools (check_proposal,
-// submit_proposal) + the pack's `validate` capability group (registry contract, scripts/build/registry.mjs).
+// Invincible validation pipeline (spec 7, 7.4, 7.5, 10.3; task T5) + the model-facing proposal tool (submit_proposal; its
+// `dryRun` flag is the old check_proposal, D-9) + the pack's `validate` capability group (registry contract, scripts/build/registry.mjs).
 //
 // Layers (each stops the pipeline when it has errors, and reports ALL errors of that layer):
 //   L0 shape        local schema check of the tool input (proposal.mjs checkShape/normalize) + autoFixed (spec 7.3)
@@ -30,7 +30,10 @@ import {
 } from "./proposal.mjs";
 
 export const PROFILES = Object.freeze(["creation", "in-play"]);
+/** names runProposalTool accepts: check_proposal stays as an internal alias of submit_proposal + dryRun (D-9: not in the tool list) */
 export const TOOL_NAMES = Object.freeze(["check_proposal", "submit_proposal"]);
+/** the tools the model sees (W3-14 / D-9: one tool; -6.4k chars of cached prefix) */
+export const MODEL_TOOL_NAMES = Object.freeze(["submit_proposal"]);
 /** spec 7.5.2: always hard errors on the projection (new ones never relaxed by in-play) */
 export const STRUCTURAL = Object.freeze(new Set([
   "rank.unknown", "state.shape", "powers.none", "slots.min", "sources.none", "power.duplicate", "power.level.invalid", "power.level.monstrous",
@@ -761,16 +764,18 @@ export function costLabel(c, info, ctx) {
 
 /* ================================================================== model-facing tools */
 const TOOL_DESC = {
-  check_proposal: "Dry-run a proposal (same input and rules as submit_proposal) without making it the pending proposal: returns errors with hints, warnings, the budget before/after and each op's cost. Not needed before a submit (submit_proposal returns the same errors). Use it only to compare variants or to price a change you may not propose (\"what would Flight at Major cost?\").",
-  submit_proposal: "Submit the proposal for the GM; send it directly, without a check_proposal first. It is validated (references, the system's rules on the sheet as it would be after the change, a dry run of the write); errors come back with hints and the budget so you can fix and resubmit. On ok:true the GM sees a preview and decides: write one short sentence and stop.\n" + PROPOSAL_GUIDE
+  submit_proposal: "Submit the proposal for the GM. It is validated (refs, the system's rules on the sheet as it would be after the change, a dry run of the write); errors come back with hints, the budget before/after and each op's cost. ok:true ends your turn and the GM sees a preview; removals and level swaps (applyConfirm) are confirmed by the GM at Apply. dryRun:true = check only: same result, nothing reaches the GM, your turn goes on; only to compare variants or to price a change you may not propose (\"what would Flight at Major cost?\"), never before a submit.\n" + PROPOSAL_GUIDE
 };
 export function proposalToolDefs() {
-  return TOOL_NAMES.map((name) => ({ name, description: TOOL_DESC[name], input_schema: PROPOSAL_SCHEMA, strict: true }));
+  return MODEL_TOOL_NAMES.map((name) => ({ name, description: TOOL_DESC[name], input_schema: PROPOSAL_SCHEMA, strict: true }));
 }
+/** D-9: check_proposal (internal alias) or submit_proposal with dryRun:true */
+export const isDryRun = (name, input) => name === "check_proposal" || input?.dryRun === true;
 /** compact model-facing result (GM-only fields dropped) */
-export function toolResult(name, r, doc) {
+export function toolResult(name, r, doc, { dryRun = name === "check_proposal" } = {}) {
   const out = { ok: r.ok };
-  if (r.ok && name === "submit_proposal") {
+  if (dryRun) out.dryRun = true;   // the harness reads it: never the pending proposal, never ends the turn
+  if (r.ok && !dryRun) {
     out.proposalId = `prop-${hash(`${doc?.uuid ?? ""}|${stableJson(r.normalized)}`)}`;
     out.summary = r.summary ?? "";
     // W3-10: model-facing (tool result, outside the cached prefix)
@@ -785,7 +790,7 @@ export function toolResult(name, r, doc) {
   // W2-8: the budget legend lives in the rules digest (cached prefix); the per-result `note` stays GM-side only
   if (r.budget && typeof r.budget === "object" && "note" in r.budget) { const { note, ...b } = r.budget; out.budget = b; } else out.budget = r.budget;
   if (!r.ok) out.layer = r.layer;
-  if (r.ok && name === "check_proposal") out.summary = r.summary ?? "";
+  if (r.ok && dryRun) out.summary = r.summary ?? "";
   return out;
 }
 
@@ -807,8 +812,9 @@ export function validateGroup(getPack, deps = {}) {
     async runProposalTool(name, input, ctx = {}) {
       if (!TOOL_NAMES.includes(name)) return { ok: false, errors: [{ code: "tool.unknown", message: `Unknown tool "${name}".`, hint: "" }] };
       const o = ctx.options ?? {};
-      const r = await run(ctx.doc, input, { profile: o.profile, rank: o.rank, requireRationale: name === "submit_proposal" });
-      return toolResult(name, r, ctx.doc);
+      const dryRun = isDryRun(name, input);
+      const r = await run(ctx.doc, input, { profile: o.profile, rank: o.rank, requireRationale: !dryRun });
+      return toolResult(name, r, ctx.doc, { dryRun });
     }
   };
 }

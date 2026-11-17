@@ -1,5 +1,5 @@
 // Invincible read tools (spec 6 tool table; task T4): search_catalog, get_entries, read_rules, read_document.
-// All read-only; none writes a document. check_proposal / submit_proposal belong to the validate group (T5) and are added to
+// All read-only; none writes a document. submit_proposal (with dryRun, D-9) belongs to the validate group (T5) and is added to
 // the pack's tool list by pack.mjs when that group exists (see readToolDefs + pack.tools()).
 //
 // Schemas are STATIC (cached prefix, spec 9.1): no world data, deterministic key order. Strict tool use (spec 5.1): every
@@ -63,7 +63,7 @@ export function readToolDefs() {
     },
     {
       name: "search_catalog",
-      description: "Search the installed catalogue by name and summary (case- and accent-insensitive). The catalogue index in the system prompt already lists every entry: search only when it is not enough. Returns refs to use in get_entries and proposals. forPower narrows boosts and limits to one power (power name or ref); with an empty query it lists all of that power's boosts and limits; an empty forPower result carries a note saying why.",
+      description: "Search the installed catalogue by name and summary (case- and accent-insensitive). The catalogue index in the system prompt already lists every entry except sample heroes (kinds [\"sampleHero\"]): search only when it is not enough. Returns refs to use in get_entries and proposals. forPower narrows boosts and limits to one power (power name or ref); with an empty query it lists all of that power's boosts and limits; an empty forPower result carries a note saying why.",
       input_schema: {
         type: "object",
         additionalProperties: false,

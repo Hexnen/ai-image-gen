@@ -945,6 +945,35 @@ await test("W3-4 only a batch of accepted submits ends the turn: submit + other 
   assertValidHistory(x.s.messages);
 });
 
+await test("W3-14 / D-9: a submit with dryRun:true is a check: no pending proposal, the turn goes on, failed dry runs do not hit the invalid caps", async () => {
+  const run = async (first, pack = proposalPack(), settings = {}) => {
+    const fetchImpl = fakeModel([first, reply({ text: "after" })]);
+    const { deps } = makeDeps({ pack, fetchImpl, settings });
+    const s = await createHarness(deps).openSession(ACTOR);
+    return { r: await s.send("go"), s };
+  };
+  let x = await run(reply({ tools: [{ id: "d1", name: "submit_proposal", input: { ops: [], dryRun: true } }] }));
+  assert.equal(x.r.reason, "done"); assert.equal(x.r.requests, 2, "a dry run never ends the turn");
+  assert.equal(x.r.proposal, null); assert.equal(x.s.record.pendingProposal ?? null, null);
+  assert.equal(x.s.record.heldToolResults, null);
+  assertValidHistory(x.s.messages);
+  // the result flag alone is enough too (a pack that marks its dry runs)
+  const marked = makePack({ sheet: makeSheet(), runTool: async () => ({ ok: true, dryRun: true, summary: "s" }) });
+  x = await run(reply({ tools: [{ id: "d2", name: "submit_proposal", input: { ops: [] } }] }), marked);
+  assert.equal(x.r.reason, "done"); assert.equal(x.r.proposal, null);
+  // failed dry runs do not count as invalid submits (cap 1 would stop at the first failed real submit)
+  const failingDry = makePack({ sheet: makeSheet(), runTool: async () => ({ ok: false, dryRun: true, errors: [{ code: "e", message: "bad" }] }) });
+  x = await run(reply({ tools: [{ id: "d3", name: "submit_proposal", input: { ops: [], dryRun: true } }] }), failingDry, { maxInvalidSubmits: 1 });
+  assert.equal(x.r.reason, "done"); assert.equal(x.r.cap ?? null, null);
+  const failingReal = makePack({ sheet: makeSheet(), runTool: async () => ({ ok: false, errors: [{ code: "e", message: "bad" }] }) });
+  x = await run(reply({ tools: [{ id: "d3b", name: "submit_proposal", input: { ops: [] } }] }), failingReal, { maxInvalidSubmits: 1 });
+  assert.equal(x.r.cap, "invalidSubmits", "control: the same failure as a real submit hits the cap");
+  // dry run + accepted real submit in one batch: the real one is pending, the batch is not "only submits" -> continue
+  x = await run(reply({ tools: [{ id: "d4", name: "submit_proposal", input: { ops: [], dryRun: true } }, { id: "d5", name: "submit_proposal", input: { ops: [] } }] }));
+  assert.equal(x.r.reason, "done"); assert.equal(x.r.requests, 2);
+  assert.equal(x.s.record.pendingProposal.toolUseId, "d5");
+});
+
 await test("W3-4 held results: a new conversation drops them; Stop / cap on the next message keeps the history valid", async () => {
   const fetchImpl = fakeModel((i) => (i === 0 ? reply({ tools: [{ id: "n1", name: "submit_proposal", input: { ops: [] } }] }) : { hang: true }));
   const { deps } = makeDeps({ pack: proposalPack(), fetchImpl, settings: { wallClockMs: 100 } });

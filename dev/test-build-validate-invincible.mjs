@@ -171,10 +171,11 @@ await test("local schema check mirrors the tool schema (strict: additionalProper
   assert.deepEqual(checkShape({ target: "this", mode: "ops", ops: [{ op: "addItem", opId: "a", ref: "x" }] }, PROPOSAL_SCHEMA), []);
   assert.ok(checkShape({ target: "this", mode: "ops", ops: [{ op: "addItem", opId: "a", junk: 1 }] }, PROPOSAL_SCHEMA).some((x) => x.path === "ops[0].junk"));
   const defs = proposalToolDefs();
-  assert.deepEqual(defs.map((d) => d.name), ["check_proposal", "submit_proposal"]);
+  assert.deepEqual(defs.map((d) => d.name), ["submit_proposal"], "D-9: one model-facing proposal tool (dryRun = check)");
   for (const d of defs) { assert.equal(d.strict, true); assert.equal(d.input_schema, PROPOSAL_SCHEMA); }
+  assert.deepEqual(PROPOSAL_SCHEMA.properties.dryRun, { type: "boolean" });
   assert.ok(JSON.stringify(defs).length < 16000, `tool defs size ${JSON.stringify(defs).length}`);
-  assert.match(defs[1].description, /removeItem {itemId, cascade}/);
+  assert.match(defs[0].description, /removeItem {itemId, cascade}/);
 });
 
 /* ================================================================== L1 */
@@ -587,7 +588,7 @@ await test("pack interface: validate group passes the registry contract; tools j
   const v = validatePack(pack);
   assert.equal(v.ok, true, v.errors.join("; "));
   assert.equal(v.capabilities.validate, true);
-  assert.deepEqual(pack.proposalTools().map((t) => t.name), ["check_proposal", "submit_proposal"]);
+  assert.deepEqual(pack.proposalTools().map((t) => t.name), ["submit_proposal"]);
   assert.ok(pack.tools().some((t) => t.name === "submit_proposal") && pack.tools().some((t) => t.name === "get_entries"));
 });
 
@@ -597,10 +598,15 @@ await test("self-repair loop shape through runProposalTool (what the T2 harness 
   const a = typicalHero();
   const ctx = { doc: a, options: { rank: "global", profile: "creation" } };
   const add = { op: "addItem", opId: "p1", ref: ref("power", "Quick Step"), sourceItemId: idOf(a, "Strange Meteor") };
-  // check_proposal: dry run, never a proposalId
+  // check_proposal (internal alias) and submit_proposal + dryRun: dry run, never a proposalId, marked dryRun, no rationale needed
   const chk = await g.runProposalTool("check_proposal", ops(add), ctx);
   assert.equal(chk.ok, false);
   assert.equal(chk.proposalId, undefined);
+  assert.equal(chk.dryRun, true);
+  const { rationale: _r, ...noRationale } = ops(add);
+  const dry = await g.runProposalTool("submit_proposal", { ...noRationale, dryRun: true }, ctx);
+  assert.equal(dry.dryRun, true); assert.equal(dry.proposalId, undefined); assert.notEqual(dry.layer, "L0", "rationale not required on a dry run");
+  assert.deepEqual(dry.errors.map((e) => e.code), chk.errors.map((e) => e.code), "same result as the old check_proposal");
   // submit 1: invalid -> errors with code/message/hint + budget, JSON-serialisable, no GM-only fields
   const s1 = await g.runProposalTool("submit_proposal", ops(add), ctx);
   assert.equal(s1.ok, false);
@@ -618,6 +624,9 @@ await test("self-repair loop shape through runProposalTool (what the T2 harness 
   assert.equal(typeof s2.summary, "string");
   assert.ok(Array.isArray(s2.warnings));
   assert.equal((await g.runProposalTool("submit_proposal", fixed, ctx)).proposalId, s2.proposalId, "deterministic id");
+  assert.equal((await g.runProposalTool("submit_proposal", { ...fixed, dryRun: false }, ctx)).proposalId, s2.proposalId, "dryRun:false does not change the id");
+  const dryOk = await g.runProposalTool("submit_proposal", { ...fixed, dryRun: true }, ctx);
+  assert.equal(dryOk.ok, true); assert.equal(dryOk.proposalId, undefined); assert.equal(typeof dryOk.summary, "string"); assert.equal(dryOk.dryRun, true);
   // submit without rationale is refused at L0
   const { rationale, ...noRat } = fixed;
   assert.equal((await g.runProposalTool("submit_proposal", noRat, ctx)).layer, "L0");
@@ -947,7 +956,9 @@ await test("W3-10: applyConfirm in the submit result for removals (with cascade)
   assert.deepEqual(sw.applyConfirm, ['level swap power "Iron Hide" basic -> major']);
   const none = await sub(a, ops({ op: "updateActor", opId: "a", set: { texts: { drive: "Invented" } } }));
   assert.equal(none.ok, true); assert.equal(none.applyConfirm, undefined); assert.equal(none.applyConfirmNote, undefined);
-  // check_proposal does not carry it
+  // a dry run does not carry it
+  const ckDry = await group(catalog).runProposalTool("submit_proposal", { ...ops({ op: "removeItem", opId: "g", itemId: idOf(a, "Stun Baton") }), dryRun: true }, { doc: a, options: { rank: "global", profile: "in-play" } });
+  assert.equal(ckDry.ok, true); assert.equal(ckDry.applyConfirm, undefined);
   const ck = await group(catalog).runProposalTool("check_proposal", ops({ op: "removeItem", opId: "g", itemId: idOf(a, "Stun Baton") }), { doc: a, options: { rank: "global", profile: "in-play" } });
   assert.equal(ck.applyConfirm, undefined);
 });

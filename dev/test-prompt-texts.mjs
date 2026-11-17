@@ -62,12 +62,11 @@ await test("prefix texts: no sheet tags, no dates, no ids, no world names", () =
 });
 
 /* ---------------------------------------------------------------- P1-A: harness rules + tool descriptions */
-await test("system[0]: tool economy, submit directly, drawer settings, ambiguous requests", () => {
+await test("system[0]: tool economy, drawer settings, ambiguous requests", () => {
   const h = HARNESS_RULES;
   assert.match(h, /catalogue index already lists every entry/);
   assert.match(h, /Read a rules page only when the GM asks a rules question/);
-  assert.match(h, /Submit directly/);
-  assert.match(h, /check tool only to compare variants/);
+  assert.ok(!/check tool/.test(h), "no separate check tool any more (D-9)");
   assert.match(h, /drawer/); assert.match(h, /call no tools/);
   assert.match(h, /name the main alternative/);                     // D-6 provisional
   assert.match(h, /refs\) from the catalogue index in this prompt or from a tool result/);
@@ -88,11 +87,14 @@ await test("search_catalog: index already in the prompt; empty forPower list exp
   assert.match(d, /an empty forPower result carries a note saying why/);   // W2-7 PA1 note
 });
 
-await test("check/submit: submit directly, check only for variants", () => {
-  assert.match(desc("check_proposal"), /Not needed before a submit/);
-  assert.match(desc("check_proposal"), /only to compare variants/);
-  assert.match(desc("submit_proposal"), /without a check_proposal first/);
-  assert.ok(desc("submit_proposal").endsWith(PROPOSAL_GUIDE));
+await test("W3-14 / D-9: one proposal tool; dryRun = check only, for variants, never before a submit", () => {
+  assert.deepEqual(tools().map((t) => t.name), ["get_entries", "read_document", "read_rules", "search_catalog", "submit_proposal"]);
+  assert.ok(!JSON.stringify(tools()).includes("check_proposal"), "check_proposal is gone from the model-facing prefix");
+  const d = desc("submit_proposal");
+  assert.match(d, /dryRun:true = check only: same result, nothing reaches the GM, your turn goes on; only to compare variants or to price a change you may not propose/);
+  assert.match(d, /never before a submit/);
+  assert.ok(d.endsWith(PROPOSAL_GUIDE));
+  assert.match(PROPOSAL_GUIDE, /required unless dryRun/);
 });
 
 await test("PROPOSAL_GUIDE: note length and parentheses, occupation name, relationships format, reputation and resources", () => {
@@ -145,7 +147,7 @@ await test("W2-8 system[0]: proposal marker, unchanged update lines, read scope,
   assert.match(h, /Read entries in one call, never twice in a conversation/);                  // D-O
   assert.match(h, /other entries only when their summary does not settle the choice/);
   assert.ok(!/Read an entry before you pick it/.test(h), "the old blanket read rule is gone");
-  assert.match(h, /After a successful submission write one short sentence and stop/);         // D-P (D-5 open)
+  assert.ok(!/one short sentence/.test(h), "W3-4: no reply after a successful submit (the turn ends)");
   assert.match(h, /name the main alternative in the rationale/);
   assert.match(h, /rationale and every free text \(descriptions, personality words, notes\) in the language of the GM's message/);   // D-7/D-12
   assert.match(h, /catalogue names exactly as the catalogue spells them/);
@@ -157,16 +159,18 @@ await test("W2-8 tools + guide: get_entries fields, submit stop, replace error p
   assert.match(ge, /split powers: levels \(one ref per level\), other powers: maxLevel/);
   assert.match(ge, /automation names/);
   assert.match(ge, /archetype: role, attributes, powers with refs/);
-  assert.match(desc("submit_proposal"), /write one short sentence and stop/);
-  assert.ok(!/end your turn then/.test(desc("submit_proposal")));
+  assert.ok(!/one short sentence|write one|and stop/.test(desc("submit_proposal")), "W3-4: no closing sentence after a submit");
+  assert.match(desc("submit_proposal"), /ok:true ends your turn/);
   const g = PROPOSAL_GUIDE;
   assert.match(g, /Its errors name proposal\.\* paths and the entry; their opId is the summary's/);   // W2-2
   assert.match(g, /note = the choice shown in brackets, in the GM's language/);
   assert.match(g, /exactly two words in the GM's language/);
   assert.match(g, /name \(the hero name\)/);
-  assert.match(g, /grants level\|boost \(a Basic-only power: boost\)/);
+  assert.match(g, /a limit pays for a level of its power \(a Basic-only power: a boost\); grants is optional and never changes the cost/);   // W3-6
+  assert.ok(!/limits \[\{ref, grants\}\]/.test(g), "replace limits list no grants");
   assert.match(g, /the main alternative/);
-  assert.ok(JSON.stringify(proposalToolDefs()).length < 16000, "check+submit under the 16,000-char test cap");
+  // after D-9 one proposal tool is ~9.7k: the cap now covers ALL tool definitions (was check+submit alone)
+  assert.ok(JSON.stringify(tools()).length < 16000, `all tool definitions under the 16,000-char test cap (${JSON.stringify(tools()).length})`);
 });
 
 await test("W2-8 digest: budget legend (perOp, spentAfter, label), talent roles, occupation columns, Hard Times without the book's number", () => {
@@ -198,13 +202,75 @@ await test("W2-8 tool result: budget legend in the digest, so the model copy has
   assert.equal(toolResult("check_proposal", { ...r, budget: null }, null).budget, null);
 });
 
+/* ---------------------------------------------------------------- W3-14 (C3): one text pass after wave 3 */
+await test("W3-14 system[0]: warnings do not block, turn ends on submit, held result, progress note, impersonal forms", () => {
+  const h = HARNESS_RULES;
+  assert.match(h, /Errors block: fix exactly those errors and submit again/);
+  assert.match(h, /Warnings do not block: fix them in the same submission when you can; never resubmit only because of a warning/);   // D-15
+  assert.match(h, /A successful submission sent without other tool calls ends your turn: write nothing after it; its rationale is your answer for the GM/);   // W3-4
+  assert.match(h, /You see its result at the start of the GM's next message/);           // W3-4 held results (W3-B-5)
+  assert.match(h, /Text you write before a tool call is a progress note, not your answer/);   // W3-5 (W3-B-4)
+  assert.match(h, /impersonal forms, never a grammatical gender \(Polish "Dodano"\)/);
+  assert.ok(!/invincible/i.test(h), "system[0] stays system-agnostic");
+});
+
+await test("W3-14 digest: profiles, role keys, out of scope, slot example, freed points, archetype source, fx, expected texts, solo, gear info", () => {
+  const d = rulesDigest();
+  // profiles (finding 7, D-14): creation spends all, in-play budget informational, cap stays, growth not enforced
+  const prof = d.slice(d.indexOf("## Profiles"), d.indexOf("## Superhero budget"));
+  assert.match(prof, /profile=/);
+  assert.match(prof, /creation[^.]*spend ALL available points/);
+  assert.match(prof, /in-play[^]*the budget is information only/);
+  assert.match(prof, /the rank's attribute cap is still an error/);
+  assert.match(prof, /growth rules are not enforced/);
+  assert.equal((d.match(/ALL available points/g) ?? []).length, 1, "the spend-all rule lives once, under creation");
+  // role = English key (finding 10)
+  assert.match(d, /Roles \(texts\.role = one of these English keys/);
+  // vehicles and other actors out of scope, in one sentence
+  assert.match(d, /minions, challenges and vehicles are out of scope: say so in one sentence/);
+  // slot example from the vendored numbers (cosmic: 38 + 2 x 5 = 48)
+  const c = RANKS.cosmic;
+  assert.ok(d.includes(`an empty Cosmic Champion sheet has ${c.points} + 2 x ${c.powers} = ${c.points + 2 * c.powers} points`));
+  assert.ok(d.includes("38 + 2 x 5 = 48"), "the dry run's example");
+  // D-18, D-10, fx (W3-13), D-15, D-16, D-17
+  assert.match(d, /leave the rest[^.]*: put them into attributes that fit the concept and say so in the rationale; do not ask/);
+  assert.match(d, /An archetype's source missing from the catalogue: take the nearest catalogue source and say so in the rationale/);
+  assert.match(d, /Drawbacks may lower attributes: read the index column fx \(\(disabled\), \(not transferred\) = no effect\) before you pick one/);
+  assert.match(d, /at a build fill them, with one original NPC in relationships/);
+  assert.match(d, /A solo hero: team and teamBase empty, one sentence in the rationale, never "Solo" as a team/);
+  assert.match(d, /paid from Resources; reported as info, the GM decides/);
+});
+
+await test("W3-14 tools + guide: applyConfirm, gear in replace, D-19 notes, placeholder choice, role key, Health/Resolve at build, sample heroes", () => {
+  const sub = desc("submit_proposal");
+  assert.match(sub, /removals and level swaps \(applyConfirm\) are confirmed by the GM at Apply/);   // W3-10
+  const g = PROPOSAL_GUIDE;
+  assert.match(g, /gear is never touched \(add it with ops\)/);                       // finding 11: replace has no gear array
+  assert.match(g, /only for a real choice \(no decorative notes/);                    // D-19
+  assert.match(g, /an effect with an open choice such as bonus\.\[attribute\]: name it here, the GM sets the effect/);   // W3-9
+  assert.match(g, /role \(an English role key\)/);
+  assert.match(g, /a build sets Health\/Resolve to max itself/);                     // W3-3
+  assert.match(desc("search_catalog"), /every entry except sample heroes \(kinds \["sampleHero"\]\)/);   // D-8
+  // the replace schema still has no gear array (the guide's sentence stays true)
+  assert.equal(proposalToolDefs()[0].input_schema.properties.proposal.properties.gear, undefined);
+});
+
+await test("W3-14 dry-run tool result: marked dryRun, no proposalId, summary kept; a submit result has no dryRun mark", () => {
+  const r = { ok: true, errors: [], warnings: [], info: [], autoFixed: [], layer: null, budget: null, summary: "s", normalized: {}, applyConfirm: ["remove power \"X\""] };
+  const dry = toolResult("submit_proposal", r, null, { dryRun: true });
+  assert.equal(dry.dryRun, true); assert.equal(dry.proposalId, undefined); assert.equal(dry.summary, "s"); assert.equal(dry.applyConfirm, undefined);
+  const real = toolResult("submit_proposal", r, null);
+  assert.equal(real.dryRun, undefined); assert.match(real.proposalId, /^prop-/); assert.deepEqual(real.applyConfirm, r.applyConfirm);
+  assert.equal(toolResult("check_proposal", r, null).dryRun, true, "internal alias");
+});
+
 /* ---------------------------------------------------------------- size */
-await test("static prefix (without the catalogue index) stays under 8,500 tokens", () => {
+await test("static prefix (without the catalogue index) stays under 7,500 tokens (W3-14: was 8,500 before D-9)", () => {
   const p = prefixParts();
   const sizes = Object.fromEntries(Object.entries(p).map(([k, v]) => [k, { chars: v.length, tokens: estimateTokens(v) }]));
   const total = Object.values(sizes).reduce((a, s) => a + s.tokens, 0);
   console.log(`     sizes (chars/3.5 tokens): ${JSON.stringify(sizes)} total ${total}`);
-  assert.ok(total < 8500, `static prefix ${total} tokens`);
+  assert.ok(total < 7500, `static prefix ${total} tokens`);
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);

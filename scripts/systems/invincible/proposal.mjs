@@ -1,7 +1,7 @@
-// Invincible proposals (spec 6 `submit_proposal` / `check_proposal`, 7.5, 10.3; task T5). PURE: no Foundry globals.
+// Invincible proposals (spec 6 `submit_proposal` (+ `dryRun`, D-9; `check_proposal` internal only), 7.5, 10.3; task T5). PURE: no Foundry globals.
 //
 // What lives here:
-// - PROPOSAL_SCHEMA: the strict tool input schema shared by check_proposal and submit_proposal (static: cached prefix).
+// - PROPOSAL_SCHEMA: the strict tool input schema of submit_proposal (static: cached prefix); `dryRun` = the old check_proposal.
 // - checkShape(input, schema): the LOCAL L0 check against the same schema (the harness never trusts a tool input).
 // - normalize(input): L0 semantic shape (ops ids, one of ref/custom, required fields per op) + the deterministic autoFixed set
 //   of spec 7.3 (trimmed strings, collapsed duplicate personality words).
@@ -48,8 +48,8 @@ const I = (description) => ({ type: "integer", ...(description ? { description }
 const B = (description) => ({ type: "boolean", ...(description ? { description } : {}) });
 const obj = (properties, required = [], description) => ({ type: "object", additionalProperties: false, required, properties, ...(description ? { description } : {}) });
 const LEVEL = { type: "string", enum: [...LEVEL_WORDS] };
-// Field docs live ONCE in PROPOSAL_GUIDE (the submit_proposal description), not per field: both proposal tools carry this
-// schema, so every description here would be paid twice in the cached prefix.
+// Field docs live ONCE in PROPOSAL_GUIDE (the submit_proposal description), not per field (shorter cached prefix).
+// `grants` stays accepted (old inputs, replay) but never changes the cost (W3-6): the guide calls it optional.
 const ATTACK = obj({ damage: I(), bonus: I(), minRange: I(), maxRange: I(), bypassArmor: B(), attribute: { type: "string", enum: [...ATTRS] } }, ["damage"]);
 const GEAR_NUMBERS = obj({ cost: I(), restricted: B(), singleUse: B(), attack: ATTACK });
 const CUSTOM = obj({ type: { type: "string", enum: [...CUSTOM_TYPES] }, name: S(), description: S(), cost: I(), restricted: B(), singleUse: B(), attack: ATTACK }, ["type", "name"]);
@@ -80,19 +80,19 @@ const REPLACE = obj({
 export const PROPOSAL_SCHEMA = Object.freeze(obj({
   target: { type: "string", enum: ["this", "newItem"] }, mode: { type: "string", enum: ["ops", "replace"] },
   ops: { type: "array", items: OP }, proposal: REPLACE, rationale: S(),
-  choiceNotes: { type: "array", items: obj({ opId: S(), path: S(), why: S() }, ["why"]) }
+  choiceNotes: { type: "array", items: obj({ opId: S(), path: S(), why: S() }, ["why"]) }, dryRun: B()
 }, ["target", "mode"]));
 
-/** How to fill the schema (the submit_proposal description; check_proposal points here). Static text: cached prefix. */
+/** How to fill the schema (the end of the submit_proposal description). Static text: cached prefix. */
 export const PROPOSAL_GUIDE = [
   "target: \"this\" (the open document) or \"newItem\" (a new world gear/vehicleWeapon item, mode replace + proposal.item).",
   "mode \"ops\" (default for an existing sheet): ops = small in-place operations, each with your own unique opId (e.g. \"a1\"); everything not named stays as it is, ids kept.",
-  `- addItem: ref (catalogue) OR custom (only gear/vehicleWeapon: type, name, plain-text description, cost >= 0, restricted, singleUse (gear), attack {damage, bonus, minRange, maxRange, bypassArmor, attribute} = one attack). power: level (basic/major/massive/monstrous; split-level powers: the power's index ref + level, or the level's own ref) and its source: sourceItemId (sheet id) or sourceOpId (a powerSource added in the same list). boost/limit: powerItemId or powerOpId; limit: grants level|boost (a Basic-only power: boost). power/talent/drawback: note = the choice shown in brackets, in the GM's language: at most ${NOTE_MAX} characters, no parentheses inside (\"Kingpin\", not \"Kingpin (Wilson Fisk)\").`,
+  `- addItem: ref (catalogue) OR custom (only gear/vehicleWeapon: type, name, plain-text description, cost >= 0, restricted, singleUse (gear), attack {damage, bonus, minRange, maxRange, bypassArmor, attribute} = one attack). power: level (basic/major/massive/monstrous; split-level powers: the power's index ref + level, or the level's own ref) and its source: sourceItemId (sheet id) or sourceOpId (a powerSource added in the same list). boost/limit: powerItemId or powerOpId; a limit pays for a level of its power (a Basic-only power: a boost); grants is optional and never changes the cost. power/talent/drawback: note = the choice shown in brackets, in the GM's language, only for a real choice (no decorative notes; an effect with an open choice such as bonus.[attribute]: name it here, the GM sets the effect): at most ${NOTE_MAX} characters, no parentheses inside (\"Kingpin\", not \"Kingpin (Wilson Fisk)\").`,
   "- updateItem {itemId, set}: power: level, powerSourceItemId|powerSourceOpId, note; boost/limit: powerItemId|powerOpId; talent/drawback: note (\"\" removes); gear/vehicleWeapon: name, descriptionAppend (plain text paragraph), gear {cost, restricted, singleUse, attack}.",
   "- removeItem {itemId, cascade}: a power with boosts/limits or a source used by powers needs cascade:true or re-pointing ops in the same list.",
-  "- updateActor {set}: name (the hero name), attributes {fighting..presence}, texts {civilianName, role, occupation (the occupation's English catalogue name), personality (exactly two words in the GM's language, comma separated), drive, flaw, appearance, relationships (one line each: \"NPC: Name (who they are)\", \"Hero: Name\"), team, teamBase}, reputation (the rank's reputation value), resources (the occupation's Resources value). karma/health/resolve (current values) only when the GM asked for them.",
-  "mode \"replace\" (blank actor or an explicit rebuild): proposal = rank (must be the drawer's rank), name, attributes, texts, resources, reputation (give both, values as in updateActor), sources [{key, ref}], powers [{ref, level, source (a sources key), note, boosts [{ref}], limits [{ref, grants}]}], talents [{ref, note}] (hero talent first, then the occupation talent, then extras), drawbacks [{ref, note}]; items with the same name are kept. Its errors name proposal.* paths and the entry; their opId is the summary's. For a gear/vehicleWeapon document: proposal.item (same fields as custom).",
-  "rationale: one short paragraph for the GM (required on submit): what you chose, why, the main alternative. choiceNotes: [{opId or path, why}] for every pick that is not obvious (how a new slot is paid for, each drawback)."
+  "- updateActor {set}: name (the hero name), attributes {fighting..presence}, texts {civilianName, role (an English role key), occupation (the occupation's English catalogue name), personality (exactly two words in the GM's language, comma separated), drive, flaw, appearance, relationships (one line each: \"NPC: Name (who they are)\", \"Hero: Name\"), team, teamBase}, reputation (the rank's reputation value), resources (the occupation's Resources value). karma/health/resolve (current values) only when the GM asked for them (a build sets Health/Resolve to max itself).",
+  "mode \"replace\" (blank actor or an explicit rebuild): proposal = rank (must be the drawer's rank), name, attributes, texts, resources, reputation (give both, values as in updateActor), sources [{key, ref}], powers [{ref, level, source (a sources key), note, boosts [{ref}], limits [{ref}]}], talents [{ref, note}] (hero talent first, then the occupation talent, then extras), drawbacks [{ref, note}]; items with the same name are kept; gear is never touched (add it with ops). Its errors name proposal.* paths and the entry; their opId is the summary's. For a gear/vehicleWeapon document: proposal.item (same fields as custom).",
+  "rationale: one short paragraph for the GM (required unless dryRun): what you chose, why, the main alternative. choiceNotes: [{opId or path, why}] for every pick that is not obvious (how a new slot is paid for, each drawback)."
 ].join("\n");
 
 /* ================================================================== small helpers */
@@ -174,6 +174,7 @@ export function normalize(input, { requireRationale = false } = {}) {
   for (const s of shape) errors.push({ code: "input.shape", path: s.path, params: { expected: s.expected } });
   if (shape.some((s) => s.path === "(input)")) return { proposal: null, errors, autoFixed };
   const p = trimDeep(clone(input), "", autoFixed);
+  delete p.dryRun;   // D-9: a tool flag, not part of the proposal (same proposalId with or without it)
   p.target ??= "this";
   p.choiceNotes ??= [];
   if (requireRationale && !String(p.rationale ?? "").trim()) errors.push({ code: "input.shape", path: "rationale", params: { expected: "required on submit" } });
