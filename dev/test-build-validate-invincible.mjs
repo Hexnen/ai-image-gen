@@ -199,6 +199,36 @@ await test("L1: ref.unknown, ref.kind, ref.level.none, ref.level.conflict, ref.p
   assert.equal(project(blankHero(), ok.ops, { catalog }).actor.items.find((i) => i._id === "new:x").system.level, "major");
 });
 
+await test("W2-1: split power: main (basic) ref + level is that level, not a conflict (ops, replace, writer agree)", async () => {
+  const iron = catalog.findByName("power", "Iron Hide");
+  assert.ok(iron.split && iron.levelDocs.basic && iron.levelDocs.major);
+  const mainRef = iron.ref;
+  assert.equal(mainRef, `powers:${iron.levelDocs.basic}`);
+  // ops: basic ref + level major -> a Major Iron Hide
+  const srcOp = { op: "addItem", opId: "s", ref: ref("powerSource", "Strange Meteor") };
+  const r = await V(blankHero(), ops(srcOp, { op: "addItem", opId: "x", ref: mainRef, level: "major", sourceOpId: "s" }));
+  assert.ok(!codes(r).includes("ref.level.conflict"), JSON.stringify(r.errors));
+  assert.equal(project(blankHero(), r.ops, { catalog }).actor.items.find((i) => i._id === "new:x").system.level, "major");
+  // main ref without level stays basic; the basic level named explicitly too
+  for (const extra of [{}, { level: "basic" }]) {
+    const b = await V(blankHero(), ops(srcOp, { op: "addItem", opId: "x", ref: mainRef, sourceOpId: "s", ...extra }));
+    assert.ok(!codes(b).includes("ref.level.conflict"));
+    assert.equal(project(blankHero(), b.ops, { catalog }).actor.items.find((i) => i._id === "new:x").system.level, "basic");
+  }
+  // the opposite case stays a conflict, and its hint names the main ref
+  const c = await V(blankHero(), ops(srcOp, { op: "addItem", opId: "x", ref: `powers:${iron.levelDocs.major}`, level: "basic", sourceOpId: "s" }));
+  has(c, "ref.level.conflict");
+  assert.match(c.errors.find((e) => e.code === "ref.level.conflict").hint, new RegExp(`main ref "${mainRef}" with level basic`));
+  // replace (the dry-run case: two Major powers given as main ref + level) -> no conflict, level major in the ops
+  const rp = await V(blankHero(), { target: "this", mode: "replace", rationale: "invented", proposal: {
+    sources: [{ key: "s", ref: ref("powerSource", "Strange Meteor") }],
+    powers: [{ ref: mainRef, level: "major", source: "s" }]
+  } });
+  assert.ok(!codes(rp).includes("ref.level.conflict"), JSON.stringify(rp.errors));
+  assert.equal(rp.ops.find((o) => o.ref === mainRef).level, "major");
+  assert.equal(r.normalized.ops[1].ref, mainRef);   // the writer resolves the same input (writer.mjs resolveRef: asked level wins)
+});
+
 await test("L1: links (source/power missing, opId unknown/kind), item.missing, item.removed", async () => {
   const a = typicalHero();
   has(await V(a, ops({ op: "addItem", opId: "x", ref: ref("power", "Quick Step") })), "link.source.missing");

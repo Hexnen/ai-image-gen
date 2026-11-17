@@ -541,6 +541,16 @@ export function levelExists(entry, level) {
   return k <= maxLevelOf(entry);
 }
 
+/**
+ * The level a power ref pins (W2-1): null for the power's main ref (the entry's own ref, i.e. the basic document of a split
+ * power, which takes any `level`) and for non-split powers; the level word for another level document of a split power.
+ */
+export function splitRefLevel(catalog, ref, entry = catalog?.get?.(ref)) {
+  const lv = catalog?.levelOf?.(ref) ?? null;
+  if (!lv || !entry) return null;
+  return lv === (catalog.levelOf?.(entry.ref) ?? null) ? null : lv;
+}
+
 function buildAdded(op, i, { catalog, err, refItem, actor, byOp }) {
   const id = NEW_PREFIX + op.opId;
   if (op.custom) {
@@ -561,9 +571,11 @@ function buildAdded(op, i, { catalog, err, refItem, actor, byOp }) {
   if (type !== "limit") bad("grants");
   if (!["power", "talent", "drawback"].includes(type)) bad("note");
   if (type === "power") {
-    const lvRef = catalog.levelOf?.(op.ref) ?? null;
-    const level = op.level ?? lvRef ?? "basic";
-    if (lvRef && op.level && op.level !== lvRef) { err("ref.level.conflict", op, i, { ref: op.ref, level: op.level, refLevel: lvRef }, "level"); return null; }
+    // split-level powers (W2-1, D-A): the power's main ref (its basic document, the ref in the index) + `level` picks that
+    // level, as the writer does; only another level's own ref with a different `level` is a conflict
+    const lvRef = splitRefLevel(catalog, op.ref, entry);
+    const level = op.level ?? catalog.levelOf?.(op.ref) ?? "basic";
+    if (lvRef && op.level && op.level !== lvRef) { err("ref.level.conflict", op, i, { ref: op.ref, level: op.level, refLevel: lvRef, mainRef: entry.ref }, "level"); return null; }
     if (!levelExists(entry, level)) { err("ref.level.none", op, i, { name: entry.name, level, max: LEVEL_WORDS[maxLevelOf(entry)] }, "level"); return null; }
     system.level = level;
     const src = refItem(op, i, op.sourceItemId, op.sourceOpId, "powerSource", "source");
