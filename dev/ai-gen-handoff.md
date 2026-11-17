@@ -86,3 +86,9 @@
 - Historia: wyniki submitu wstrzymane w `record.heldToolResults` i wysłane na początku następnej wiadomości MG (wyniki, arkusz, znacznik `<proposal/>`, tekst) jako JEDNA wiadomość `user`; historia nadal tylko dopisywana, prefiks cache bez zmian.
 - W3-5: `text` = tekst wiadomości kończącej turę bez narzędzi; teksty przed narzędziami w `progress[]`, `assistant-message.progress`, transkrypt `role: "progress"`. RUNBOOK: dwie linie (zatrzymanie, pola TurnSummary).
 - Testy: harness 35, dry-transport 12, reszta zielona. Teksty dla C3 (W3-B-1..W3-B-5: „write one short sentence and stop” w harness-prompt i opisie submit_proposal), wybory, niezweryfikowane i znalezione ryzyko kolejnych wiadomości `user` w ścieżkach limitów/odmowy: `dev/wave3-notes.md` (sekcja W3-4 / W3-5).
+
+## 2026-11-17 W3-1 / W3-2 / W3-3: writer (analiza próby na sucho 3, grupa A)
+- W3-1 (F0): id dodawanych przedmiotów nadawane przed zapisem, tworzenie z `keepId: true`; `idMap`, dziennik undo, linki boost/limit -> moc i źródło -> moc z tych id; kolejność kolekcji (role talentów) = kolejność op. Serwer bez keepId zwraca w kolejności zakończenia (kod `_createDocuments` v14 sprawdzony). Obce id -> odmowa i wycofanie.
+- W3-2: op aktora niesie nową nazwę; po udanym Apply ostrzeżenia walidatora w wyniku, każde raz.
+- W3-3 (D-1 tymczasowo): budowa (creation, pusty/wyczyszczony aktor) ustawia bieżące Health/Resolve = max po fazie aktora; wpis `_vitals` (undo przywraca), `result.vitals`, linia w `message`, info planu `vitals.build`. Edycje/in-play bez zmian (O25).
+- Commit `0520163`. Testy ops 39 (mock z przetasowaną kolejnością). Na żywo tor 20: 5 budów zgodnych z aktorem, role po przeładowaniu, Health/Resolve, undo. Wybory W3-A-1..5, teksty dla C3, niezweryfikowane: `dev/wave3-notes.md` (sekcja W3-1 / W3-2 / W3-3).
