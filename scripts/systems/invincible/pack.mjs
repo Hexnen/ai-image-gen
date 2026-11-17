@@ -16,6 +16,7 @@
 import { detectModule, hasPack, systemInfo, compareVersions } from "../../build/deps.mjs";
 import { promptGroup } from "./prompt.mjs";
 import { snapshot as sheetSnapshot, diffSnapshots, nextSheetBlock } from "./snapshot.mjs";
+import { validateGroup } from "./validate.mjs";
 
 export const SYSTEM_ID = "invincible";
 export const MIN_SYSTEM_VERSION = "2.1.0";
@@ -92,5 +93,10 @@ Object.assign(pack, {
   // optional: the pack's own 5.4 decision (harness.mjs prefers it over the generic sheet-sync.mjs rule)
   nextSheetBlock: (held, snap) => nextSheetBlock(held, snap)
 });
+
+// validate group (T5): L0-L4 pipeline on an in-memory projection, profiles creation/in-play, ops proposals, stale check,
+// GM deselection (validate.mjs, proposal.mjs). Also the model-facing check_proposal / submit_proposal tools, picked up by the
+// prompt group through proposalTools() / runProposalTool(). Never writes; calls pack.plan (T6) as the L3 dry run when present.
+Object.assign(pack, validateGroup(() => pack, { get game() { return g(); } }));
 
 export default pack;
