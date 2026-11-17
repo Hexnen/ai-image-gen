@@ -1082,4 +1082,79 @@ await test("W3-2: the actor op names the new name; validator warnings reach a su
   assert.equal(r.ops[0].name, "New Name");
 });
 
+/* ---------------------------------------------------------------- wave 4, group A1 */
+await test("W4-A-4 (D-13): the writer fills bonus.[attribute] from the note (EN/PL); no match stays open; values kept; undo removes", async () => {
+  // Steady Hands carries an invented open-choice effect in this test (v14 system.changes) and Haunted an older-shape one
+  const PH = { "Steady Hands": [{ name: "Pick", system: { changes: [{ key: "bonus.[attribute]", type: "add", value: "2" }, { key: "system.initiativeSize", type: "add", value: "1" }] } }],
+    Haunted: [{ name: "Old", changes: [{ key: "bonus.[Attribute]", mode: 2, value: "-1" }, { key: "bonus.[skill]", mode: 2, value: "1" }] }] };
+  const fd = async (uuid) => { const d = await fetchData(uuid); if (d && PH[d.name]) d.effects = clone(PH[d.name]); return d; };
+  const w = mkWriter({ fetchData: fd });
+  const keys = (it) => it.effects.flatMap((e) => (e.system?.changes ?? e.changes ?? []).map((c) => `${c.key}=${c.value}`));
+  const a = hero();
+  const add = (opId, name, note) => ({ opId, kind: "addItem", ref: refOf(name === "Haunted" ? "drawback" : "talent", name), ...(note ? { note } : {}) });
+  const p = await w.plan(a, { ops: [add("t", "Steady Hands", "+2 do Rozumu")] });
+  assert.equal(p.ok, true, JSON.stringify(p.errors));
+  assert.deepEqual(p.info.find((i) => i.code === "effect.filled").filled, [{ from: "bonus.[attribute]", to: "bonus.reason" }]);
+  assert.deepEqual(keys(p.projected.items.find((i) => i.id === "+t")._source), ["bonus.reason=2", "system.initiativeSize=1"], "projection = what is written");
+  const r = await w.apply(a, { ops: [add("t", "Steady Hands", "+2 do Rozumu")] });
+  assert.equal(r.ok, true, r.message);
+  const made = a.items.get(r.idMap.t);
+  assert.equal(made.name, "Steady Hands (+2 do Rozumu)");
+  assert.deepEqual(keys(made._source), ["bonus.reason=2", "system.initiativeSize=1"], "only the placeholder key changes, value as in the entry");
+  // the catalogue document itself is untouched (the next add starts from the placeholder again)
+  const r2 = await w.apply(a, { ops: [add("t2", "Haunted", "Presence")] });
+  assert.equal(r2.ok, true, r2.message);
+  assert.deepEqual(keys(a.items.get(r2.idMap.t2)._source), ["bonus.presence=-1", "bonus.[skill]=1"], "older `changes` shape, any case of [attribute]; other placeholders stay");
+  // no single attribute in the note, or no note: the key stays as it is
+  const b = hero();
+  const r3 = await w.apply(b, { ops: [add("x", "Steady Hands", "Szybkość"), add("y", "Haunted")] });
+  assert.equal(r3.ok, true, r3.message);
+  assert.deepEqual(keys(b.items.get(r3.idMap.x)._source), ["bonus.[attribute]=2", "system.initiativeSize=1"]);
+  assert.deepEqual(keys(b.items.get(r3.idMap.y)._source), ["bonus.[Attribute]=-1", "bonus.[skill]=1"]);
+  assert.equal(r3.plan.info.some((i) => i.code === "effect.filled"), false);
+  // undo: the filled item goes with its run
+  const u = await w.undo(a, r.runId);
+  assert.equal(u.ok, true, u.message);
+  assert.equal(a.items.has(r.idMap.t), false);
+});
+
+await test("W4-A-3: replace with a gear list (catalogue ref + custom) writes gear in the same run; no gear list = gear untouched; undo", async () => {
+  const T5P = await import("../scripts/systems/invincible/proposal.mjs");
+  const conv = (doc, prop, c) => T5P.replaceToOps(doc, prop, { catalog: c });
+  const w = mkWriter({ toOps: conv });
+  const a = hero();
+  const keep = byName(a, "Stun Baton"), line = byName(a, "Grapple Line"), cam = byName(a, "Pocket Camera");
+  const base = {
+    name: "Amber Kestrel", attributes: { fighting: 6, agility: 7, strength: 5, reason: 5, intuition: 5, presence: 5 },
+    sources: [{ key: "s", ref: refOf("powerSource", "Strange Meteor") }],
+    powers: [{ ref: refOf("power", "Glide Wings"), level: "basic", source: "s", boosts: [{ ref: refOf("boost", "Silent Flight", "Glide Wings") }] },
+      { ref: refOf("power", "Spark Bolt"), level: "major", source: "s", limits: [{ ref: refOf("limit", "Needs Charging", "Spark Bolt") }] },
+      { ref: refOf("power", "Echo Sense"), level: "basic", source: "s" }],
+    talents: [{ ref: refOf("talent", "Quick Wits") }, { ref: refOf("talent", "Streetwise") }], drawbacks: [{ ref: refOf("drawback", "Lean Times") }]
+  };
+  // without gear: same build -> nothing to do, gear untouched (as before)
+  assert.deepEqual(conv(a, base, cat).ops, []);
+  const P = { ...base, gear: [{ ref: refOf("gear", "Stun Baton") }, { custom: { type: "gear", name: "Smoke Pellets", description: "Invented grey pellets.", cost: 1, singleUse: true } }, { custom: { type: "gear", name: "Pocket Camera", cost: 3 } }] };
+  const c = conv(a, P, cat);
+  assert.deepEqual(c.errors, []);
+  assert.deepEqual(c.ops.map((o) => [o.op, o.opId, o.itemId ?? o.ref ?? o.custom?.name]), [
+    ["addItem", "ge1", "Smoke Pellets"], ["updateItem", "ge2", cam.id], ["removeItem", "rm3", line.id]]);
+  assert.deepEqual(c.ops[1].set, { gear: { cost: 3 } }, "a kept custom item: changed numbers only");
+  assert.deepEqual(c.src.ge1, { path: "proposal.gear[1]", name: "Smoke Pellets" });
+  assert.equal(c.srcItems[keep.id].path, "proposal.gear[0]");
+  const p = await w.plan(a, { mode: "replace", proposal: P });
+  assert.equal(p.ok, true, JSON.stringify(p.errors));
+  const r = await w.apply(a, { mode: "replace", proposal: P }, { confirmed: true, expect: p.expect });
+  assert.equal(r.ok, true, r.message);
+  assert.ok(a.items.has(keep.id), "same name kept with its id"); assert.ok(!a.items.has(line.id), "leftover gear removed");
+  assert.equal(a.items.get(cam.id).system.cost, 3);
+  const smoke = a.items.get(r.idMap.ge1);
+  assert.equal(smoke.name, "Smoke Pellets"); assert.equal(smoke.system.singleUse, true); assert.equal(smoke.system.cost, 1);
+  const u = await w.undo(a, r.runId);
+  assert.equal(u.ok, true, u.message);
+  assert.ok(a.items.has(line.id) && !a.items.has(r.idMap.ge1)); assert.equal(a.items.get(cam.id).system.cost, 1);
+  // gear: [] = remove all gear (an explicit empty list)
+  assert.deepEqual(conv(hero(), { ...base, gear: [] }, cat).ops.map((o) => o.op), ["removeItem", "removeItem", "removeItem"]);
+});
+
 console.log(`\n${passed} passed${process.exitCode ? ", some FAILED" : ""}`);

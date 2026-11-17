@@ -505,6 +505,18 @@ await test("W2-3: validation warns talent.role.shift (ops: hero replaced; replac
   assert.deepEqual(shift(await V(a, rp(["Quick Wits", "Streetwise"]))), []);
 });
 
+await test("W4-A-1: VALID line lists an empty team under info (solo hero), other warnings stay warns; ok unchanged", async () => {
+  const { validLine } = await import("../scripts/systems/invincible/snapshot.mjs");
+  const v = { kind: "creation", rank: "global", ok: true, errors: [], warnings: ["team.empty", "npc.name.blank"], info: ["x.y"], budget: null };
+  assert.equal(validLine(v, "creation"), "VALID baseline profile=creation rank=global ok=true warns=npc.name.blank info=team.empty,x.y");
+  assert.equal(validLine({ ...v, warnings: ["team.empty"], info: [] }, "in-play"), "VALID baseline profile=in-play rank=global ok=true info=team.empty");
+  // a real solo hero sheet: no warns=team.empty
+  const th = typicalHero(); th._source.system.team = ""; th._source.system.teamBase = "";
+  const s = serializeSheet(readActor(th, { lookup: makeLookup(), rank: "global", profile: "creation" }));
+  const line = s.body.split("\n").find((l) => l.startsWith("VALID"));
+  assert.ok(!/warns=[^ ]*team\.empty/.test(line) && /info=[^ ]*team\.empty/.test(line), line);
+});
+
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);
 console.log("\nMeasured fixture sizes (local estimator, spec 9.2 [E]; confirm with count_tokens in T8):");
 for (const [k, v] of Object.entries(sizes)) console.log(`  ${k}: ${v.items} items, ${v.lines} lines, ${v.chars} chars, ~${v.tokensEst} tokens, cut level ${v.cutLevel}`);

@@ -24,7 +24,7 @@ export const LEVEL_WORDS = Object.freeze(["basic", "major", "massive", "monstrou
 export const OP_KINDS = Object.freeze(["addItem", "updateItem", "removeItem", "updateActor"]);
 /** item types an op may add from the catalogue (catalogue kind == item type) */
 export const ITEM_KINDS = Object.freeze(["powerSource", "power", "boost", "limit", "talent", "drawback", "gear", "vehicleWeapon"]);
-/** item types a `replace` proposal owns on an actor (gear and injuries are never touched by a replace) */
+/** item types a `replace` proposal owns on an actor (injuries are never touched; gear only when the proposal has `gear`, W4-A-3) */
 export const CREATION_TYPES = Object.freeze(["powerSource", "power", "boost", "limit", "talent", "drawback"]);
 export const CUSTOM_TYPES = Object.freeze(["gear", "vehicleWeapon"]);
 export const TEXT_KEYS = Object.freeze(["civilianName", "role", "occupation", "personality", "drive", "flaw", "appearance", "relationships", "team", "teamBase"]);
@@ -49,7 +49,8 @@ const B = (description) => ({ type: "boolean", ...(description ? { description }
 const obj = (properties, required = [], description) => ({ type: "object", additionalProperties: false, required, properties, ...(description ? { description } : {}) });
 const LEVEL = { type: "string", enum: [...LEVEL_WORDS] };
 // Field docs live ONCE in PROPOSAL_GUIDE (the submit_proposal description), not per field (shorter cached prefix).
-// `grants` stays accepted (old inputs, replay) but never changes the cost (W3-6): the guide calls it optional.
+// W4-A-2: `grants` is gone from the schema (the sheet decides what a limit pays for: a level when its power is above Basic, else
+// a boost; the summary says which). Old inputs that still carry it pass L0: normalize strips it silently (stripLegacy).
 const ATTACK = obj({ damage: I(), bonus: I(), minRange: I(), maxRange: I(), bypassArmor: B(), attribute: { type: "string", enum: [...ATTRS] } }, ["damage"]);
 const GEAR_NUMBERS = obj({ cost: I(), restricted: B(), singleUse: B(), attack: ATTACK });
 const CUSTOM = obj({ type: { type: "string", enum: [...CUSTOM_TYPES] }, name: S(), description: S(), cost: I(), restricted: B(), singleUse: B(), attack: ATTACK }, ["type", "name"]);
@@ -61,10 +62,12 @@ const SET = obj({
 }, []);
 const OP = obj({
   op: { type: "string", enum: [...OP_KINDS] }, opId: S(), ref: S(), custom: CUSTOM, level: LEVEL,
-  sourceItemId: S(), sourceOpId: S(), powerItemId: S(), powerOpId: S(), grants: { type: "string", enum: ["level", "boost"] }, note: S(),
+  sourceItemId: S(), sourceOpId: S(), powerItemId: S(), powerOpId: S(), note: S(),
   itemId: S(), cascade: B(), set: SET
 }, ["op", "opId"]);
 const REF_NOTE = obj({ ref: S(), note: S() }, ["ref"]);
+/** W4-A-3: replace gear entry = a catalogue gear/vehicleWeapon ref OR a custom item (same fields as addItem custom) */
+const GEAR_ENTRY = obj({ ref: S(), custom: CUSTOM }, []);
 const REPLACE = obj({
   rank: { type: "string", enum: ["teen", "street", "global", "cosmic"] },
   name: S(), attributes: ATTRS_OBJ, texts: TEXTS_OBJ, resources: I(), reputation: I(),
@@ -72,9 +75,9 @@ const REPLACE = obj({
   powers: { type: "array", items: obj({
     ref: S(), level: LEVEL, source: S(), note: S(),
     boosts: { type: "array", items: obj({ ref: S() }, ["ref"]) },
-    limits: { type: "array", items: obj({ ref: S(), grants: { type: "string", enum: ["level", "boost"] } }, ["ref"]) }
+    limits: { type: "array", items: obj({ ref: S() }, ["ref"]) }
   }, ["ref"]) },
-  talents: { type: "array", items: REF_NOTE }, drawbacks: { type: "array", items: REF_NOTE }, item: CUSTOM
+  talents: { type: "array", items: REF_NOTE }, drawbacks: { type: "array", items: REF_NOTE }, gear: { type: "array", items: GEAR_ENTRY }, item: CUSTOM
 }, []);
 
 export const PROPOSAL_SCHEMA = Object.freeze(obj({
@@ -170,6 +173,7 @@ export function checkShape(value, schema, path = "") {
  */
 export function normalize(input, { requireRationale = false } = {}) {
   const errors = [], autoFixed = [];
+  input = stripLegacy(input);
   const shape = checkShape(input, PROPOSAL_SCHEMA);
   for (const s of shape) errors.push({ code: "input.shape", path: s.path, params: { expected: s.expected } });
   if (shape.some((s) => s.path === "(input)")) return { proposal: null, errors, autoFixed };
@@ -178,6 +182,10 @@ export function normalize(input, { requireRationale = false } = {}) {
   p.target ??= "this";
   p.choiceNotes ??= [];
   if (requireRationale && !String(p.rationale ?? "").trim()) errors.push({ code: "input.shape", path: "rationale", params: { expected: "required on submit" } });
+  // W4-A-3: a replace gear entry is a catalogue ref OR a custom item
+  if (isObj(p.proposal) && Array.isArray(p.proposal.gear)) p.proposal.gear.forEach((g, i) => {
+    if (isObj(g) && !!g.ref === !!g.custom) errors.push({ code: "input.shape", path: `proposal.gear[${i}].ref`, params: { expected: "exactly one of ref or custom" } });
+  });
   if (p.mode === "ops") {
     if (!Array.isArray(p.ops) || !p.ops.length) errors.push({ code: "ops.empty", path: "ops", params: {} });
     else if (p.ops.length > OPS_MAX) errors.push({ code: "ops.tooMany", path: "ops", params: { max: OPS_MAX } });
@@ -195,9 +203,9 @@ export function normalize(input, { requireRationale = false } = {}) {
       if (op.op === "addItem") {
         if (!!op.ref === !!op.custom) errors.push({ code: "input.shape", path: `${path}.ref`, opId, params: { expected: "exactly one of ref or custom" } });
         forbid(["itemId", "set", "cascade"]);
-      } else if (op.op === "updateItem") { need("itemId", "required"); needSet(op, path, errors); forbid(["ref", "custom", "level", "sourceItemId", "sourceOpId", "powerItemId", "powerOpId", "grants", "note", "cascade"]); }
-      else if (op.op === "removeItem") { need("itemId", "required"); forbid(["ref", "custom", "level", "sourceItemId", "sourceOpId", "powerItemId", "powerOpId", "grants", "note", "set"]); }
-      else if (op.op === "updateActor") { needSet(op, path, errors); forbid(["ref", "custom", "level", "sourceItemId", "sourceOpId", "powerItemId", "powerOpId", "grants", "note", "itemId", "cascade"]); }
+      } else if (op.op === "updateItem") { need("itemId", "required"); needSet(op, path, errors); forbid(["ref", "custom", "level", "sourceItemId", "sourceOpId", "powerItemId", "powerOpId", "note", "cascade"]); }
+      else if (op.op === "removeItem") { need("itemId", "required"); forbid(["ref", "custom", "level", "sourceItemId", "sourceOpId", "powerItemId", "powerOpId", "note", "set"]); }
+      else if (op.op === "updateActor") { needSet(op, path, errors); forbid(["ref", "custom", "level", "sourceItemId", "sourceOpId", "powerItemId", "powerOpId", "note", "itemId", "cascade"]); }
     });
   } else if (p.mode === "replace") {
     if (!isObj(p.proposal)) errors.push({ code: "input.shape", path: "proposal", params: { expected: "required with mode replace" } });
@@ -229,6 +237,17 @@ export function normalize(input, { requireRationale = false } = {}) {
     for (const k of ["powers", "talents", "drawbacks"]) (Array.isArray(p.proposal[k]) ? p.proposal[k] : []).forEach((x, i) => fixNote(x, "note", `proposal.${k}[${i}].note`));
   }
   return { proposal: p, errors, autoFixed, warnings };
+}
+/** W4-A-2: fields the schema no longer has but old inputs (replays, stored proposals) still carry: dropped silently (a COPY) */
+export function stripLegacy(input) {
+  if (!isObj(input)) return input;
+  const hasOld = (Array.isArray(input.ops) && input.ops.some((o) => isObj(o) && own(o, "grants"))) ||
+    (isObj(input.proposal) && Array.isArray(input.proposal.powers) && input.proposal.powers.some((p) => isObj(p) && Array.isArray(p.limits) && p.limits.some((l) => isObj(l) && own(l, "grants"))));
+  if (!hasOld) return input;
+  const c = clone(input);
+  for (const o of Array.isArray(c.ops) ? c.ops : []) if (isObj(o)) delete o.grants;
+  for (const p of Array.isArray(c.proposal?.powers) ? c.proposal.powers : []) for (const l of isObj(p) && Array.isArray(p.limits) ? p.limits : []) if (isObj(l)) delete l.grants;
+  return c;
 }
 function needSet(op, path, errors) {
   if (!isObj(op.set) || !Object.keys(op.set).length) errors.push({ code: "input.shape", path: `${path}.set`, opId: op.opId, params: { expected: "a non-empty set" } });
@@ -542,6 +561,25 @@ export function levelExists(entry, level) {
   return k <= maxLevelOf(entry);
 }
 
+/* ---- W4-A-4 (D-13 provisional): an effect key's `[attribute]` placeholder filled from the item's note */
+/** attribute key -> what a note may say (lower case, diacritics stripped): the English name, the Polish label and its forms */
+const ATTR_WORDS = Object.freeze({
+  fighting: /^(fighting|walk[aeiy]|walce|walka)$/, agility: /^(agility|zwinnosc\w*|zrecznosc\w*)$/, strength: /^(strength|sil[aeiy]|sile)$/,
+  reason: /^(reason|rozum\w*)$/, intuition: /^(intuition|intuicj\w*)$/, presence: /^(presence|prezencj\w*)$/
+});
+export const ATTR_PLACEHOLDER = /\[attribute\]/gi;
+/** note -> the ONE attribute key it names (English or Polish, any case), else null (none or more than one) */
+export function attributeFromNote(note) {
+  const words = String(note ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/ł/g, "l").replace(/Ł/g, "L").toLowerCase().split(/[^a-z]+/).filter(Boolean);
+  const hit = new Set();
+  for (const w of words) for (const [k, re] of Object.entries(ATTR_WORDS)) if (re.test(w)) hit.add(k);
+  return hit.size === 1 ? [...hit][0] : null;
+}
+/** a key with the attribute placeholder filled ("bonus.[attribute]" + reason -> "bonus.reason") */
+export const fillAttributeKey = (key, attr) => String(key ?? "").replace(ATTR_PLACEHOLDER, attr);
+/** does this key have ONLY attribute placeholders (no other "[...]")? */
+export const onlyAttributePlaceholders = (key) => /\[[^\]]*\]/.test(String(key ?? "")) && !/\[[^\]]*\]/.test(String(key ?? "").replace(ATTR_PLACEHOLDER, ""));
+
 /**
  * The level a power ref pins (W2-1): null for the power's main ref (the entry's own ref, i.e. the basic document of a split
  * power, which takes any `level`) and for non-split powers; the level word for another level document of a split power.
@@ -569,7 +607,6 @@ function buildAdded(op, i, { catalog, err, refItem, actor, byOp }) {
   const bad = (k) => op[k] !== undefined && err("input.shape", op, i, { expected: `not used for a ${type}` }, k);
   if (type !== "power") ["level", "sourceItemId", "sourceOpId"].forEach(bad);
   if (type !== "boost" && type !== "limit") ["powerItemId", "powerOpId"].forEach(bad);
-  if (type !== "limit") bad("grants");
   if (!["power", "talent", "drawback"].includes(type)) bad("note");
   if (type === "power") {
     // split-level powers (W2-1, D-A): the power's main ref (its basic document, the ref in the index) + `level` picks that
@@ -593,7 +630,6 @@ function buildAdded(op, i, { catalog, err, refItem, actor, byOp }) {
     const targetName = target ? baseName(target.name) : (catalog?.get?.(byOp.get(op.powerOpId)?.ref)?.name ?? null);
     if (entry.power && targetName && normBase(entry.power) !== normBase(targetName)) { err("ref.power.mismatch", op, i, { name: entry.name, type, power: entry.power, target: targetName }, "ref"); return null; }
     system.power = pid;
-    if (type === "limit" && op.grants) system._grants = op.grants;   // projection-only marker (never written)
   } else if (type === "drawback" || type === "talent") {
     if (op.note) name = withNote(name, op.note);
   } else if (type === "gear" || type === "vehicleWeapon") {
@@ -607,7 +643,8 @@ function buildAdded(op, i, { catalog, err, refItem, actor, byOp }) {
  * replaceToOps(doc, proposal, { catalog }) -> { ops, errors }
  * Superhero / npc `replace` proposal diffed against the actor: creation items (CREATION_TYPES) with the same type + base name
  * (and, for boosts/limits, the same power) are KEPT with their ids (updated when level/source/note differ); missing ones are
- * added; leftover creation items are removed (dependants before their parents). Gear and injuries are never touched.
+ * added; leftover creation items are removed (dependants before their parents). Injuries are never touched; gear only when the
+ * proposal has a `gear` list (W4-A-3: then replaced like the other lists, same type + name kept).
  * Actor fields go into one updateActor op with the values that differ. Ref errors come back as errors (path proposal.*).
  * W2-2: `src` = { <opId>: { path, name } } and `srcItems` = { <kept itemId>: { path, name } } name the proposal entry each op
  * (or kept sheet item) comes from ("proposal.powers[0]", "proposal.powers[0].boosts[1]", "proposal" for the actor op), so
@@ -693,7 +730,7 @@ export function replaceToOps(doc, proposal, { catalog, plain = null, rank = null
         const bpath = `proposal.powers[${i}].${type}s[${j}]`;
         const bhit = powerLink.itemId ? take(type, be.name, (x) => x.system?.power === powerLink.itemId) : null;
         if (bhit) { srcItems[bhit._id] = { path: bpath, name: be.name }; return; }
-        ops.push({ op: "addItem", opId: from(nextId(type === "boost" ? "bo" : "li"), bpath, be.name), ref: b.ref, ...(powerLink.itemId ? { powerItemId: powerLink.itemId } : { powerOpId: powerLink.opId }), ...(type === "limit" && b.grants ? { grants: b.grants } : {}) });
+        ops.push({ op: "addItem", opId: from(nextId(type === "boost" ? "bo" : "li"), bpath, be.name), ref: b.ref, ...(powerLink.itemId ? { powerItemId: powerLink.itemId } : { powerOpId: powerLink.opId }) });
       });
     }
   });
@@ -708,9 +745,39 @@ export function replaceToOps(doc, proposal, { catalog, plain = null, rank = null
       else ops.push({ op: "addItem", opId: from(nextId(type === "talent" ? "ta" : "dr"), tpath, e.name), ref: t.ref, ...(note ? { note } : {}) });
     });
   }
-  // leftovers: dependants first (boost/limit, talent/drawback, power, source)
-  const order = ["boost", "limit", "talent", "drawback", "power", "powerSource"];
-  const left = pool.filter((x) => !used.has(x._id)).sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type) || String(a._id).localeCompare(String(b._id)));
+  // W4-A-3 (provisional W4-A-c): `gear` given = the gear list is replaced like the other lists (same type + name kept with its id,
+  // a custom entry's cost / restricted / singleUse written when they differ, missing ones added, leftover gear and vehicle weapons
+  // removed); `gear` left out = gear untouched, as before
+  const gearPool = Array.isArray(P.gear) ? actor.items.filter((x) => CUSTOM_TYPES.includes(x.type)) : [];
+  (Array.isArray(P.gear) ? P.gear : []).forEach((g, i) => {
+    const gpath = `proposal.gear[${i}]`;
+    if (!isObj(g)) return;
+    let type, name;
+    if (g.ref) {
+      const e = entryOf(g.ref, `${gpath}.ref`, CUSTOM_TYPES);
+      if (!e) return;
+      type = e.kind; name = e.name;
+    } else if (isObj(g.custom)) {
+      type = CUSTOM_TYPES.includes(g.custom.type) ? g.custom.type : "gear"; name = String(g.custom.name ?? "").slice(0, NAME_MAX);
+    } else return;
+    const hit = gearPool.find((x) => !used.has(x._id) && x.type === type && norm(x.name) === norm(name)) ?? null;
+    if (hit) {
+      used.add(hit._id);
+      srcItems[hit._id] = { path: gpath, name };
+      if (g.custom) {
+        const gear = {};
+        if (Number.isInteger(g.custom.cost) && g.custom.cost !== hit.system?.cost) gear.cost = g.custom.cost;
+        if (typeof g.custom.restricted === "boolean" && g.custom.restricted !== !!hit.system?.restricted) gear.restricted = g.custom.restricted;
+        if (type === "gear" && typeof g.custom.singleUse === "boolean" && g.custom.singleUse !== !!hit.system?.singleUse) gear.singleUse = g.custom.singleUse;
+        if (Object.keys(gear).length) ops.push({ op: "updateItem", opId: from(nextId("ge"), gpath, name), itemId: hit._id, set: { gear } });
+      }
+      return;
+    }
+    ops.push({ op: "addItem", opId: from(nextId("ge"), gpath, name), ...(g.ref ? { ref: g.ref } : { custom: clone(g.custom) }) });
+  });
+  // leftovers: dependants first (boost/limit, talent/drawback, power, source), then gear (only when `gear` is given)
+  const order = ["boost", "limit", "talent", "drawback", "power", "powerSource", "gear", "vehicleWeapon"];
+  const left = [...pool, ...gearPool].filter((x) => !used.has(x._id)).sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type) || String(a._id).localeCompare(String(b._id)));
   for (const x of left) ops.push({ op: "removeItem", opId: from(nextId("rm"), `items.${x._id}`, x.name), itemId: x._id });
   return { ops, errors, defaulted, src, srcItems, kept };
 }

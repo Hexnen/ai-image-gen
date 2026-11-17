@@ -198,11 +198,14 @@ function pushUnsaved(L, unsaved) {
     L.push(`UNSAVED ${u.path} stored=${f(u.stored)} live=${f(u.live)}`);
   }
 }
+/** W4-A-1: vendored warnings the VALID line lists under info (an empty team = a solo hero, D-16; same as validate.mjs QUIET_CODES) */
+const QUIET_TAGS = new Set(["team.empty"]);
 export function validLine(v, profile) {
   let s = `VALID ${v.kind === "creation" ? `baseline profile=${profile ?? "creation"} rank=${v.rank}` : v.kind} ok=${v.ok}`;
+  const warns = v.warnings.filter((w) => !QUIET_TAGS.has(w)), info = [...v.warnings.filter((w) => QUIET_TAGS.has(w)), ...(v.info ?? [])];
   if (v.errors.length) s += ` errors=${v.errors.join(",")}`;
-  if (v.warnings.length) s += ` warns=${v.warnings.join(",")}`;
-  if (v.info?.length) s += ` info=${v.info.join(",")}`;
+  if (warns.length) s += ` warns=${warns.join(",")}`;
+  if (info.length) s += ` info=${info.join(",")}`;
   const b = v.budget;
   if (b) s += ` budget=${b.points} spent=${b.spent} slots=${b.slots}/${b.rankPowers} cap=${b.cap} drawbacks=${b.drawbacks}/${b.maxDrawbacks} xsrc=${b.extraSources} xtal=${b.extraTalents}`;
   return s;

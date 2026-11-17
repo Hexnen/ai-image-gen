@@ -251,8 +251,11 @@ await test("W3-14 tools + guide: applyConfirm, gear in replace, D-19 notes, plac
   assert.match(g, /role \(an English role key\)/);
   assert.match(g, /a build sets Health\/Resolve to max itself/);                     // W3-3
   assert.match(desc("search_catalog"), /every entry except sample heroes \(kinds \["sampleHero"\]\)/);   // D-8
-  // the replace schema still has no gear array (the guide's sentence stays true)
-  assert.equal(proposalToolDefs()[0].input_schema.properties.proposal.properties.gear, undefined);
+  // W4-A-3: the replace schema has an optional gear array ({ref} | {custom}); the guide sentence above changes in W4-T (W4-A-T3)
+  assert.deepEqual(Object.keys(proposalToolDefs()[0].input_schema.properties.proposal.properties.gear.items.properties), ["ref", "custom"]);
+  // W4-A-2: no `grants` in the model-facing schema (ops and replace limits)
+  const sch = JSON.stringify(proposalToolDefs()[0].input_schema);
+  assert.ok(!/grants/.test(sch), "no grants in the schema");
 });
 
 await test("W3-14 dry-run tool result: marked dryRun, no proposalId, summary kept; a submit result has no dryRun mark", () => {

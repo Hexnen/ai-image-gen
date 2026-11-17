@@ -26,7 +26,8 @@ import { chargenStateFromActor, readItem, getCatalogLookup, talentRoleShifts, ta
 import { getCatalog, slug, effectsOf, placeholderKeys } from "./catalog.mjs";
 import {
   PROPOSAL_SCHEMA, PROPOSAL_GUIDE, LEVEL_WORDS, normalize, project, replaceToOps, selectOps, expectFor, checkStale, toPlainActor, asDoc,
-  customItemData, levelExists, powerLevel, baseName, noteOf, norm, normBase, hash, stableJson, summarize, getPath, CUSTOM_TYPES, resolveRank, NEW_PREFIX
+  customItemData, levelExists, powerLevel, baseName, noteOf, norm, normBase, hash, stableJson, summarize, getPath, CUSTOM_TYPES, resolveRank, NEW_PREFIX,
+  attributeFromNote, fillAttributeKey, onlyAttributePlaceholders
 } from "./proposal.mjs";
 
 export const PROFILES = Object.freeze(["creation", "in-play"]);
@@ -40,6 +41,8 @@ export const STRUCTURAL = Object.freeze(new Set([
   "power.level.massive", "power.level.none", "power.source.missing", "limit.grant.missing", "limit.grant.invalid", "drawbacks.max",
   "talent.duplicate", "drawback.duplicate", "link.power.missing", "link.source.missing", "attr.range"
 ]));
+/** vendored warnings the validator reports as info (W4-A-1: an empty team = a solo hero, D-16) */
+export const QUIET_CODES = Object.freeze(new Set(["team.empty"]));
 /** budget arithmetic: info (with the delta) under in-play */
 export const BUDGET_CODES = Object.freeze(new Set(["attr.over", "attr.unspent", "budget.range"]));
 export const NPC_ATTR = Object.freeze({ min: 0, max: 12 });   // system model range (spec 7.4)
@@ -111,7 +114,9 @@ export const MESSAGES = Object.freeze({
   "attr.over": (p) => ({ message: `${p.over} attribute points too many (budget ${p.budget}).`, hint: `Lower attributes by ${p.over} in total, or free points (drop a boost/level, take a drawback).` }),
   "attr.unspent": (p) => ({ message: `${p.left} attribute points are unspent (budget ${p.budget}).`, hint: `Raise attributes by ${p.left} in total, each within 1..cap.` }),
   "occupation.missing": () => ({ message: "The occupation is missing.", hint: "Set texts.occupation (it decides Resources and the occupation talent)." }),
-  "talent.occ.missing": () => ({ message: "The occupation talent is missing.", hint: "Add a second talent (the occupation talent)." }),
+  // W4-A-5: say what to do when the GM asked to remove it (the rules need one in BOTH profiles: in-play blocks it too, a NEW error)
+  "talent.occ.missing": (p) => ({ message: `The occupation talent (the second talent${p.occupation ? `, from the ${p.occupation} list` : ""}) is missing; the rules need one in every profile.`,
+    hint: `Keep two talents: ${p.list ? `replace the occupation talent with another one from the ${p.occupation} list (${p.list})` : "add an occupation talent from the occupation's list as the second talent"} instead of removing it. If the GM wants it gone anyway, do not submit the removal: say in one sentence that the rules need an occupation talent and the GM can remove it by hand on the sheet.` }),
   "resources.invalid": (p) => ({ message: `Resources ${p.resources} is invalid for a hero with an occupation.`, hint: "Set resources to the occupation's value (at least 1)." }),
   // W3-7 (finding 8, D-15 provisional): an empty relationships text is "no NPC relationship written", not "a nameless NPC"
   "npc.name.blank": (p) => (p.line
@@ -129,7 +134,8 @@ export const MESSAGES = Object.freeze({
   "heroName.empty": () => ({ message: "The hero name is empty.", hint: "Set the actor name." }),
   "civilianName.empty": () => ({ message: "The civilian name is empty.", hint: "Set texts.civilianName." }),
   "team.join.missing": () => ({ message: "The team base to join is missing.", hint: "Name the team in texts.team." }),
-  "team.empty": () => ({ message: "No team or team base given.", hint: "Set texts.team / texts.teamBase." }),
+  // W4-A-1 (D-16): an empty team is a solo hero, not a defect: quiet info (validator; the vendored rules keep their warning)
+  "team.empty": () => ({ message: "No team and no team base: a solo hero.", hint: "Nothing to fix (a solo hero keeps team and teamBase empty)." }),
   "upgrades.over": (p) => ({ message: `${p.count} team-base upgrades; the rank allows ${p.max}.`, hint: "Remove upgrades from texts.teamBase." }),
   // npc / items
   "attr.range": (p) => ({ message: `Attribute ${A(p.attr)} must be a whole number in ${NPC_ATTR.min}..${NPC_ATTR.max}.`, hint: "NPC attributes have no budget but must stay in range." }),
@@ -148,13 +154,15 @@ export const MESSAGES = Object.freeze({
   "note.cut": (p) => ({ message: `A note is longer than ${p.max} characters (${p.length}); it is cut to "${p.kept}".`, hint: `Keep notes short (at most ${p.max} characters).` }),
   "remove.handEdited": (p) => ({ message: `Removes ${p.custom ? "custom" : "hand-edited"} item "${p.name}".`, hint: "The GM sees it in the preview; say why in choiceNotes." }),
   "field.sensitive": (p) => ({ message: `Writes ${p.field}, which is only changed when the GM asked for it.`, hint: "Leave it out unless the GM asked." }),
-  // W3-6: info, not a warning: the budget never used `grants` (slot counts are the same either way), only the text contradicted
-  "grants.heuristic": (p) => ({ message: `Limit "${p.name}": grants "${p.asked}" does not change the cost; the sheet reads it as paying for a ${p.read} (a level when its power is above Basic, else a boost).`, hint: "Nothing to fix." }),
   "gear.cost": (p) => ({ message: `Gear "${p.name}" cost ${p.cost} at Resources ${p.resources}.`, hint: "Information only; the GM decides what the hero can afford." }),
   // W3-9 (finding 3; D-13 undecided, so no writer substitution): the model names the choice in the note, the GM edits the effect
+  // W4-A-4 (D-13 provisional): the writer fills "[attribute]" from the note of an ADDED item; this warning stays when it cannot
   "effect.placeholder": (p) => ({ message: `${p.type ? `${p.type[0].toUpperCase()}${p.type.slice(1)} ` : ""}"${p.name}" has an effect with a choice left open (${(p.keys ?? []).join(", ")}).`,
-    hint: p.noted ? "Nothing to fix: the note names the choice; the GM sets the effect." : p.canNote ? "Write the choice (e.g. the attribute) in the item's note; the GM sets the effect." : "Name the choice in choiceNotes; the GM sets the effect.",
+    hint: p.attrOnly && p.isNew && p.canNote
+      ? (p.noted ? "The note names no single attribute, so the effect stays open: write one attribute in the note (Fighting, Agility, Strength, Reason, Intuition or Presence; the GM's language is fine) and the builder sets the effect." : "Write the attribute in the item's note (Fighting, Agility, Strength, Reason, Intuition or Presence; the GM's language is fine); the builder then sets the effect.")
+      : p.noted ? "Nothing to fix: the note names the choice; the GM sets the effect." : p.canNote ? "Write the choice (e.g. the attribute) in the item's note; the GM sets the effect." : "Name the choice in choiceNotes; the GM sets the effect.",
     gm: `The effect of "${p.name}" still has the placeholder key ${(p.keys ?? []).join(", ")}: edit the effect by hand after Apply (the builder does not fill it in).` }),
+  "effect.filled": (p) => ({ message: `${p.type ? `${p.type[0].toUpperCase()}${p.type.slice(1)} ` : ""}"${p.name}": the builder writes the effect key ${(p.keys ?? []).join(", ")} as ${(p.filled ?? []).join(", ")} (from the note; value as in the entry).`, hint: "Nothing to fix." }),
   "profile.suggestInPlay": () => ({ message: "The current sheet already fails the creation rules.", hint: "The GM may switch the drawer to the in-play profile (no new errors)." }),
   "budget.delta": (p) => ({ message: `Under creation rules this change ${p.delta < 0 ? `costs ${-p.delta}` : `frees ${p.delta}`} attribute point(s) (budget ${p.before} -> ${p.after}, spent ${p.spentBefore} -> ${p.spentAfter}).`, hint: "In-play: informational only." }),
   "talent.role.shift": (p) => ({ message: `Talent "${p.name}" ${p.listed ? `is listed as the ${p.from} talent but will be` : `is the ${p.from} talent now and will be`} the ${p.to} talent after this change: the role follows the order of the talents on the sheet (1st hero, 2nd occupation, the rest extras) and a new talent is always added last.`, hint: "If that is not intended, also remove and re-add the talents that must come after the new one, in role order; otherwise ignore this." }),
@@ -206,7 +214,14 @@ function catalogueIssues(plain, catalog) {
 export function superheroIssues(plain, rank, catalog) {
   const state = stateOf(plain, rank);
   const v = rules.validate(state);
-  const out = v.issues.filter((i) => i.code !== "drawback.note.missing").map((i) => issue(i.code, i.severity === "warn" ? "warn" : i.severity, i.path, i.params));
+  // W4-A-1: team.empty is info here (a solo hero, D-16), never a warning that asks for a fix
+  const out = v.issues.filter((i) => i.code !== "drawback.note.missing").map((i) => issue(i.code, QUIET_CODES.has(i.code) ? "info" : i.severity === "warn" ? "warn" : i.severity, i.path, i.params));
+  // W4-A-5: the occupation talent's list for the hint
+  const occMiss = out.find((i) => i.code === "talent.occ.missing");
+  if (occMiss) {
+    const occ = (catalog?.byKind?.("occupation") ?? []).find((o) => norm(o.name) === norm(String(state.occupation ?? "").replace(/^the\s+/i, "")));
+    if (occ) occMiss.params = { ...occMiss.params, occupation: occ.name, ...(occ.talents?.length ? { list: occ.talents.join(", ") } : {}) };
+  }
   // D-3 (provisional): Hard Times stays the pack's -1; say which Resources value to store and what the sheet then shows
   const ht = out.find((i) => i.code === "drawback.hardTimes");
   if (ht) {
@@ -472,6 +487,9 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
   const touchesHT = Object.values(proj.opInfo).some((x) => x.type === "drawback" || (x.cascade ?? []).some((c) => c.type === "drawback") ||
     (x.kind === "actor" && (x.changed ?? []).some((c) => c.path === "system.resources")));
   if (P.mode !== "replace" && !touchesHT) acc.info = acc.info.filter((x) => x.code !== "drawback.hardTimes");
+  // W4-A-1: the solo-hero remark only in a replace (a build) or when the change writes team / teamBase
+  const touchesTeam = Object.values(proj.opInfo).some((x) => x.kind === "actor" && (x.changed ?? []).some((c) => c.path === "system.team" || c.path === "system.teamBase"));
+  if (P.mode !== "replace" && !touchesTeam) acc.info = acc.info.filter((x) => x.code !== "team.empty");
   // item data of AI-defined items (DataModel; runtime only)
   const itemCheck = opts.itemCheck ?? foundryItemCheck;
   ops.forEach((op, i) => {
@@ -546,13 +564,6 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
     }
     if (!opts.allowVitals) for (const c of info.changed ?? []) if (/karma|derived\.\w+\.value/.test(c.path ?? "")) acc.warnings.push({ code: "field.sensitive", path: c.path, opId: opIdOf(proj, info), params: { field: c.path.replace(/^system\./, "") } });
   }
-  // W3-6: `grants` never changes the cost (the sheet has no field for it; the reader decides by the power's level): info only
-  for (const it of proj.actor.items) {
-    if (it.type !== "limit" || !it.system?._grants) continue;
-    const pw = proj.actor.items.find((x) => x._id === it.system.power);
-    const read = limitReading(pw);
-    if (read !== it.system._grants) acc.info.push({ code: "grants.heuristic", opId: String(it._id).replace(/^new:/, ""), params: { name: it.name, read, asked: it.system._grants } });
-  }
   // W3-9: an item this change adds (in a creation replace: any item of the result) whose effect key still has a placeholder
   // ("bonus.[attribute]"). Added items: the catalogue entry's effects (the projection carries none); sheet items: their own.
   for (const it of proj.actor.items) {
@@ -562,8 +573,14 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
     const entry = isNew ? (catalog?.get?.(it._ref) ?? catalog?.findByName?.(it.type, baseName(it.name))) : null;
     const keys = own.length ? own : entry?.placeholders ?? [];
     if (!keys.length) continue;
-    acc.warnings.push({ code: "effect.placeholder", path: `items.${it._id}`, ...(isNew ? { opId: it._id.slice(NEW_PREFIX.length) } : {}),
-      params: { name: baseName(it.name), type: it.type, keys, noted: !!noteOf(it.name), canNote: ["power", "talent", "drawback"].includes(it.type) } });
+    const at = { path: `items.${it._id}`, ...(isNew ? { opId: it._id.slice(NEW_PREFIX.length) } : {}) };
+    const canNote = ["power", "talent", "drawback"].includes(it.type);
+    const attrOnly = keys.every(onlyAttributePlaceholders);
+    // W4-A-4 (D-13 provisional): an ADDED item whose open keys are all "[attribute]" and whose note names one attribute is filled
+    // by the writer (writer.mjs fillAttributeEffects): info, not a warning
+    const attr = isNew && canNote && attrOnly ? attributeFromNote(noteOf(it.name)) : null;
+    if (attr) acc.info.push({ code: "effect.filled", ...at, params: { name: baseName(it.name), type: it.type, keys, filled: keys.map((k) => fillAttributeKey(k, attr)), attr } });
+    else acc.warnings.push({ code: "effect.placeholder", ...at, params: { name: baseName(it.name), type: it.type, keys, noted: !!noteOf(it.name), canNote, attrOnly, isNew } });
   }
   // W3-12 (D-17 provisional): gear cost next to the hero's Resources, info only (no rule enforced), for gear this change adds or
   // re-prices
@@ -628,7 +645,7 @@ async function resolveLookup(l) {
 
 /* ---- W2-2: replace issues in the proposal's own terms */
 /** op field (after "ops[i].") -> the proposal field of the same entry */
-const OP_FIELD = { ref: ".ref", level: ".level", note: ".note", grants: ".grants", sourceItemId: ".source", sourceOpId: ".source",
+const OP_FIELD = { ref: ".ref", level: ".level", note: ".note", sourceItemId: ".source", sourceOpId: ".source",
   "set.level": ".level", "set.note": ".note", "set.powerSourceItemId": ".source", "set.powerSourceOpId": ".source" };
 /** chargen state path (vendored rules / creationIssues) -> proposal path */
 const STATE_PATH = { attrs: "proposal.attributes", occupation: "proposal.texts.occupation", resources: "proposal.resources",

@@ -40,6 +40,7 @@
 import { ATTRS, LEVEL_WORDS, getPath, norm, normBase, plainText, powerLevelOf, unsavedFrom, automationsOf } from "./reader.mjs";
 import { clone, fingerprint, readJournal, pruneJournal, findRun, selectEntries, driftOf, undoOrder, describeRun, UNDO_TTL } from "./undo.mjs";
 import { baseName, noteOf, withNote, cleanNote } from "./names.mjs";
+import { attributeFromNote, fillAttributeKey, onlyAttributePlaceholders } from "./proposal.mjs";
 
 export const MODULE_ID = "moinens-ai-gen";
 export const JOURNAL_PATH = `flags.${MODULE_ID}.undo`;
@@ -188,6 +189,36 @@ export function customItemData(c, randomID) {
   d.system.automations = {};
   if (c.attack) { const id = randomID(); d.system.automations[id] = attackAutomation(c.attack, id); }
   return d;
+}
+
+/**
+ * W4-A-4 (D-13 provisional): fill the "[attribute]" placeholder of a catalogue item's effect keys ("bonus.[attribute]") with the
+ * attribute its note names (English or Polish, any case; proposal.mjs attributeFromNote). Only keys whose open parts are all
+ * "[attribute]"; values untouched. Mutates `data` (the item data about to be created / swapped in).
+ * -> { filled: [{ from, to }], open: [key] } (open = placeholder keys left as they are: no note, no single attribute, other placeholder)
+ */
+export function fillAttributeEffects(data, note) {
+  const out = { filled: [], open: [] };
+  const attr = note ? attributeFromNote(note) : null;
+  for (const e of Array.isArray(data?.effects) ? data.effects : []) {
+    for (const list of [e?.system?.changes, e?.changes]) {
+      if (!Array.isArray(list)) continue;
+      for (const c of list) {
+        const key = String(c?.key ?? "");
+        if (!/\[[^\]]*\]/.test(key)) continue;
+        if (attr && onlyAttributePlaceholders(key)) { c.key = fillAttributeKey(key, attr); out.filled.push({ from: key, to: c.key }); }
+        else out.open.push(key);
+      }
+    }
+  }
+  return out;
+}
+/** plan side of fillAttributeEffects: info when filled (a placeholder left open is the validator's warning effect.placeholder,
+    which apply carries on success; not repeated here, the validator joins plan warnings into the model's result) */
+function fillPlan(p, opId, data, note) {
+  const f = fillAttributeEffects(data, note);
+  if (f.filled.length) p.info.push(msg("effect.filled", `"${data.name}": effect key ${f.filled.map((x) => `${x.from} -> ${x.to}`).join(", ")} (from the note).`, { opId, filled: f.filled }));
+  return f;
 }
 
 const isObj = (x) => !!x && typeof x === "object" && !Array.isArray(x);
@@ -463,6 +494,8 @@ export function createWriter(deps = {}) {
       }
       const note = writeNote(op.note);
       if (note) { if (["power", "talent", "drawback"].includes(type)) data.name = withNote(data.name, note); else W("op.note.ignored", `a note is only written on powers, talents and drawbacks (op ${opId})`, { opId }); }
+      // W4-A-4 (D-13 provisional): "[attribute]" in this item's effect keys <- the attribute its note names
+      if (op.custom == null && ["power", "talent", "drawback"].includes(type)) fillPlan(p, opId, data, note);
       const links = {};
       let dependsOn = null;
       if (type === "power") {
@@ -586,6 +619,7 @@ export function createWriter(deps = {}) {
         }
       }
       if (swapData) {
+        fillPlan(p, opId, swapData, noteOf(swapData.name));   // W4-A-4: the new level document's placeholders, from the kept note
         const after = { ...clone(swapData), _id: id };
         proj.set(id, after);
         p.swaps.push({ opId, id, name: it.name, from: changes.find((c) => c.swap)?.from, to: changes.find((c) => c.swap)?.to });
