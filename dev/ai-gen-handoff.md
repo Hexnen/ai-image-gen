@@ -69,3 +69,9 @@
 - W2-2 (D-B): w replace wszystkie błędy/ostrzeżenia mają ścieżki propozycji (`proposal.powers[0].level`, `proposal.attributes`, `proposal.talents[1]`) i `entry` (nazwa); `opId` zostaje. `replaceToOps` zwraca `src`, `srcItems`, `kept`.
 - W2-5 (D-F, D-K, D-Q): perOp bez delty `spent` (`spentAfter` + etykieta "attributes spent a -> b"), limit "pays for a boost/level of X (no slot for it)", `budget.note`; Hard Times bez liczby z książki dla modelu (pole `gm` tylko dla MG); podsumowanie z wartościami reputacji/Resources i linią "kept". Spec 7.5 pkt 4 zaktualizowany.
 - Commity `3ed9750`, `36f0ed5` (UWAGA: zawiera też wczesne hunki W2-3 w `validate.mjs`), `2893f36`. Teksty dla W2-8, wybory W1-1/W2-a/W5-1..W5-5, testy: `dev/wave2-notes.md` (sekcja W2-1/W2-2/W2-5).
+
+## 2026-11-17 W2-3 / W2-4: rola talentu w karcie, chudsze get_entries, dane zawodu i archetypu (analiza próby na sucho 2)
+- W2-3 (D-C): talenty bohatera w bloku `<sheet>` w kolejności kolekcji z `role=hero|occupation|extra` (spec 6.0 zaktualizowana: tylko format linii). Kolejność kolekcji przeżywa przeładowanie (kod serwera v14 + tor 8). Nowy talent zawsze na koniec, więc walidator ostrzega `talent.role.shift` (ops i replace), przed stopem L2. Funkcje czyste w `reader.mjs`.
+- W2-4 (D-G, D-H): get_entries bez `slotNote`, `levels` tylko dla mocy dzielonych (inaczej `maxLevel`), automatyzacje jako nazwy, `gear.attack`; zawód: `resources` + `talents`; archetyp: `structured` także bez plus-ultra (`archetypeFacts`, na żywo zgodne z plus-ultra 16/16). Linia zawodu w indeksie: `ref|name|resources|occupation talents|summary`.
+- Zmierzone na torze 8: indeks +862 znaków (~+246 tok), reszta indeksu bajt w bajt ta sama; get_entries na wpis -20..-44 % (moce -35 %, talenty -40 %), zawód/archetyp -1/-5 %. sampleHero nietknięte (D-8).
+- Commity `c1eaed3`, `6eaacac` (+ dokumenty). Teksty dla W2-8, wybory W3-1..W4-6, pomiary, testy: `dev/wave2-notes.md` (sekcja W2-3/W2-4).

@@ -315,7 +315,7 @@ I abc123 powerSource "Radioactive spider bite" custom
 I def456 power "Wall-Crawling" lvl=basic src=abc123 ref=powers:Xy12 fx=-
 I ghi789 power "Super-Strength" lvl=major src=abc123 ref=powers:Ab34
 I jkl012 boost "..." pow=ghi789 ref=boosts:Cd56
-I mno345 talent "Quick Reflexes" ref=talents:Ef78 fx=initiativeSize+1
+I mno345 talent "Quick Reflexes" role=hero ref=talents:Ef78 fx=initiativeSize+1
 I pqr678 drawback "Hard Times" ref=drawbacks:WS54 fx=resources-1
 I stu901 gear "Camera" custom cost=2 desc="Hand-edited: ..."
 FX actor "Stunned" disabled
@@ -323,6 +323,7 @@ UNSAVED system.appearance stored="" live="Red and blue suit..."
 VALID creation ok=false errors=attr.unspent(3) budget=34 spent=31 slots=3/4 cap=10
 </sheet>
 ```
+- **[CHANGED W2-3]** Superhero talents carry `role=hero|occupation|extra` and keep the actor's collection order (the order IS the role, as plus-ultra import.mjs reads it: 1st hero, 2nd occupation when the occupation text is set, the rest extras; the item `sort` field plays no part). Other items stay in tree/name order. New items are always appended, so replacing the hero or occupation talent shifts roles: the validator warns `talent.role.shift`.
 - Item descriptions are NOT repeated for catalogue items (the model gets the rules text by `ref` through `get_entries`, cached in the conversation once read); only custom or hand-edited items carry `desc=` (plain text, cap 400 chars, marked when cut).
 - Automations appear only as a short `auto=` tag when they differ from the pack copy or carry a custom script flag; the script body is never sent.
 - Line keys for diffing: `ATTR`, `TEXT.<field>` (TEXT is split one field per line when it is long), `I <itemId>`, `FX <effectId>`, `UNSAVED <path>`, `VALID`.

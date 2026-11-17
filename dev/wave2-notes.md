@@ -86,3 +86,58 @@ Mój commit W2-2 (`36f0ed5`, `git commit <ścieżki>`) objął `validate.mjs` ra
 - `test-build-validate-invincible` 41 (+3: W2-1 ref bazowy + level w ops/replace, konflikt odwrotny z `mainRef`; W2-2 ścieżki L1/L2/wynik narzędzia/pozostałości, ops bez zmian; W2-5 Hard Times bez liczby z książki w wyniku modelu i z `gm` u MG; budżet: nota, `spentAfter`, etykiety limitu dodanego i usuniętego, `kept`). Zmienione: asercja `perOp` bez `spent`, test Hard Times P1-F, `deepEqual` wyniku `replaceToOps` (nowe pola).
 - Reszta `dev/test-*.mjs` zielona (ops 34, snapshot 32, catalog 20, harness 31, packs 23, prompt-texts 11, transport 27, dry-transport 12, enhance 22, migrate-id 18, vendor OK).
 - Nie sprawdzone na żywo (tor nieużyty): prawdziwy katalog (czy każdy prawdziwy podzielony Major/Massive ma dokument bazowy jako ref indeksu; tak wynika z `catalog.mjs:281`), prawdziwy model.
+
+## W2-3, W2-4: rola talentu w karcie, chudsze get_entries, dane zawodu i archetypu (D-C, D-G, D-H)
+
+Data: 2026-11-17. Pliki: `reader.mjs`, `snapshot.mjs`, `catalog.mjs`, `validate.mjs` (tylko ostrzeżenie `talent.role.shift`: komunikat, funkcja `talentShifts`, jeden blok przed stopem L2), testy `dev/test-build-snapshot.mjs`, `dev/test-catalog-invincible.mjs`; spec 6.0 (tylko format linii talentu). `tools.mjs` bez zmian (niepotrzebne). Wendor bez zmian (`sync.mjs --check` OK). Commity `c1eaed3` (W2-3), `6eaacac` (W2-4) i commit dokumentów.
+
+### Defekty sprawdzone przed zmianą
+- D-C: potwierdzone. `snapshot.mjs` sortował talenty po nazwie (`orderItems`), rola brała się z kolejności kolekcji (`reader.mjs` `chargenStateFromActor`, talenty[0]/[1]), skrót zasad mówi „pierwszy talent = talent bohatera”. W `dry2-spider` blok pokazywał "Knowledgeable (Natural Sciences)" przed "Sharp-Tongued" (talent bohatera); model zapisał to w friction-log (pkt 4).
+- D-G: potwierdzone w kodzie (`slotNote` w każdym wpisie, `levels` z tym samym refem dla mocy niedzielonych, pełne automatyzacje) i w `dry2-*`: wyniki get_entries 10 wywołań, 39,2k znaków; `slotNote` 5,9k, automatyzacje 4,4k, `levels` 1,2k.
+- D-H: potwierdzone: `occupationFacts` było w katalogu, ale get_entries zwracał tylko `rulesText`; linia zawodu w indeksie `ref|name|summary`; archetyp miał `structured` tylko z plus-ultra. W `dry2-*` zawód czytany drugi raz w 3 z 4 budów.
+
+### Czy op może zachować rolę (zbadane)
+- Kolejność kolekcji = kolejność tablicy `items` w `_source`. Serwer v14 zapisuje w dokumencie rodzica uporządkowaną listę id (`EmbeddedCollectionField._dbWrite`) i odczytuje ją `getMany` w tej kolejności (`resources/app/dist/database/fields-extensions.mjs`), więc kolejność przeżywa przeładowanie [V: kod serwera + tor 8: kolejność i role te same po przeładowaniu strony]. Pole `sort` (przeciąganie na karcie) nie ma wpływu na rolę.
+- Writer dokłada nowe przedmioty zawsze na koniec (fazy tworzenia, w kolejności op). Zamiana talentu bohatera (remove + add) przesuwa więc role: dawny talent zawodu zostaje talentem bohatera, nowy talentem zawodu. Op nie może tego uniknąć, chyba że model usunie i doda ponownie talenty, które mają stać za nowym (test: wtedy brak ostrzeżenia).
+- Dlatego: ostrzeżenie `talent.role.shift` (ops: rola zachowanego talentu inna niż teraz; replace: rola inna niż wynika z miejsca w `proposal.talents`; zachowane przedmioty replace zostają na swoich miejscach). Liczone przed stopem L2, więc model widzi je razem z błędami reguł. W replace ścieżkę przepisuje mechanizm W2-2 (`proposal.talents[i]`).
+
+### Co zmienione
+- W2-3: `talentRoles`, `talentRolesOf`, `talentRoleShifts` w `reader.mjs` (czyste). `readActor` daje wierszom talentów bohatera `role`; linia: `I <id> talent "Nazwa" role=hero|occupation|extra ref=...`. Talenty w kolejności kolekcji, reszta przedmiotów bez zmian (drzewo/nazwa). Zmiana roli = linia `~` w `<sheet_update>` (klucz linii to id, więc kolejność nie robi diffu). NPC bez `role=`.
+- W2-4 get_entries: bez `slotNote` (żaden rodzaj); moc: `split: true` + `levels` tylko dla mocy dzielonych, inaczej `maxLevel`; bez `splitLevels`; `automations` = same nazwy (typ, gdy nazwy brak); `script: true` także gdy skrypt ma automatyzacja; gear/vehicleWeapon: `gear.attack { bonus, damage, range, bypassArmor? }`; zawód: `resources` + `talents` (nazwy); archetyp bez danych z plus-ultra: `structured { role, attrs, powers:[{ name, level, ref, boosts:[{name, ref}], note? }] }` z nowego `archetypeFacts(html, cat)` (ten sam odczyt co plus-ultra `parseArchetypes`).
+- W2-4 indeks: sekcja zawodów `ref|name|resources|occupation talents|summary`. Pozostałe linie indeksu bajt w bajt bez zmian (sprawdzone na żywo). sampleHero nietknięte (D-8).
+
+### Zmierzone (tor 8, kopia świata invincible, prawdziwe invincible-core, plus-ultra aktywny; tylko liczby)
+- Indeks: 52 370 -> 53 232 znaków (+862, ~+246 tok przy znaki/3,5). Prefiks statyczny z próby R2 81 200 -> ~82 062 znaków (~23,2k -> ~23,4k tok). Zmiana prefiksu = jeden ponowny zapis cache (najlepiej razem z W2-8).
+- get_entries, średnia znaków JSON na wpis, przed -> po (zmiana sumy): power 1229 -> 805 (-35 %), boost 441 -> 321 (-27 %), limit 488 -> 272 (-44 %), powerSource 324 -> 194 (-40 %), talent 475 -> 286 (-40 %), drawback 750 -> 598 (-20 %), gear 374 -> 281 (-25 %), vehicleWeapon 402 -> 288 (-28 %), occupation 943 -> 935 (-1 %: `slotNote` zamieniona na `resources`/`talents`), archetype 2198 -> 2091 (-5 %), npcProfile 622 -> 561 (-10 %), sampleHero 1972 -> 1901 (-4 %).
+- Na mieszance rodzajów z R2 (moce, talenty, wady, źródła, zawody, archetypy) to około -30 % tekstu wyników get_entries; do tego zawód nie wymaga już czytania (Resources i talenty w indeksie), co w R2 było 1 wywołaniem w 3 z 4 budów. Oszacowanie, nie pomiar na modelu.
+- Zawody: 22/22 mają Resources i 3 talenty. Archetypy (`archetypeFacts`): 16/16 z rolą, 6 atrybutami i mocami; 62/62 mocy i 6/6 boostów z refem; zgodność z plus-ultra `getArchetype`: nazwy mocy 16/16, poziomy 16/16, atrybuty 16/16, rola 16/16.
+- W2-3 na żywo: aktor ZZ-W23 z 3 talentami tworzonymi w kolejności innej niż alfabetyczna: blok w kolejności tworzenia, role hero/occupation/extra; po przeładowaniu strony to samo; walidacja usunięcia talentu bohatera + dodania nowego daje 2 x `talent.role.shift` (2. talent occupation -> hero, 3. extra -> occupation), warstwa L4. Aktor usunięty, świat toru przywrócony (`lane8.ps1 restore`), slot oddany.
+
+### Teksty do zmiany w W2-8 (prefiks; tu NIE ruszane)
+- `rules-digest.mjs` l. 48 (talenty): "Order sets the role: the first talent (on the sheet and in a proposal's list) is the hero talent..." -> rola jest widoczna jako `role=` na linii talentu; nowy talent zawsze trafia na koniec, więc zamiana talentu bohatera/zawodu przesuwa role (ostrzeżenie `talent.role.shift`; żeby zachować role, usuń i dodaj ponownie talenty, które mają stać za nowym); w replace lista nadal w kolejności bohater, zawód, reszta.
+- `rules-digest.mjs` l. 52 (zawód): wspomnieć, że indeks podaje Resources i talenty zawodu w kolumnach, get_entries zawodu zbędne przy budowie.
+- `tools.mjs` opis `get_entries`: usunąć "and a slot/cost note"; "levels (split-level powers: one ref per level)" -> "levels only for split powers (one ref per level), else maxLevel"; "automations (numbers only)" -> "automation names"; zawód: pola `resources` i `talents`; archetyp: `structured` (rola, atrybuty, moce z refami) zawsze, nie tylko z plus-ultra.
+- `harness-prompt.mjs` (D-O razem z W2-8): zawód można wybrać z indeksu bez get_entries.
+- Nagłówek indeksu (`catalog.mjs indexText`, kod, już zmieniony): kolumny zawodu; przy W2-8 sprawdzić, czy skrót zasad nie opisuje kolumn inaczej.
+
+### Otwarte wybory (zachowanie tymczasowe)
+| # | Pytanie | Zachowanie tymczasowe |
+|---|---------|------------------------|
+| W3-1 | Przesunięcie ról przy zamianie talentu | Tylko ostrzeżenie. Alternatywa: writer sam usuwa i tworzy ponownie (z `keepId`) talenty stojące za nowym, żeby trafiły za niego (id zostają, rola zachowana); więcej zapisów i grup cofania. |
+| W3-2 | `role=` dla NPC | Brak (NPC nie ma ról talentów). |
+| W3-3 | Brak tekstu zawodu | 2. talent = `extra` (jak plus-ultra import.mjs i walidator). |
+| W4-1 | `slotNote` | Nigdy (nie "raz na rodzaj"): wszystko jest w skrócie zasad, a rzeczy właściwe dla wpisu są polami (`maxLevel`, `levels`, `power`, `needs`, `gear`). |
+| W4-2 | Automatyzacje | Same nazwy; liczby ataku tylko dla gear/vehicleWeapon w `gear.attack`; moce mają liczby w `rulesText`. |
+| W4-3 | Talenty zawodu | Nazwy (bez refów) w indeksie i w get_entries; ref model bierze z indeksu talentów; "Knowledgeable" = każdy wariant (skrót zasad). |
+| W4-4 | Archetyp | `structured` z plus-ultra, gdy odpowie; inaczej `archetypeFacts` (ten sam kształt, na żywo zgodny 16/16). Alternatywa: zawsze własny odczyt (bez zależności od plus-ultra). |
+| W4-5 | `rulesText` zawodu | Zostaje (opis zawodu, relacje). Do decyzji: pominąć, gdy są `resources`/`talents` (~-0,6..0,8k znaków na odczyt zawodu). |
+| W4-6 | Kolumny zawodu w indeksie | Nazwy talentów pełne (bez skrótów), separator ", ". |
+
+### Uwaga o commicie W2-2
+Commit `36f0ed5` (agent W2-1/2/5) objął wczesne hunki W2-3 w `validate.mjs` bez `reader.mjs`; HEAD nie importował się do czasu mojego `c1eaed3` (reader + przeniesienie bloku przed stop L2). Po `c1eaed3` sprawdzone na czystym `git archive HEAD`: snapshot 32, catalog 20, validate 41.
+
+### Testy
+- `test-build-snapshot` 32 (+4: role w kolejności kolekcji / bez zawodu / NPC bez roli / zgodność ze stanem chargen; zmiana roli = linie `~`; `talentRoleShifts` czyste; `talent.role.shift` w ops (zamiana bohatera, dodanie extra bez ostrzeżenia, ponowne dodanie zawodu bez ostrzeżenia) i w replace (odwrócona lista)); zmienione: test kolejności (talenty wyłączone) i linia talentu z `role=hero`.
+- `test-catalog-invincible` 20 (+1: `archetypeFacts` z refami, poziomem dokumentu podzielonego, boostem, notatką, brakującą mocą; get_entries bez plus-ultra; zmienione: get_entries bez `slotNote`/`levels` dla niedzielonych, automatyzacje jako nazwy; P1-F: linia zawodu z Resources/talentami, `-` bez danych, get_entries zawodu).
+- Wszystkie `dev/test-*.mjs` zielone; `sync.mjs --check` OK.
+- Niesprawdzone: zachowanie prawdziwego modelu z `role=` i nowymi polami (powtórka próby na sucho, W2-13); `count_tokens` (T8); szuflada T7.
