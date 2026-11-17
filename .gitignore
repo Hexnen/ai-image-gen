@@ -1,2 +1,9 @@
 node_modules/
 *.log
+# local review material (screenshots may show book text / comic art: never commit)
+dev/screenshots/
+# build/release artefacts and local dry-run state
+*.zip
+relay.json
+dry-*/
+.claude/
