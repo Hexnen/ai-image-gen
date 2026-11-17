@@ -24,3 +24,9 @@
 - Linie podpięcia: `module.mjs` (dynamiczny import `build/builder-api.mjs` dla MG), `settings.mjs` (`registerBuildSettings()` w `init`), `call-log.mjs` (`cacheRead`, `cacheWrite` w `LOG_FIELDS` i CSV).
 - Dla T7: API i zdarzenia w `dev/harness-notes.md`. Dla T12: wystaw `nextSheetBlock` na obiekcie pakietu, jeśli harness ma używać formatu z `snapshot.mjs`. Dla T5: propozycja oczekuje, gdy narzędzie `submit_*` zwróci `ok: true` (+ `proposalId`, `summary`, `warnings`).
 - Testy: `node dev/test-harness.mjs` (27, atrapa modelu przez stub fetch + SSE, atrapa IndexedDB). Wybory H1-H13, zweryfikowane / niezweryfikowane: `dev/harness-notes.md`.
+
+## 2026-11-17 T12: czytnik karty + blok `<sheet>` + diff
+- `scripts/systems/invincible/reader.mjs` (dokument -> model: `_source` i wartości przygotowane osobno, przedmioty z id/poziomem/linkami/sprzętem, ref katalogu albo `custom`, `edited`, `auto=` tylko przy różnicy z paczką, nigdy treść skryptu; efekty, flagi plus-ultra/undo; `chargenStateFromActor` = heurystyki import.mjs 1:1 dla VALID; `readLiveForm` przez `foundry.applications.ux.FormDataExtended`; loader katalogu z dokumentów paczek, podmienialny `useCatalogLookup`), `snapshot.mjs` (serializacja linia-fakt, estymator, limit 6000 z kolejnością cięcia, `diffLines/formatUpdate/applyUpdate`, `nextSheetBlock` 5.4, `snapshot(doc, opts)`).
+- `pack.mjs`: grupa `sheet` (`snapshot`, `diffSnapshots`) + opcjonalne `nextSheetBlock` (harness T2 je preferuje).
+- Fikstury dla T5/T6: `dev/fixtures/invincible-sheets.mjs` (wymyślony katalog, `typicalHero` poprawny wg reguł Global, `bigNpc`, `hugeNpc`, budowniczowie `actor/item/effect/fromCatalog`).
+- Testy: `node dev/test-build-snapshot.mjs` (25). Rozmiary: typowy bohater ~0,9k tokenów (fikstura), na żywo 64 próbnych bohaterów mediana ~1,2k / max ~2,2k, 35 NPC mediana ~0,35k / max ~1,5k. Wybory S1-S12, weryfikacja, niesprawdzone: `dev/snapshot-notes.md`.

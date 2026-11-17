@@ -15,6 +15,7 @@
 
 import { detectModule, hasPack, systemInfo, compareVersions } from "../../build/deps.mjs";
 import { promptGroup } from "./prompt.mjs";
+import { snapshot as sheetSnapshot, diffSnapshots, nextSheetBlock } from "./snapshot.mjs";
 
 export const SYSTEM_ID = "invincible";
 export const MIN_SYSTEM_VERSION = "2.1.0";
@@ -82,5 +83,14 @@ const pack = {
 
 // prompt group (T4): catalogue index, rules digest, read tools (prompt.mjs)
 Object.assign(pack, promptGroup(() => pack, { get game() { return g(); } }));
+
+// sheet group (T12): compact <sheet> block with stored/prepared values, items with ids, effects, unsaved form values and the
+// VALID baseline; line diff for <sheet_update> (reader.mjs, snapshot.mjs). Reads only.
+Object.assign(pack, {
+  snapshot: (doc, opts = {}) => sheetSnapshot(doc, { game: g(), ...opts }),
+  diffSnapshots,
+  // optional: the pack's own 5.4 decision (harness.mjs prefers it over the generic sheet-sync.mjs rule)
+  nextSheetBlock: (held, snap) => nextSheetBlock(held, snap)
+});
 
 export default pack;
