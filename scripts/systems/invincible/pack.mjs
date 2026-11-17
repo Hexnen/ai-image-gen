@@ -14,6 +14,7 @@
 // the pack works without it (T6 decides per feature through pu-bridge.mjs using puStatus()).
 
 import { detectModule, hasPack, systemInfo, compareVersions } from "../../build/deps.mjs";
+import { promptGroup } from "./prompt.mjs";
 
 export const SYSTEM_ID = "invincible";
 export const MIN_SYSTEM_VERSION = "2.1.0";
@@ -78,5 +79,8 @@ const pack = {
   check,
   supports
 };
+
+// prompt group (T4): catalogue index, rules digest, read tools (prompt.mjs)
+Object.assign(pack, promptGroup(() => pack, { get game() { return g(); } }));
 
 export default pack;

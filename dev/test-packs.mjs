@@ -61,7 +61,10 @@ await test("validatePack: stub pack is complete, every capability present", () =
 await test("validatePack: invincible skeleton is valid, capability groups reported missing (later tasks fill them)", () => {
   const v = validatePack(invPack);
   assert.equal(v.ok, true, v.errors.join("; "));
-  assert.deepEqual(v.capabilities, { prompt: false, validate: false, sheet: false, writer: false });
+  // groups land task by task (T4 prompt, T5 validate, T12 sheet, T6 writer): each is reported as a whole boolean
+  assert.deepEqual(Object.keys(v.capabilities).sort(), ["prompt", "sheet", "validate", "writer"]);
+  for (const g of Object.keys(v.capabilities)) assert.equal(typeof v.capabilities[g], "boolean", g);
+  assert.equal(v.capabilities.prompt, true, "T4 prompt group present");
 });
 
 await test("validatePack: junk, missing required, partial capability group, wrong types are refused", () => {
