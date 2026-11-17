@@ -277,7 +277,7 @@ Pliki: `scripts/build/harness.mjs`, `scripts/anthropic/transport.mjs`, `scripts/
 ## W5-F: poprawki z `dev/bughunt-2.md` (wszystkie M + tanie L)
 
 Kod: HEAD `0b737d5` + ta zmiana. Nie ruszane: `module.json` (URL-e repo = decyzja właściciela, #12), teksty prefiksu, harness
-(w drzewie są równoległe, niezacommitowane zmiany innego agenta w `harness.mjs`, `anthropic/*`, `validate.mjs` i testach: nie moje).
+(równolegle W5-G innego agenta, commit `5454be8`: nie moje pliki).
 
 ### Co zmienione
 - **#1 klucze API (M)**: `apiKey.openai|gemini|openrouter|anthropic` i `build.prewarm` mają `config: false` (v14 pokazuje
@@ -315,8 +315,8 @@ Kod: HEAD `0b737d5` + ta zmiana. Nie ruszane: `module.json` (URL-e repo = decyzj
   „Zamknij kreator AI”, gdy szuflada jest otwarta.
 
 ### Testy
-- `dev/test-*.mjs`: wszystkie zielone poza `test-harness.mjs` (37/40): 3 porażki (stop w strumieniu, refusal, held results)
-  pochodzą z niezacommitowanych zmian innego agenta w `harness.mjs`; na HEAD bez tych zmian 40/40. Moje pliki harnessu nie dotykają.
+- `dev/test-*.mjs` na `e4cff2c` (po W5-G `5454be8` innego agenta): wszystkie zielone (harness 48, transport 30, packs 24,
+  migrate-id 19, drawer-model 15, ...). W trakcie pracy harness miał chwilowo 37/40 przez niedokończone zmiany W5-G.
 
 ### Próba na żywo (tor 20, slot `bh2fix`, własna karta, świat przywrócony `lane20.ps1 restore` bez potoku, slot oddany)
 - Moduł był wyłączony w świecie toru: włączony na czas testu (świat potem przywrócony).
