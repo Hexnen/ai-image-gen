@@ -20,11 +20,11 @@
 // the baseline are tolerated (info), any NEW error blocks. Structural rules (7.5.2) are never relaxed for NEW issues.
 
 import * as rules from "./vendor/chargen/rules.mjs";
-import { chargenStateFromActor, readItem, getCatalogLookup } from "./reader.mjs";
+import { chargenStateFromActor, readItem, getCatalogLookup, talentRoleShifts, talentRolesOf } from "./reader.mjs";
 import { getCatalog, slug } from "./catalog.mjs";
 import {
   PROPOSAL_SCHEMA, PROPOSAL_GUIDE, LEVEL_WORDS, normalize, project, replaceToOps, selectOps, expectFor, checkStale, toPlainActor, asDoc,
-  customItemData, levelExists, powerLevel, baseName, noteOf, norm, normBase, hash, stableJson, summarize, getPath, CUSTOM_TYPES, resolveRank
+  customItemData, levelExists, powerLevel, baseName, noteOf, norm, normBase, hash, stableJson, summarize, getPath, CUSTOM_TYPES, resolveRank, NEW_PREFIX
 } from "./proposal.mjs";
 
 export const PROFILES = Object.freeze(["creation", "in-play"]);
@@ -137,6 +137,7 @@ export const MESSAGES = Object.freeze({
   "grants.heuristic": (p) => ({ message: `Limit "${p.name}" will be read as paying for a ${p.read} (power level decides), not a ${p.asked}.`, hint: "A limit pays for a level when its power is above Basic, else for a boost." }),
   "profile.suggestInPlay": () => ({ message: "The current sheet already fails the creation rules.", hint: "The GM may switch the drawer to the in-play profile (no new errors)." }),
   "budget.delta": (p) => ({ message: `Under creation rules this change ${p.delta < 0 ? `costs ${-p.delta}` : `frees ${p.delta}`} attribute point(s) (budget ${p.before} -> ${p.after}, spent ${p.spentBefore} -> ${p.spentAfter}).`, hint: "In-play: informational only." }),
+  "talent.role.shift": (p) => ({ message: `Talent "${p.name}" ${p.listed ? `is listed as the ${p.from} talent but will be` : `is the ${p.from} talent now and will be`} the ${p.to} talent after this change: the role follows the order of the talents on the sheet (1st hero, 2nd occupation, the rest extras) and a new talent is always added last.`, hint: "If that is not intended, also remove and re-add the talents that must come after the new one, in role order; otherwise ignore this." }),
   "baseline.tolerated": (p) => ({ message: `Already on the sheet before this change: ${p.issue}.`, hint: "In-play: tolerated; not caused by this proposal." }),
   "catalog.unavailable": (p) => ({ message: `The catalogue could not be read: ${p.error}`, hint: "Tell the GM; the builder needs the invincible-core packs." })
 });
@@ -149,6 +150,7 @@ export function describe(issue, ctx = {}) {
   const out = { code: issue.code };
   if (issue.path) out.path = issue.path;
   if (issue.opId) out.opId = issue.opId;
+  if (issue.entry) out.entry = issue.entry;   // W2-2: the proposal entry's name (replace)
   out.message = issue.message ?? t.message;
   out.hint = issue.hint ?? t.hint;
   if (issue.suggest) out.suggest = issue.suggest;
@@ -387,10 +389,15 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
 
   // ops (replace -> ops)
   let ops = P.ops ?? [];
+  let conv = null;
   if (P.mode === "replace") {
-    const conv = replaceToOps(null, P.proposal, { catalog, plain: basePlain, rank, profile });
+    conv = replaceToOps(null, P.proposal, { catalog, plain: basePlain, rank, profile });
     acc.errors.push(...conv.errors);
     ops = conv.ops;
+    // W2-2: every issue from here on is reported in the proposal's terms (proposal.powers[0].level, entry name), not in the
+    // terms of the internal ops the replace was converted to (ops[2].level); opIds stay (summary / perOp / GM preview use them)
+    const raw = finish;
+    finish = (layer, r, ctx) => raw(layer, { errors: r.errors.map((i) => replacePath(i, conv, res.ops ?? ops)), warnings: r.warnings.map((i) => replacePath(i, conv, res.ops ?? ops)), info: r.info.map((i) => replacePath(i, conv, res.ops ?? ops)) }, ctx);
     for (const d of conv.defaulted ?? []) acc.info.push({ code: "reputation.defaulted", path: d.path, params: { value: d.value, rank: d.rank } });
     if (P.proposal.rank && P.proposal.rank !== rank) acc.warnings.push({ code: "rank.differs", path: "proposal.rank", params: { proposed: P.proposal.rank, rank } });
   }
@@ -509,15 +516,85 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
     const read = pw && LEVEL_WORDS.indexOf(powerLevel(pw.system)) > 0 ? "level" : "boost";
     if (read !== it.system._grants) acc.warnings.push({ code: "grants.heuristic", opId: String(it._id).replace(/^new:/, ""), params: { name: it.name, read, asked: it.system._grants } });
   }
+  // W2-3: a talent's role is its place in the collection (new items go last); say when the change gives a talent another role
+  // (ops: compared with the sheet now; replace: compared with the role its place in proposal.talents asks for)
+  if (isHero) for (const s of talentShifts(basePlain, proj.actor, P, catalog)) {
+    acc.warnings.push({ code: "talent.role.shift", path: `items.${s.itemId}`, ...(s.itemId.startsWith(NEW_PREFIX) ? { opId: s.itemId.slice(NEW_PREFIX.length) } : {}), params: s });
+  }
 
   res.expect = expectFor(doc ?? asDoc(basePlain), ops, proj);
   res.summary = [...summarize({ ops }, proj, res.budget), ...(isHero && res.budget.after ? [`budget ${res.budget.after.points} spent ${res.budget.after.spent} slots ${res.budget.after.slots}/${res.budget.after.rankPowers}`] : [])].join("\n");
   return finish("L4", acc, { rank });
 }
+/** W2-3 role shifts -> [{ itemId, name, from, to, listed }] (see reader.mjs talentRoles) */
+function talentShifts(basePlain, after, P, catalog) {
+  if (P.mode !== "replace") return talentRoleShifts(basePlain, after).map((x) => ({ ...x, listed: false }));
+  const fin = talentRolesOf(after);
+  const hasOcc = !!String(getPath(after, "system.occupation") ?? "").trim();
+  const want = (P.proposal?.talents ?? []).map((t) => norm(catalog?.get?.(t?.ref)?.name ?? t?.name ?? ""));
+  const out = [];
+  fin.items.forEach((t, n) => {
+    let i = want.indexOf(norm(t.name));
+    if (i < 0) i = want.indexOf(norm(baseName(t.name)));
+    if (i < 0 || i === n) return;
+    const from = i === 0 ? "hero" : i === 1 && hasOcc ? "occupation" : "extra", to = fin.roles.get(String(t.id));
+    if (from !== to) out.push({ itemId: String(t.id), name: String(t.name ?? ""), from, to, listed: true });
+  });
+  return out;
+}
 const opIdOf = (proj, info) => Object.entries(proj.opInfo).find(([, v]) => v === info)?.[0];
 const planIssue = (e) => (typeof e === "string" ? { code: "plan.error", message: e, hint: "Check the sheet and resubmit." } : { code: String(e?.code ?? "plan.error"), path: e?.path, opId: e?.opId, params: e?.params ?? {}, ...(MESSAGES[e?.code] ? {} : { message: String(e?.message ?? e?.code ?? "plan error"), hint: String(e?.hint ?? "Check the sheet and resubmit.") }) });
 async function resolveLookup(l) {
   try { return l ? await (typeof l === "function" ? l() : l) : null; } catch { return null; }
+}
+
+/* ---- W2-2: replace issues in the proposal's own terms */
+/** op field (after "ops[i].") -> the proposal field of the same entry */
+const OP_FIELD = { ref: ".ref", level: ".level", note: ".note", grants: ".grants", sourceItemId: ".source", sourceOpId: ".source",
+  "set.level": ".level", "set.note": ".note", "set.powerSourceItemId": ".source", "set.powerSourceOpId": ".source" };
+/** chargen state path (vendored rules / creationIssues) -> proposal path */
+const STATE_PATH = { attrs: "proposal.attributes", occupation: "proposal.texts.occupation", resources: "proposal.resources",
+  reputation: "proposal.reputation", personality: "proposal.texts.personality", drive: "proposal.texts.drive", flaw: "proposal.texts.flaw",
+  heroName: "proposal.name", civilianName: "proposal.texts.civilianName", "npcRel.name": "proposal.texts.relationships",
+  team: "proposal.texts.team", "team.baseId": "proposal.texts.team", "team.upgrades": "proposal.texts.teamBase",
+  heroTalent: "proposal.talents[0]", occTalent: "proposal.talents[1]", extraTalents: "proposal.talents", drawbacks: "proposal.drawbacks",
+  powers: "proposal.powers", sources: "proposal.sources", rank: "proposal.rank" };
+/** an actor-op field param ("system.attributes.agility.value", "system.relationships", "name") -> proposal path */
+const actorField = (f) => {
+  const m = /^system\.attributes\.(\w+)\.value$/.exec(f ?? "");
+  if (m) return `proposal.attributes.${m[1]}`;
+  if (f === "name") return "proposal.name";
+  if (f === "system.reputation" || f === "system.resources") return `proposal.${f.slice(7)}`;
+  if (/^system\.\w+$/.test(f ?? "")) return `proposal.texts.${f.slice(7)}`;
+  return "proposal";
+};
+/**
+ * replacePath(issue, conv, ops) -> the issue with `path` in proposal terms and `entry` = the entry's name (W2-2).
+ * Order: an op path ("ops[2].level": the op's source entry + the field), an item path ("items.<id>": the entry a kept or added
+ * item comes from; a leftover the replace removes keeps "items.<id>"), the op an issue was blamed on (rules issues of an item),
+ * then the chargen state path table (attributes, texts, talents...). Paths already in proposal terms stay as they are.
+ */
+export function replacePath(i, conv, ops) {
+  if (!conv || !i) return i;
+  const p = String(i.path ?? "");
+  const opAt = (k) => ops?.[k]?.opId;
+  let m, s = null, path = null;
+  if ((m = /^ops\[(\d+)\](?:\.(.+))?$/.exec(p))) {
+    s = conv.src?.[i.opId ?? opAt(+m[1])] ?? conv.src?.[opAt(+m[1])] ?? null;
+    if (s) path = s.path === "proposal" ? actorField(i.params?.field) : s.path + (OP_FIELD[m[2]] ?? "");
+  } else if ((m = /^items\.(.+)$/.exec(p))) {
+    const id = m[1];
+    s = id.startsWith(NEW_PREFIX) ? conv.src?.[id.slice(NEW_PREFIX.length)] : conv.srcItems?.[id] ?? null;
+    if (s) path = s.path;
+  }
+  if (!path && i.opId && conv.src?.[i.opId] && conv.src[i.opId].path !== "proposal" && !p.startsWith("proposal")) { s = conv.src[i.opId]; path = s.path; }
+  if (!path && !p.startsWith("proposal") && !p.startsWith("items.")) {
+    const head = p.replace(/\.(\d+)$/, "");
+    const t = /^attrs\.(\w+)$/.exec(p) ? `proposal.attributes.${p.slice(6)}` : STATE_PATH[p] ?? STATE_PATH[head] ?? null;
+    if (t) path = t;
+  }
+  if (!path) return s ? { ...i, entry: s.name } : i;
+  return { ...i, path, ...(s?.name && s.path !== "proposal" ? { entry: s.name } : {}) };
 }
 
 /** rules issue -> the op that caused it (by item name, or the updateActor op for attribute / text codes) */

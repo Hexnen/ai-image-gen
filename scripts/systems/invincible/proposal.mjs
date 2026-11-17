@@ -608,11 +608,17 @@ function buildAdded(op, i, { catalog, err, refItem, actor, byOp }) {
  * (and, for boosts/limits, the same power) are KEPT with their ids (updated when level/source/note differ); missing ones are
  * added; leftover creation items are removed (dependants before their parents). Gear and injuries are never touched.
  * Actor fields go into one updateActor op with the values that differ. Ref errors come back as errors (path proposal.*).
+ * W2-2: `src` = { <opId>: { path, name } } and `srcItems` = { <kept itemId>: { path, name } } name the proposal entry each op
+ * (or kept sheet item) comes from ("proposal.powers[0]", "proposal.powers[0].boosts[1]", "proposal" for the actor op), so
+ * the validator can report errors in the model's own terms; removals of leftovers point at "items.<id>" (not in the proposal).
+ * `kept` = actor fields the proposal gives with the value already on the sheet (reputation / resources; no op, summary only).
  */
 export function replaceToOps(doc, proposal, { catalog, plain = null, rank = null, profile = "creation" }) {
   const actor = plain ? clone(plain) : toPlainActor(doc);
   const P = proposal ?? {};
   const ops = [], errors = [], defaulted = [];
+  const src = {}, srcItems = {};
+  const from = (opId, path, name) => { src[opId] = { path, name }; return opId; };
   const pool = actor.items.filter((x) => CREATION_TYPES.includes(x.type));
   const used = new Set();
   const take = (type, name, pred = () => true) => {
@@ -638,8 +644,9 @@ export function replaceToOps(doc, proposal, { catalog, plain = null, rank = null
   // notes as the writer writes them (no brackets, cut at a word boundary): the writer converts the RAW proposal again at apply,
   // so both conversions must compare the same note text (same ops, same opIds)
   const noteOfP = (x) => cleanNote(x?.note ?? "").note;
-  for (const k of ["resources", "reputation"]) if (Number.isInteger(rep[k]) && rep[k] !== actor.system?.[k]) set[k] = rep[k];
-  if (Object.keys(set).length) ops.push({ op: "updateActor", opId: nextId("act"), set });
+  const kept = {};
+  for (const k of ["resources", "reputation"]) if (Number.isInteger(rep[k])) { if (rep[k] !== actor.system?.[k]) set[k] = rep[k]; else kept[k] = rep[k]; }
+  if (Object.keys(set).length) ops.push({ op: "updateActor", opId: from(nextId("act"), "proposal", P.name || actor.name || "actor"), set });
   const entryOf = (ref, path, kinds) => {
     const e = catalog?.get?.(ref) ?? null;
     if (!e) { errors.push({ code: "ref.unknown", path, params: { ref } }); return null; }
@@ -652,8 +659,8 @@ export function replaceToOps(doc, proposal, { catalog, plain = null, rank = null
     const e = entryOf(s.ref, `proposal.sources[${i}].ref`, ["powerSource"]);
     if (!e) return;
     const hit = take("powerSource", e.name);
-    if (hit) srcLink.set(s.key, { itemId: hit._id });
-    else { const opId = nextId("src"); ops.push({ op: "addItem", opId, ref: s.ref }); srcLink.set(s.key, { opId }); }
+    if (hit) { srcLink.set(s.key, { itemId: hit._id }); srcItems[hit._id] = { path: `proposal.sources[${i}]`, name: e.name }; }
+    else { const opId = from(nextId("src"), `proposal.sources[${i}]`, e.name); ops.push({ op: "addItem", opId, ref: s.ref }); srcLink.set(s.key, { opId }); }
   });
   // powers + their boosts / limits
   (P.powers ?? []).forEach((p, i) => {
@@ -666,14 +673,15 @@ export function replaceToOps(doc, proposal, { catalog, plain = null, rank = null
     let powerLink;
     if (hit) {
       powerLink = { itemId: hit._id };
+      srcItems[hit._id] = { path: `proposal.powers[${i}]`, name: e.name };
       const set = {};
       if (powerLevel(hit.system) !== level) set.level = level;
       if (link?.itemId && hit.system?.powerSource !== link.itemId) set.powerSourceItemId = link.itemId;
       if (link?.opId) set.powerSourceOpId = link.opId;
       if (noteOfP(p) !== noteOf(hit.name)) set.note = noteOfP(p);
-      if (Object.keys(set).length) ops.push({ op: "updateItem", opId: nextId("pw"), itemId: hit._id, set });
+      if (Object.keys(set).length) ops.push({ op: "updateItem", opId: from(nextId("pw"), `proposal.powers[${i}]`, e.name), itemId: hit._id, set });
     } else {
-      const opId = nextId("pw");
+      const opId = from(nextId("pw"), `proposal.powers[${i}]`, e.name);
       ops.push({ op: "addItem", opId, ref: p.ref, level, ...(link?.itemId ? { sourceItemId: link.itemId } : {}), ...(link?.opId ? { sourceOpId: link.opId } : {}), ...(noteOfP(p) ? { note: noteOfP(p) } : {}) });
       powerLink = { opId };
     }
@@ -681,9 +689,10 @@ export function replaceToOps(doc, proposal, { catalog, plain = null, rank = null
       list.forEach((b, j) => {
         const be = entryOf(b.ref, `proposal.powers[${i}].${type}s[${j}].ref`, [type]);
         if (!be) return;
+        const bpath = `proposal.powers[${i}].${type}s[${j}]`;
         const bhit = powerLink.itemId ? take(type, be.name, (x) => x.system?.power === powerLink.itemId) : null;
-        if (bhit) return;
-        ops.push({ op: "addItem", opId: nextId(type === "boost" ? "bo" : "li"), ref: b.ref, ...(powerLink.itemId ? { powerItemId: powerLink.itemId } : { powerOpId: powerLink.opId }), ...(type === "limit" && b.grants ? { grants: b.grants } : {}) });
+        if (bhit) { srcItems[bhit._id] = { path: bpath, name: be.name }; return; }
+        ops.push({ op: "addItem", opId: from(nextId(type === "boost" ? "bo" : "li"), bpath, be.name), ref: b.ref, ...(powerLink.itemId ? { powerItemId: powerLink.itemId } : { powerOpId: powerLink.opId }), ...(type === "limit" && b.grants ? { grants: b.grants } : {}) });
       });
     }
   });
@@ -692,16 +701,17 @@ export function replaceToOps(doc, proposal, { catalog, plain = null, rank = null
       const e = entryOf(t.ref, `proposal.${type}s[${i}].ref`, [type]);
       if (!e) return;
       const note = noteOfP(t);
+      const tpath = `proposal.${type}s[${i}]`;
       const hit = take(type, e.name, (x) => norm(noteOf(x.name)) === norm(note)) ?? take(type, e.name);
-      if (hit) { if (note !== noteOf(hit.name)) ops.push({ op: "updateItem", opId: nextId(type === "talent" ? "ta" : "dr"), itemId: hit._id, set: { note } }); }
-      else ops.push({ op: "addItem", opId: nextId(type === "talent" ? "ta" : "dr"), ref: t.ref, ...(note ? { note } : {}) });
+      if (hit) { srcItems[hit._id] = { path: tpath, name: e.name }; if (note !== noteOf(hit.name)) ops.push({ op: "updateItem", opId: from(nextId(type === "talent" ? "ta" : "dr"), tpath, e.name), itemId: hit._id, set: { note } }); }
+      else ops.push({ op: "addItem", opId: from(nextId(type === "talent" ? "ta" : "dr"), tpath, e.name), ref: t.ref, ...(note ? { note } : {}) });
     });
   }
   // leftovers: dependants first (boost/limit, talent/drawback, power, source)
   const order = ["boost", "limit", "talent", "drawback", "power", "powerSource"];
   const left = pool.filter((x) => !used.has(x._id)).sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type) || String(a._id).localeCompare(String(b._id)));
-  for (const x of left) ops.push({ op: "removeItem", opId: nextId("rm"), itemId: x._id });
-  return { ops, errors, defaulted };
+  for (const x of left) ops.push({ op: "removeItem", opId: from(nextId("rm"), `items.${x._id}`, x.name), itemId: x._id });
+  return { ops, errors, defaulted, src, srcItems, kept };
 }
 
 /* ================================================================== partial selection (spec 7.5.6) */

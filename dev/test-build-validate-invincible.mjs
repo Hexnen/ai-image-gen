@@ -502,7 +502,9 @@ await test("replace: same build keeps every id (no ops); a rebuild on a blank ac
     drawbacks: [{ ref: ref("drawback", "Lean Times") }]
   };
   const conv = replaceToOps(a, P, { catalog });
-  assert.deepEqual(conv, { ops: [], errors: [], defaulted: [] });
+  assert.deepEqual({ ops: conv.ops, errors: conv.errors, defaulted: conv.defaulted }, { ops: [], errors: [], defaulted: [] });
+  assert.deepEqual(conv.src, {});   // no ops; kept items still name their proposal entry (W2-2)
+  assert.equal(conv.srcItems[idOf(a, "Quick Wits")].path, "proposal.talents[0]");
   // swap a talent: one remove + one add, every other item kept
   const P2 = { ...P, talents: [{ ref: ref("talent", "Quick Wits") }, { ref: ref("talent", "Steady Hands") }] };
   const c2 = replaceToOps(a, P2, { catalog });
@@ -520,6 +522,41 @@ await test("replace: same build keeps every id (no ops); a rebuild on a blank ac
   // a bad ref in the replace proposal is an L1 error with a proposal path
   const bad = await V(blankHero(), { target: "this", mode: "replace", proposal: { ...full, powers: [{ ref: "powers:nope0000000000000", source: "s1" }] }, rationale: "x" });
   assert.ok(bad.errors.some((e) => e.code === "ref.unknown" && e.path === "proposal.powers[0].ref"));
+
+  // W2-2: projection (L1) and rules (L2) errors of a replace point at the proposal entry, with its name; opIds stay
+  const at = (res, code) => res.errors.find((e) => e.code === code) ?? assert.fail(`no ${code}: ${JSON.stringify(res.errors)}`);
+  const iron = catalog.findByName("power", "Iron Hide");
+  const l1 = await V(blankHero(), { target: "this", mode: "replace", rationale: "x", proposal: { ...full, powers: [
+    { ref: ref("power", "Spark Bolt"), source: "s1", boosts: [{ ref: ref("boost", "Silent Flight", "Glide Wings") }] },
+    { ref: `powers:${iron.levelDocs.major}`, level: "basic", source: "s1" },
+    { ref: ref("power", "Echo Sense"), level: "major", source: "s1" }
+  ] } });
+  const mm = at(l1, "ref.power.mismatch");
+  assert.equal(mm.path, "proposal.powers[0].boosts[0].ref"); assert.equal(mm.entry, "Silent Flight"); assert.ok(mm.opId);
+  const lc = at(l1, "ref.level.conflict");
+  assert.equal(lc.path, "proposal.powers[1].level"); assert.equal(lc.entry, "Iron Hide");
+  assert.equal(at(l1, "ref.level.none").path, "proposal.powers[2].level");
+  assert.ok(!JSON.stringify(l1.errors).includes("ops["), "no internal op paths in a replace result");
+  // L2: attribute budget -> proposal.attributes; a Massive power at Global -> its entry
+  const l2 = await V(blankHero(), { target: "this", mode: "replace", rationale: "x", proposal: { ...full, attributes: { ...full.attributes, fighting: 7 },
+    powers: [{ ref: ref("power", "Mind Static"), level: "massive", source: "s1" }, ...full.powers.slice(1)] } });
+  assert.equal(at(l2, "attr.over").path, "proposal.attributes");
+  const ms = at(l2, "power.level.massive");
+  assert.equal(ms.path, "proposal.powers[0]"); assert.equal(ms.entry, "Mind Static");
+  // the model-facing tool result carries the same paths
+  const tr = await validateGroup(() => null, { catalog, lookup, itemCheck: () => null }).runProposalTool("submit_proposal",
+    { target: "this", mode: "replace", rationale: "x", proposal: { ...full, powers: [{ ref: `powers:${iron.levelDocs.major}`, level: "basic", source: "s1" }] } }, { doc: blankHero(), options: { rank: "global" } });
+  assert.equal(tr.errors[0].path, "proposal.powers[0].level"); assert.equal(tr.errors[0].entry, "Iron Hide");
+  // a leftover the replace removes keeps its sheet path, with the item's name (L4 warning of a hand-made item)
+  const th = typicalHero();
+  const hand = mkActor({ id: th.id, name: th.name, attrs: Object.fromEntries(Object.entries(th._source.system.attributes).map(([k, v]) => [k, v.value])), system: th._source.system,
+    items: [...th.items, item("handMade00000001", "power", "Odd Trinket Power", { powerSource: idOf(th, "Strange Meteor") })] });
+  const lw = await V(hand, { target: "this", mode: "replace", rationale: "x", proposal: P }, { profile: "in-play" });
+  const rh = lw.warnings.find((w) => w.code === "remove.handEdited") ?? assert.fail(JSON.stringify(lw.warnings.concat(lw.errors)));
+  assert.equal(rh.path, "items.handMade00000001"); assert.equal(rh.entry, "Odd Trinket Power");
+  // ops mode is unchanged: op paths and opIds
+  const om = await V(typicalHero(), ops({ op: "addItem", opId: "x", ref: ref("power", "Echo Sense"), level: "major", sourceItemId: idOf(typicalHero(), "Strange Meteor") }));
+  assert.equal(at(om, "ref.level.none").path, "ops[0].level"); assert.equal(at(om, "ref.level.none").entry, undefined);
 });
 
 /* ================================================================== GM deselection */
