@@ -6,14 +6,16 @@
 //   node dev/dry-run/driver.mjs answer <id> <file|->      validate the answer against that request and hand it to the page
 //   node dev/dry-run/driver.mjs check <id> <file|->       validate only (nothing is sent)
 //   node dev/dry-run/driver.mjs status                    relay + pending / answered / cancelled ids
-//   node dev/dry-run/driver.mjs snippet                   the JS lines that enable / disable dry mode on the lane page
+//   node dev/dry-run/driver.mjs snippet                   the JS lines that enable / disable dry mode on the lane page, and the
+//                                                         save helper (window.__dryRelay.save) to run on /game after the reload
+//   node dev/dry-run/driver.mjs helper                    only the save helper line
 //   node dev/dry-run/driver.mjs transcript [out.md]       every request's new messages + every answer, as Markdown (default <dir>/transcript.md)
 // Answer file: { "content": [ {"type":"text","text":"..."}, {"type":"tool_use","name":"search_catalog","input":{...}} ], "stop_reason"? }
 //   tool_use ids may be left out (filled as toolu_dry_<req>_<n>); stop_reason is inferred (tool_use when a tool is called, else end_turn).
 //   A simulated API error instead: { "error": { "type": "overloaded_error", "message": "..." } } (add "status": 529 for an HTTP error).
 import fs from "node:fs";
 import path from "node:path";
-import { checkDir, dirs, listIds, pendingIds, reqPath, ansPath, cancelPath, readJson, writeJsonAtomic, checkAnswer, renderMessages, newFrom, summary } from "./queue.mjs";
+import { checkDir, dirs, listIds, pendingIds, reqPath, ansPath, cancelPath, readJson, writeJsonAtomic, checkAnswer, renderMessages, newFrom, summary, pageHelperSource, savedNames } from "./queue.mjs";
 import { DRY_STORAGE_KEY } from "../../scripts/build/dry-transport.mjs";
 
 const args = process.argv.slice(2);
@@ -86,7 +88,7 @@ switch (cmd) {
   case "status": {
     const l = listIds(d);
     const relay = fs.existsSync(path.join(root, "relay.json")) ? readJson(path.join(root, "relay.json")) : null;
-    console.log(JSON.stringify({ folder: root, relay: relay ? { port: relay.port, pid: relay.pid, startedAt: relay.startedAt } : "not running", requests: l.req.length, pending: pendingIds(d), answered: [...l.ans], cancelled: [...l.cancelled] }, null, 2));
+    console.log(JSON.stringify({ folder: root, relay: relay ? { port: relay.port, pid: relay.pid, startedAt: relay.startedAt } : "not running", requests: l.req.length, pending: pendingIds(d), answered: [...l.ans], cancelled: [...l.cancelled], saved: savedNames(d) }, null, 2));
     break;
   }
   case "snippet": {
@@ -94,10 +96,16 @@ switch (cmd) {
     if (!fs.existsSync(p)) die("relay.json missing: start the relay first");
     const r = readJson(p);
     const cfg = JSON.stringify({ relay: `http://127.0.0.1:${r.port}`, token: r.token });
+    console.log(`// 1. enable (on the lane page, before /game):`);
     console.log(`localStorage.setItem(${JSON.stringify(DRY_STORAGE_KEY)}, ${JSON.stringify(cfg)}); location.reload();`);
-    console.log(`// afterwards: localStorage.removeItem(${JSON.stringify(DRY_STORAGE_KEY)}); location.reload();`);
+    console.log(`// 2. save helper (on /game after every page load; then: await window.__dryRelay.save("apply-1.json", obj) -> ${path.join(root, "saved")}):`);
+    console.log(pageHelperSource());
+    console.log(`// 3. afterwards: localStorage.removeItem(${JSON.stringify(DRY_STORAGE_KEY)}); location.reload();`);
     break;
   }
+  case "helper":
+    console.log(pageHelperSource());
+    break;
   case "transcript": {
     const out = a1 ? checkDir(a1) : path.join(root, "transcript.md");
     const l = listIds(d);
@@ -114,5 +122,5 @@ switch (cmd) {
     break;
   }
   default:
-    die("usage: driver.mjs wait|show|answer|check|status|snippet|transcript (see the header of this file)");
+    die("usage: driver.mjs wait|show|answer|check|status|snippet|helper|transcript (see the header of this file)");
 }

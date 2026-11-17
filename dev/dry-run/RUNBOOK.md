@@ -31,12 +31,16 @@ Paths used below:
   - Tool inputs must fit the tool's `input_schema`. The driver checks the schema like the API does.
   - Parallel tool calls are several `tool_use` blocks in one answer.
 - **Stopping.** End the turn (text only) when the system prompt says so, or when you need the GM.
-  - The harness ends the turn itself when your answer calls only `submit_*` tools and every one of them is accepted (W3-4, world setting `build.endTurnOnSubmit`, default on). No further request comes: `wait` times out, and the TurnSummary has `reason: "submitted"`, `ok: true`, `text: ""`.
+  - The harness ends the turn itself when your answer calls only `submit_*` tools (without `dryRun`) and every one of them is accepted (W3-4, world setting `build.endTurnOnSubmit`, default on). No further request comes: `wait` times out, and the TurnSummary has `reason: "submitted"`, `ok: true`, `text: ""`.
   - The tool_results of that submit are held. They lead the NEXT GM message, before the `<sheet>` block, the `<proposal .../>` marker and the GM's text. `wait` shows them there.
   - A submit together with another tool call, or a refused submit, does not end the turn: you get the results in the next request as usual.
+  - The proposal tool is `submit_proposal`. There is no `check_proposal` tool any more (D-9, W3-14). To check a draft without proposing it, call `submit_proposal` with `"dryRun": true`. A dry-run call is a check only: it is never the pending proposal, it never ends the turn, it does not count towards the invalid-submit caps, and its result has `dryRun: true`, `ok`, `summary`, `errors`/`warnings`, but no `proposalId`. `rationale` is required only without `dryRun`.
   - Text you write in an answer that also calls tools is a progress note (`progress[]`, W3-5). It is not the turn's `text`. Only the text of an answer without tool calls is the turn's `text`.
+- **Evidence comes from the page, never retyped.** Every result file (Apply results, `actor.items` lists, TurnSummaries, the call log, snapshot texts) is saved from the page with `await window.__dryRelay.save(name, data)` (step 4, "Saving evidence"). It lands in `<DRY>\saved\<name>`.
+  - Never copy a result out of a tool output into a file with the Write tool, never type it again, never shorten it. In rounds 3 and 4 hand-copied files had typos and cut lists and proved nothing.
+  - Your own notes (`notes.md`, answers `a<id>.json`) are the only files you write by hand.
 - **No secrets.** Never type a real API key anywhere. In dry mode the key is an in-memory placeholder.
-- **No downloads. No commits.** Transcripts stay in `DRY`.
+- **No downloads. No commits.** Transcripts and saved files stay in `DRY`.
 
 ## 1. Take a lane
 
@@ -80,8 +84,10 @@ node "<MOD>/dev/dry-run/relay.mjs" --dir "<DRY>"
 Set `DRY_DIR` for the driver in every shell call. PowerShell: `$env:DRY_DIR="<DRY>"`; Bash: `export DRY_DIR="<DRY>"`. Then:
 
 ```powershell
-node "<MOD>/dev/dry-run/driver.mjs" snippet     # prints the enable / disable JS lines
+node "<MOD>/dev/dry-run/driver.mjs" snippet     # prints 1. the enable line, 2. the save helper line, 3. the disable line
 ```
+
+`driver.mjs helper` prints the save helper line alone. `driver.mjs status` lists the files saved so far.
 
 ## 4. Log in as the GM and enable dry mode
 
@@ -91,7 +97,7 @@ node "<MOD>/dev/dry-run/driver.mjs" snippet     # prints the enable / disable JS
    - Write the `tabId` into `<DRY>\notes.md` and pass it on EVERY browser call.
 2. With `javascript_tool` on the /join page (your tab):
    - check `location.port` is `30008`;
-   - run the `localStorage.setItem(...)` line from `snippet`, without the reload;
+   - run the `localStorage.setItem(...)` line from `snippet` (part 1), without the reload;
    - then join as the GM: `await fetch("/join",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"join",userid:"<Gamemaster id from the select>",password:""})})`.
 3. Right after the join, navigate your tab to `/game` and wait for `game.ready`. Do not wait between the join and `/game`: the session cookie is shared by all localhost ports (Hard rules).
 4. If `game.modules.get("moinens-ai-gen").active` is false, enable the module in the LANE world and reload:
@@ -100,6 +106,12 @@ node "<MOD>/dev/dry-run/driver.mjs" snippet     # prints the enable / disable JS
    - `game.modules.get("moinens-ai-gen").api.build.dry` shows `{ relay, wallMinutes, requestMinutes }`;
    - a permanent "builder DRY RUN" notification is shown;
    - `api.build.status().status === "ready"`, and `api.build.registry.getPack().tools().map(t => t.name)` lists the tools.
+
+6. Install the save helper: run the helper line from `snippet` (part 2) in your tab on `/game`. It returns `"window.__dryRelay ready"`.
+   - Run it again after EVERY reload or new `/game` load: `window.__dryRelay` lives only as long as the page.
+   - First save, as a smoke test and a record of the lane:
+     `await window.__dryRelay.save("start.json", { origin: location.origin, dry: game.modules.get("moinens-ai-gen").api.build.dry, at: new Date().toISOString() })`
+     Then check that `<DRY>\saved\start.json` exists.
 
 If `dry` is `null`, the console says why: `builder DRY mode NOT enabled (<reason>)`. The reasons are:
 - `not-lane`: wrong port (lane ports: 30001-30005, 30008, 30020; never 30000);
@@ -110,6 +122,22 @@ If `dry` is `null`, the console says why: `builder DRY mode NOT enabled (<reason
 - `not-gm`: you are not logged in as the GM.
 
 With no localStorage value at all (`off`) nothing is logged.
+
+### Saving evidence (`window.__dryRelay.save`)
+
+```js
+await window.__dryRelay.save("apply-1.json", obj);                       // an object -> pretty JSON
+await window.__dryRelay.save("snapshot-final.txt", text);                // a string -> written as is (.txt / .md)
+await window.__dryRelay.save("turns.json", window.__dry.turns, { overwrite: true });
+```
+
+- The page posts the data to the relay (`POST /save`, same token as the requests); the relay writes `<DRY>\saved\<name>` and nothing else. The result is `{ ok, name, path, bytes, overwritten }`.
+- Names: letters, digits, `.`, `_`, `-`, ending in `.json`, `.txt` or `.md`; no folders, no leading dot, no `..`, at most 100 chars.
+- At most 2 MB per file. A `.json` string must be valid JSON.
+- An existing file is never replaced unless you pass `{ overwrite: true }`. Use it only for files you rewrite on purpose (`turns.json`, `calllog.json`); give each Apply and each snapshot its own name.
+- On a refusal `save` throws with the status: 400 (bad name or content), 401 (token), 403 (origin), 409 (exists), 413 (too large). Fix the call; never fall back to typing the file.
+- The helper refuses to exist off a lane port or without the dry-mode localStorage value, and `save` refuses while `api.build.dry` is `null`.
+- After a save, read the saved file (Read tool) for your checks. Quote from the saved file in your notes and report, not from memory.
 
 ## 5. Make a throwaway actor and start a turn
 
@@ -159,7 +187,7 @@ How the driver handles an answer:
 - **Rejected answer:** the driver prints why and sends nothing (unknown tool, schema error, reused id). Fix the file and answer again. Use `check` to test a file without sending it.
 - **Tool calls:** the harness runs the real tools and sends the results as the next request. Run `wait` again.
 - **Text only (`end_turn`):** the GM turn ends. Run `wait --timeout 20` once to be sure, then read the summary in the page.
-- **Only `submit_*` calls, all accepted:** the turn ends too (`reason: "submitted"`, Hard rules). No request with the submit's results comes; `wait --timeout 20` times out. Read the summary in the page. You see the results at the start of the next GM message.
+- **Only `submit_*` calls (no `dryRun`), all accepted:** the turn ends too (`reason: "submitted"`, Hard rules). No request with the submit's results comes; `wait --timeout 20` times out. Read the summary in the page. You see the results at the start of the next GM message.
 
 Each request has 30 minutes before the transport gives up; the turn as a whole has at least 60 minutes. Answer well within these.
 
@@ -201,7 +229,7 @@ w.final = await game.modules.get("moinens-ai-gen").api.build.registry.getPack().
 w.final.ok;
 ```
 
-Step 3, mark the proposal and SAVE the result. The round 3 idMap suspicion could not be settled because nobody saved the results.
+Step 3, mark the proposal and SAVE the result from the page. The round 3 idMap suspicion could not be settled because nobody saved the results, and in round 4 the hand-copied files were wrong.
 
 ```js
 const w = window.__dry.apply;
@@ -211,14 +239,13 @@ if (r.ok) await s3.markProposal(w.proposalId, "applied", { runId: r.runId });   
 w.items = game.actors.get(window.__dry.actorId).items.contents.map((i) => ({
   id: i.id, name: i.name, type: i.type, level: i.system?.level ?? null,
   power: i.system?.power ?? null, powerSource: i.system?.powerSource ?? null }));   // collection order = talent roles
-JSON.stringify({ proposalId: w.proposalId, opts: w.opts, confirm: w.first.confirm ?? [], confirmAnswer: w.confirmAnswer ?? null,
-  ok: r.ok, runId: r.runId, message: r.message, ops: r.ops, idMap: r.idMap, created: r.created, updated: r.updated,
-  deleted: r.deleted, warnings: r.warnings, errors: r.errors, vitals: r.vitals ?? null, items: w.items });
+await window.__dryRelay.save("apply-<turn>.json", { proposalId: w.proposalId, opts: w.opts, input: w.input,
+  confirm: w.first.confirm ?? [], confirmAnswer: w.confirmAnswer ?? null, first: w.final ? w.first : null, result: r, items: w.items });
 ```
 
-- Write that JSON with the Write tool to `<DRY>\apply-<turn>.json` (one file per Apply, also for a refused one). The page cannot write files.
-- Check it in the same step and put the answer in your notes:
-  - every `add` op: `idMap[opId]` equals its `itemId` and is in `items` with the same name and type;
+- One file per Apply, also for a refused one (`apply-<turn>.json`, `apply-<turn>b.json` for a second try). `result` is the whole concise result as the page has it; `first` is the refused first call when a confirmed call followed.
+- Check it in the same step from the saved file (Read `<DRY>\saved\apply-<turn>.json`) and put the answer in your notes:
+  - every `add` op in `result.ops`: `result.idMap[opId]` equals its `itemId` and is in `items` with the same name and type;
   - every boost or limit: `power` is the id of the power it belongs to;
   - every power: `powerSource` is the id of its source;
   - talents in a build: their order in `items` is the order of the talent ops (hero, occupation, extra). An added talent on a finished hero goes to the end.
@@ -238,13 +265,15 @@ Notes on the options and the result:
 - The model sees the state in the GM's NEXT message, as `<proposal id="..." status="applied"/>` right before the GM's text. A state the model has already seen is not repeated.
 - `s.clearPendingProposal()` still works, but it does not tell the model anything. Use `markProposal` instead.
 
-Check what was written. Read the sheet the way the model will see it (`pack`, `a`, `s`, `p` as in step 1; the `runId` is in your `apply-<turn>.json`):
+Check what was written. Read the sheet the way the model will see it, and save it (`pack`, `a` as in step 1; the `runId` is in your saved `apply-<turn>.json`):
 
 ```js
-(await pack.snapshot(a, { rank: "street", profile: "creation" })).text
+const snap = (await pack.snapshot(a, { rank: "street", profile: "creation" })).text;
+await window.__dryRelay.save("snapshot-<turn>.txt", snap);
 ```
 
-- Check the VALID line, the attributes and the items there. Do not use `actor.update` to fix anything.
+- Check the VALID line, the attributes and the items in the saved file. Do not use `actor.update` to fix anything.
+- At the end of the test save the final sheet the same way as `snapshot-final.txt`.
 - Undo, if the test needs it: `await pack.undo(a, r.runId)`, then `await s.markProposal(p.proposalId, "pending")`.
   - Use `pack.undoStatus(a)` first to see the run and any drift.
 
@@ -256,8 +285,9 @@ In the page:
   - `cap` (with `reason: "cap"`): `requests`, `toolCalls`, `invalidSubmits`, `identicalInvalid`, `cost` or `wall`. With the two submit caps, `lastDraft` holds the last refused submit.
   - `text`: the text of the answer that ended the turn without a tool call, `""` otherwise. `progress`: texts written before tool calls, oldest first (W3-5).
   - `usage`: `{ input, output, cacheRead, cacheWrite, cacheWrite5m, cacheWrite1h, thinking }`. `sheet`: `full`, `update`, `unchanged` or `none`.
-  - `proposal`: the pending proposal of this turn, or `null`.
-- Save every TurnSummary: `JSON.stringify(window.__dry.turns)` written with the Write tool to `<DRY>\turns.json` after each GM message.
+  - `proposal`: the pending proposal of this turn `{ proposalId, tool, toolUseId, input, summary, warnings, at, turn }`, or `null`. A `submit_proposal` with `dryRun: true` never makes one.
+  - `busy`, `empty`, `no-pack`, `no-key` and `history-full` end before any request: `turn: null`, `requests: 0`, plus the `notice` shown to the GM.
+- Save every TurnSummary after each GM message, from the page: `await window.__dryRelay.save("turns.json", window.__dry.turns, { overwrite: true })` (the whole list each time).
 - `s.transcript()` gives the drawer items (`role: "progress"` for progress notes); `s.pendingProposal` gives the proposal.
 
 Cost and limits run through the real wiring:
@@ -270,7 +300,8 @@ Reading the call log. Use the module's own instance on the API (GM only):
 const log = await game.modules.get("moinens-ai-gen").api.callLog.readLog({ from: window.__dry.startedAt });
 const a = game.actors.get(window.__dry.actorId);
 const mine = log.filter((e) => e.kind === "build" && e.provider === "anthropic (dry)" && e.docUuid === a.uuid);
-JSON.stringify(mine.map((e) => ({ ts: e.ts, status: e.status, route: e.route, cost: e.cost, costKind: e.costKind, tokens: e.tokens, cacheRead: e.cacheRead, cacheWrite: e.cacheWrite, prompt: !!e.prompt })));
+await window.__dryRelay.save("calllog.json", mine.map((e) => ({ ts: e.ts, status: e.status, route: e.route, cost: e.cost, costKind: e.costKind, tokens: e.tokens, cacheRead: e.cacheRead, cacheWrite: e.cacheWrite, prompt: !!e.prompt })), { overwrite: true });
+mine.length;
 ```
 
 - Set `window.__dry.startedAt = new Date().toISOString()` in step 5, before the first `send`.
@@ -282,8 +313,7 @@ JSON.stringify(mine.map((e) => ({ ts: e.ts, status: e.status, route: e.route, co
   - `cost` in USD (rounded to 6 places), `costKind: "actual"` (in dry mode the number is the simulation);
   - `tokens: { in, out }`, `cacheRead`, `cacheWrite`; `model`, `docUuid`, `docName`, `caller: "builder"`, `durationMs`, `user`, `id`, `ts`;
   - `prompt` (the GM's text, redacted) only on request 1 of a turn.
-- Check: the entries of a turn (by `route`) with status `ok`, `error` or `cancelled` = that turn's `requests`; their `cost` sums to its `usd` (rounding aside). A turn ended by `submitted` has no entry after the submit request.
-- Save the list to `<DRY>\calllog.json`.
+- Check from the saved `calllog.json` and `turns.json`: the entries of a turn (by `route`) with status `ok`, `error` or `cancelled` = that turn's `requests`; their `cost` sums to its `usd` (rounding aside). A turn ended by `submitted` has no entry after the submit request.
 
 Usage is simulated [E], at the module's own estimate of chars / 3.5 per token:
 - the cached prefix is written on the first request and read on later ones;
@@ -330,7 +360,7 @@ How to play them:
 For each GM message, report:
 - the reason, the requests, the tool calls, the cost (dry) and the proposal y/n;
 - `text` and `progress` as they came out (W3-5), and whether the turn ended by `submitted`;
-- where the transcript is, and the saved files (`turns.json`, `apply-<turn>.json`, `calllog.json`);
+- where the transcript is, and the files saved from the page in `<DRY>\saved\` (`turns.json`, `apply-<turn>.json`, `snapshot-<turn>.txt`, `snapshot-final.txt`, `calllog.json`); a result you could not save is "not verified", never retyped;
 - what you as the model could not do from what the request gave you.
 
 For each Apply, report: needsConfirm y/n, the `confirm` list and the GM's answer, ok, `vitals`, and the idMap check against `items` (step 6a).

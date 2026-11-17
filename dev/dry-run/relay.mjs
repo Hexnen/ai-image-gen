@@ -9,11 +9,15 @@
 //   GET  /requests/<id>/answer?token=   -> 200 answer JSON | 204 not yet | 410 cancelled
 //   POST /requests/<id>/cancel     text/plain JSON { token, why }       -> 200
 //   GET  /health?token=            -> 200 { ok, pending }
+//   POST /save                     text/plain JSON { token, name, content, overwrite? } -> 200 { ok, name, path, bytes, overwritten }
+//        Evidence saved straight from the page (window.__dryRelay.save, see driver.mjs snippet): written ONLY to
+//        <dir>/saved/<name>; name [A-Za-z0-9._-]+.json|txt|md; max 2 MB; 400 bad name/content, 409 exists without
+//        overwrite:true, 413 too large.
 import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { checkDir, dirs, nextId, pendingIds, reqPath, ansPath, cancelPath, writeJsonAtomic, readJson } from "./queue.mjs";
+import { checkDir, dirs, nextId, pendingIds, reqPath, ansPath, cancelPath, writeJsonAtomic, readJson, saveFile, MAX_SAVE_BYTES } from "./queue.mjs";
 import { DRY_STORAGE_KEY, LANE_PORTS, OWNER_PORT } from "../../scripts/build/dry-transport.mjs";
 
 const args = process.argv.slice(2);
@@ -41,11 +45,12 @@ function send(res, status, obj, origin) {
   res.end(JSON.stringify(obj));
 }
 
-function readBody(req) {
+// Over the limit: the rest is drained (not kept) so the client still gets a 413 instead of a reset connection.
+function readBody(req, max = MAX_BODY) {
   return new Promise((resolve, reject) => {
-    let n = 0; const parts = [];
-    req.on("data", (c) => { n += c.length; if (n > MAX_BODY) { reject(new Error("too large")); req.destroy(); } else parts.push(c); });
-    req.on("end", () => resolve(Buffer.concat(parts).toString("utf8")));
+    let n = 0; let over = false; const parts = [];
+    req.on("data", (c) => { n += c.length; if (n > max) { over = true; parts.length = 0; } else if (!over) parts.push(c); });
+    req.on("end", () => (over ? reject(Object.assign(new Error(`body larger than ${max} bytes`), { status: 413 })) : resolve(Buffer.concat(parts).toString("utf8"))));
     req.on("error", reject);
   });
 }
@@ -94,10 +99,19 @@ const server = http.createServer(async (req, res) => {
       }
       return send(res, 200, { ok: true }, origin);
     }
+    if (req.method === "POST" && url.pathname === "/save") {
+      // the JSON envelope adds escaping on top of the content: allow some headroom, the content itself is checked exactly
+      const j = JSON.parse(await readBody(req, 2 * MAX_SAVE_BYTES + 64 * 1024));
+      if (!okToken(j?.token)) return send(res, 401, { error: "token" }, origin);
+      const r = saveFile(d, j.name, j.content, { overwrite: j.overwrite === true });
+      log(`saved ${r.name} (${r.bytes} bytes${r.overwritten ? ", overwritten" : ""})`);
+      return send(res, 200, { ok: true, ...r }, origin);
+    }
     return send(res, 404, { error: "not found" }, origin);
   } catch (e) {
     log(`error ${e?.message ?? e}`);
-    return send(res, 400, { error: String(e?.message ?? e).slice(0, 200) }, origin);
+    const status = [400, 409, 413].includes(e?.status) ? e.status : 400;
+    return send(res, status, { error: String(e?.message ?? e).slice(0, 200) }, origin);
   }
 });
 

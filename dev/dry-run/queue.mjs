@@ -4,11 +4,12 @@
 //   req/<id>.json         { id, at, origin, meta, body }          one model request, exactly as the real transport built it
 //   ans/<id>.json         the stand-in's answer                    written by driver.mjs answer (validated)
 //   cancelled/<id>.json   { at, why }                              the harness stopped waiting (Stop, cap, timeout)
+//   saved/<name>          evidence saved FROM THE PAGE (POST /save, window.__dryRelay.save): apply results, items, turns...
 // Ids are zero-padded sequence numbers ("0001"), so name order = time order.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { normalizeAnswer } from "../../scripts/build/dry-transport.mjs";
+import { normalizeAnswer, DRY_STORAGE_KEY, LANE_PORTS, OWNER_PORT } from "../../scripts/build/dry-transport.mjs";
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -24,7 +25,7 @@ export function checkDir(dir) {
 }
 
 export function dirs(root) {
-  const d = { root, req: path.join(root, "req"), ans: path.join(root, "ans"), cancelled: path.join(root, "cancelled") };
+  const d = { root, req: path.join(root, "req"), ans: path.join(root, "ans"), cancelled: path.join(root, "cancelled"), saved: path.join(root, "saved") };
   for (const p of Object.values(d)) fs.mkdirSync(p, { recursive: true });
   return d;
 }
@@ -43,6 +44,95 @@ export function nextId(d) { const r = ids(d.req); return String((r.length ? Numb
 export const reqPath = (d, id) => path.join(d.req, `${id}.json`);
 export const ansPath = (d, id) => path.join(d.ans, `${id}.json`);
 export const cancelPath = (d, id) => path.join(d.cancelled, `${id}.json`);
+
+// ------------------------------------------------------------------------------------------------ saved evidence
+
+/** Limit of one saved file (bytes, UTF-8, after JSON formatting). */
+export const MAX_SAVE_BYTES = 2 * 1024 * 1024;
+const SAVE_NAME = /^[A-Za-z0-9._-]+\.(json|txt|md)$/;
+const WIN_RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i;
+
+/** A saved file's name: [A-Za-z0-9._-]+.(json|txt|md), max 100 chars, no leading dot, no "..", no Windows device name. */
+export function checkSaveName(name) {
+  if (typeof name !== "string" || !name) return "name missing";
+  if (name.length > 100) return "name longer than 100 chars";
+  if (!SAVE_NAME.test(name)) return "name must match [A-Za-z0-9._-]+.json|txt|md (no folders)";
+  if (name.startsWith(".") || name.includes("..")) return "name must not start with a dot or contain ..";
+  if (WIN_RESERVED.test(name)) return "reserved device name";
+  return null;
+}
+
+/** The text that goes to disk: .json -> pretty JSON (a string must already be valid JSON); .txt/.md -> the string as is. */
+export function saveText(name, content) {
+  if (content === undefined) throw Object.assign(new Error("content missing"), { status: 400 });
+  if (name.endsWith(".json")) {
+    if (typeof content === "string") {
+      try { JSON.parse(content); } catch (e) { throw Object.assign(new Error(`content is not valid JSON: ${e.message}`), { status: 400 }); }
+      return content;
+    }
+    return JSON.stringify(content, null, 2);
+  }
+  return typeof content === "string" ? content : JSON.stringify(content, null, 2);
+}
+
+/**
+ * Write one saved file into d.saved (never anywhere else). Refuses an existing file unless overwrite === true.
+ * Returns { name, path, bytes, overwritten }. Errors carry .status (400 bad name/content, 409 exists, 413 too large).
+ */
+export function saveFile(d, name, content, { overwrite = false } = {}) {
+  const bad = checkSaveName(name);
+  if (bad) throw Object.assign(new Error(bad), { status: 400 });
+  const text = saveText(name, content);
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes > MAX_SAVE_BYTES) throw Object.assign(new Error(`content is ${bytes} bytes; the limit is ${MAX_SAVE_BYTES}`), { status: 413 });
+  const dir = path.resolve(d.saved);
+  const p = path.resolve(dir, name);
+  if (path.dirname(p) !== dir) throw Object.assign(new Error("name escapes the saved folder"), { status: 400 });
+  fs.mkdirSync(dir, { recursive: true });
+  const existed = fs.existsSync(p);
+  if (overwrite === true) {
+    const tmp = `${p}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, text, "utf8");
+    fs.renameSync(tmp, p);
+  } else {
+    try { fs.writeFileSync(p, text, { encoding: "utf8", flag: "wx" }); }
+    catch (e) { if (e.code === "EEXIST") throw Object.assign(new Error(`${name} already exists (pass overwrite: true to replace it)`), { status: 409 }); throw e; }
+  }
+  return { name, path: p, bytes, overwritten: existed && overwrite === true };
+}
+
+export const savedNames = (d) => (fs.existsSync(d.saved) ? fs.readdirSync(d.saved).filter((f) => !checkSaveName(f)).sort() : []);
+
+/**
+ * JS the stand-in runs ON THE LANE PAGE (driver.mjs snippet prints it): defines window.__dryRelay.save(name, data, { overwrite }).
+ * It carries no token: it reads the relay and token from the dry-mode localStorage value, and it refuses to exist unless
+ * the page is a loopback lane port (never :30000) with dry mode configured. save() also needs the builder's dry mode on
+ * (api.build.dry not null), so run it on /game after the reload.
+ */
+export function pageHelperSource() {
+  const fn = function (KEY, LANES, OWNER) {
+    const host = location.hostname, port = Number(location.port);
+    if (!/^(localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i.test(host) || port === OWNER || !LANES.includes(port)) throw new Error(`__dryRelay: not a lane page (${location.origin})`);
+    let cfg;
+    try { cfg = JSON.parse(localStorage.getItem(KEY) || "null"); } catch { cfg = null; }
+    if (!cfg || !cfg.relay || !cfg.token) throw new Error("__dryRelay: dry mode is not configured on this page (run the enable line first)");
+    const relay = new URL(cfg.relay);
+    if (relay.protocol !== "http:" || !/^(localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i.test(relay.hostname) || !relay.port || LANES.includes(Number(relay.port)) || Number(relay.port) === OWNER) throw new Error("__dryRelay: bad relay url");
+    window.__dryRelay = {
+      async save(name, data, { overwrite = false } = {}) {
+        const api = globalThis.game?.modules?.get?.("moinens-ai-gen")?.api?.build;
+        if (!api?.dry) throw new Error("__dryRelay: the builder is not in dry mode on this page (api.build.dry is null)");
+        const body = JSON.stringify({ token: cfg.token, name, content: data, overwrite: overwrite === true });
+        const r = await fetch(`${relay.origin}/save`, { method: "POST", headers: { "content-type": "text/plain" }, body, cache: "no-store" });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(`__dryRelay.save ${name}: ${r.status} ${j.error ?? ""}`);
+        return j;
+      }
+    };
+    return "window.__dryRelay ready";
+  };
+  return `(${fn.toString()})(${JSON.stringify(DRY_STORAGE_KEY)}, ${JSON.stringify([...LANE_PORTS])}, ${OWNER_PORT});`;
+}
 
 // ------------------------------------------------------------------------------------------------ schema check
 
