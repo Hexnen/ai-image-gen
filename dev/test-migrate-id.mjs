@@ -131,6 +131,16 @@ await test("constants: new id, old id, data root kept", () => {
   assert.equal(C.DATA_ROOT, OLD);
 });
 
+await test("W5-F: API keys and pre-warm are client settings with config:false (not in a player's Configure Settings)", () => {
+  for (const k of [...M.CLIENT_KEYS, "build.prewarm"]) {
+    const cfg = game.settings.settings.get(`${NEW}.${k}`);
+    assert.equal(cfg.scope, "client", k);
+    assert.equal(cfg.config, false, k);
+  }
+  // nothing else client-scoped is shown in the settings window either
+  for (const [id, cfg] of game.settings.settings) if (cfg.scope === "client") assert.notEqual(cfg.config, true, id);
+});
+
 await test("every copied key is registered in the new namespace", () => {
   for (const k of [...M.CLIENT_KEYS, ...M.WORLD_KEYS, C.MIGRATED_CLIENT, C.MIGRATED_WORLD]) assert.ok(game.settings.settings.has(`${NEW}.${k}`), k);
   assert.ok(M.WORLD_KEYS.includes("batch.31") && M.WORLD_KEYS.includes("batch.0"));

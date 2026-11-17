@@ -74,8 +74,9 @@ function replaceText(textarea, text, { focus = true } = {}) {
   textarea.setSelectionRange(text.length, text.length);
 }
 
-/** Otwórz ustawienia Foundry od razu na kategorii tego modułu (domyślnie otwierają się na „core”). */
+/** Okno kluczy API (W5-F: klucze nie są już w Configure Settings); zapas: ustawienia Foundry na kategorii tego modułu. */
 async function openModuleSettings() {
+  try { if (game.modules.get(MODULE_ID)?.api?.openKeys?.()) return; } catch { /* fall back to the settings window */ }
   const sheet = game.settings.sheet;
   try {
     await sheet.render({ force: true });

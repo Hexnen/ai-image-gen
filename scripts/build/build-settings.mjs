@@ -1,5 +1,5 @@
 // Settings of the AI builder harness (spec 11.1; task T2). Registered from settings.mjs registerSettings() at `init`.
-// World scope + restricted (GM) for model / effort / caps; client for pre-warm. The header-button setting belongs to the
+// World scope + restricted (GM) for model / effort / caps; client for pre-warm (config: false, GM keys window). The header-button setting belongs to the
 // drawer task (T7). Foundry globals are touched only inside the functions, so node can import this file.
 
 import { MODULE_ID } from "../constants.mjs";
@@ -59,6 +59,7 @@ export function registerBuildSettings(game = globalThis.game) {
   });
   reg(BUILD_SETTINGS.prewarm, {
     name: "MAIG.Settings.Build.Prewarm.Name", hint: "MAIG.Settings.Build.Prewarm.Hint", scope: "client",
+    config: false,   // W5-F: a client setting would show in every player's Configure Settings; edited in the GM keys window (keys-app.mjs)
     type: new BooleanField({ initial: true })
   });
   reg(BUILD_SETTINGS.endTurnOnSubmit, {

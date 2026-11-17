@@ -6,6 +6,7 @@ import * as imageTypes from "./image-types.mjs";
 import * as configStore from "./config-store.mjs";
 import * as batch from "./batch/index.mjs";
 import { ImageConfigApp } from "./config-app.mjs";
+import { registerKeysMenu, openKeys } from "./keys-app.mjs";
 import { BatchesApp } from "./batch-app.mjs";
 import { LogApp } from "./log-app.mjs";
 import * as callLog from "./call-log.mjs";
@@ -45,6 +46,7 @@ function notifyPick(rec) {
 Hooks.once("init", () => {
   if (runningUnderOldId()) return;   // nothing under the new namespace until the server knows the new id
   registerSettings();   // always: the settings must exist for the later copy and for the config window
+  registerKeysMenu();   // GM-only window for the API keys (they are config:false: client settings would show to players)
   if (oldModuleActive()) return;
   registerSheetButtons();
   registerContextMenus();
@@ -72,6 +74,7 @@ Hooks.once("ready", async () => {
     Object.assign(api, {
       providers, limits, getKey, imageTypes, configStore,
       openConfig: () => ImageConfigApp.open(),
+      openKeys,
       openBatches: () => BatchesApp.open(),
       openLog: () => LogApp.open(),
       generate: (document) => GenerateDialog.open(document),
@@ -90,7 +93,9 @@ Hooks.once("ready", async () => {
   if (game.user.isGM) import("./build/builder-api.mjs").then((m) => m.attachBuilder(api)).catch((e) => console.error(`${MODULE_ID} | AI builder harness failed to load`, e));
   // AI builder drawer (T7): header button on supported actor sheets + the docked drawer; GM only, idle until the pack is ready
   if (game.user.isGM) import("./build/drawer-app.mjs").then((m) => m.startDrawer(api)).catch((e) => console.error(`${MODULE_ID} | AI builder drawer failed to load`, e));
-  Hooks.callAll("aiImageGen.ready", api); // hook name kept from the old id: modules that started earlier can now register their types
+  // hook name kept from the old id: modules that started earlier can now register their types. api.build is NOT there yet
+  // (the three imports above attach it later): wait for "moinensAiGen.harnessReady" / "moinensAiGen.packReady" for it.
+  Hooks.callAll("aiImageGen.ready", api);
   // local-media-optimizer (jeśli jest): profil folderu danych ai-image-gen/ (DATA_ROOT) z naszymi domyślnymi limitami.
   syncOptimizerProfile();
   if (game.user.isGM) {

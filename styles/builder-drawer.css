@@ -41,7 +41,8 @@
   border: 0;
   box-shadow: none;
 }
-body.theme-dark .maig-drawer, .maig-drawer.theme-dark {
+/* W5-F: the theme follows the sheet, not the interface (dock() sets theme-dark / theme-light from the sheet; unthemed = light) */
+.maig-drawer.theme-dark {
   --maig-surface: #1f1e24;
   --maig-surface-2: #29282f;
   --maig-raised: #2e2d35;
@@ -127,6 +128,7 @@ body.theme-dark .maig-drawer, .maig-drawer.theme-dark {
 .maig-drawer .maig-btn:hover:not(:disabled) { background: var(--maig-surface-2); }
 .maig-drawer .maig-btn:active:not(:disabled) { transform: translateY(1px); }
 .maig-drawer .maig-btn:disabled { opacity: 0.5; cursor: default; }
+.maig-drawer .maig-btn[hidden], .maig-drawer .maig-usage[hidden] { display: none; }
 .maig-drawer .maig-btn.is-primary { background: var(--maig-accent); border-color: var(--maig-accent); color: var(--maig-accent-ink); }
 .maig-drawer .maig-btn.is-primary:hover:not(:disabled) { background: var(--maig-accent-hover); border-color: var(--maig-accent-hover); }
 .maig-drawer .maig-btn.is-quiet { height: 28px; padding: 0 10px; background: transparent; }

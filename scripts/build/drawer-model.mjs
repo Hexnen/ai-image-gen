@@ -27,8 +27,11 @@ export function dockGeometry(rect, view, d = DOCK) {
   const width = panelW;
   let left = flip ? rect.left - width : rect.right;
   left = Math.max(0, Math.min(left, view.width - width));
-  const top = rect.top + d.header;
-  const height = Math.max(d.minHeight, Math.min(rect.height - d.header, view.height - top));
+  // below the sheet's header; never off-screen (bughunt-2 #7): a sheet near the bottom moves the drawer up so the composer
+  // stays reachable (the drawer is position: fixed, the window does not scroll); a sheet dragged above the top clamps to 0
+  let top = Math.max(0, rect.top + d.header);
+  const height = Math.min(view.height, Math.max(d.minHeight, Math.min(rect.top + rect.height - top, view.height - top)));
+  if (top + height > view.height) top = Math.max(0, view.height - height);
   return { left, top, width, height, flip, panelW };
 }
 

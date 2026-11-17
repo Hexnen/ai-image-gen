@@ -125,6 +125,6 @@ export class TestDrawerApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   static #onOpenSettings() {
-    game.settings.sheet.render({ force: true });
+    if (!game.modules.get(MODULE_ID)?.api?.openKeys?.()) game.settings.sheet.render({ force: true });   // W5-F: keys window
   }
 }

@@ -10,7 +10,11 @@ reference images. The plan and status live in [PLAN.md](PLAN.md).
 
 `game.modules.get("moinens-ai-gen").api` (GM only for anything that spends money; `apiVersion: 1`). Modules that start
 earlier than this one can wait for the `aiImageGen.ready` hook (it passes the API; the hook names `aiImageGen.*` were kept
-on purpose). Modules that should also work with the old id look it up as
+on purpose). `api.build` (AI builder) is attached later, after that hook: wait for `moinensAiGen.harnessReady` (passes
+`api.build`) or `moinensAiGen.packReady`. A module with its own system pack registers it from the
+`moinensAiGen.registerPacks` hook (GM only, fired once right before the bundled pack loads; it passes
+`{ registerSystemPack, contractVersion }`); a pack registered later only fills a system that has no bundled pack.
+Modules that should also work with the old id look it up as
 `game.modules.get("moinens-ai-gen") ?? game.modules.get("ai-image-gen")` (take the one that is active and has an `api`).
 
 - `registerImageType({ key, label, group, owner, requiresRef?, defaults? })`: adds an image type of your own
@@ -44,6 +48,8 @@ These are properties of Foundry itself, not something the module can work around
   can change them through the module, but players can read them. Error texts are masked for keys and tokens.
 - **API keys are per-client** (client settings): stored in the browser that typed them, never synced, never
   written to the log, never sent to players. Anyone with access to that browser profile can read them.
+  They are entered in Configure Settings -> Moinens AI Gen -> **API keys (this browser)** (GM only, masked inputs);
+  they are not plain fields of the settings window, because Foundry v14 shows client settings to players too.
 - **Foundry has no API to delete files.** Unused batch candidates, replaced references and test examples stay
   on disk until you delete them in the file browser or on the server.
 - **Budget limits are best-effort.** A limit of `0` means *no limit*. The daily/monthly counters add the

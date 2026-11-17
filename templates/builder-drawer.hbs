@@ -1,7 +1,7 @@
 {{#if part.head}}
 <header class="maig-head">
   <div class="maig-titlebar">
-    <h2 class="maig-title"><span>{{title}}</span>{{#if mode}}<span class="maig-mode">{{packLabel}} · {{mode}}</span>{{/if}}</h2>
+    <h2 class="maig-title" id="{{appId}}-title"><span>{{title}}</span>{{#if mode}}<span class="maig-mode">{{packLabel}} · {{mode}}</span>{{/if}}</h2>
     <button type="button" class="maig-icon-btn" data-action="newConversation" {{#if anyBusy}}disabled{{/if}} aria-label="{{localize 'MAIG.Drawer.New'}}" data-tooltip="{{localize 'MAIG.Drawer.NewHint'}}" data-tooltip-direction="DOWN"><i class="fa-solid fa-file-circle-plus" aria-hidden="true"></i></button>
     <button type="button" class="maig-icon-btn" data-action="collapse" aria-label="{{localize 'MAIG.Drawer.Close'}}" data-tooltip="{{localize 'MAIG.Drawer.Close'}}" data-tooltip-direction="DOWN"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
   </div>
@@ -27,7 +27,7 @@
   {{/if}}
 </header>
 {{else if part.log}}
-<section class="maig-log" role="log" aria-live="polite" aria-label="{{localize 'MAIG.Drawer.Conversation'}}">
+<section class="maig-log" aria-label="{{localize 'MAIG.Drawer.Conversation'}}">
   {{#if empty}}
   <div class="maig-empty">
     <p class="maig-empty-lead">{{localize "MAIG.Drawer.Empty.lead"}}</p>
@@ -43,7 +43,7 @@
   {{else if (eq kind "status")}}<p class="maig-event is-{{status}}"><i class="fa-solid {{#if (eq status 'applied')}}fa-check{{else if (eq status 'discarded')}}fa-ban{{else}}fa-rotate-left{{/if}}" aria-hidden="true"></i>{{localize (concat "MAIG.Drawer.Event." status)}}</p>
   {{else if (eq kind "notice")}}<p class="maig-event is-notice is-{{level}}"><i class="fa-solid fa-circle-info" aria-hidden="true"></i>{{text}}</p>
   {{else if (eq kind "tools")}}
-  <details class="maig-tools{{#if running}} is-running{{/if}}{{#if failed}} has-failed{{/if}}">
+  <details class="maig-tools{{#if running}} is-running{{/if}}{{#if failed}} has-failed{{/if}}" data-key="tools-{{@index}}">
     <summary><i class="fa-solid {{#if running}}fa-spinner fa-spin{{else}}fa-wrench{{/if}}" aria-hidden="true"></i>{{localize "MAIG.Drawer.Tools" n=count}}{{#if failed}} · {{localize "MAIG.Drawer.ToolsFailed" n=failed}}{{/if}}</summary>
     <ul>{{#each tools}}<li class="is-{{status}}"><i class="fa-solid {{#if (eq status 'done')}}fa-check{{else if (eq status 'error')}}fa-xmark{{else}}fa-spinner fa-spin{{/if}}" aria-hidden="true"></i>{{label}}</li>{{/each}}</ul>
   </details>
@@ -61,9 +61,9 @@
 {{else if part.card}}
 <section class="maig-cardzone">
   {{#if card}}
-  <article class="maig-card{{#if card.restored}} is-restored{{/if}}" aria-labelledby="maig-card-title-{{card.id}}">
+  <article class="maig-card{{#if card.restored}} is-restored{{/if}}" aria-labelledby="{{appId}}-card-title">
     <header class="maig-card-head">
-      <h3 id="maig-card-title-{{card.id}}">{{localize "MAIG.Drawer.Card.title"}}</h3>
+      <h3 id="{{appId}}-card-title">{{localize "MAIG.Drawer.Card.title"}}</h3>
       <span class="maig-card-meta">{{card.rankName}} · {{card.profileName}}</span>
     </header>
     {{#if card.checking}}<p class="maig-hint"><i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i> {{localize "MAIG.Drawer.Card.checking"}}</p>{{/if}}
@@ -74,16 +74,16 @@
       <tbody>{{#each card.budget}}<tr class="{{#if changed}}is-changed{{/if}}{{#if over}} is-over{{/if}}"><th scope="row">{{label}}</th><td>{{before}}</td><td>{{after}}</td></tr>{{/each}}</tbody>
     </table>
     {{/if}}
-    <details class="maig-ops" open>
+    <details class="maig-ops" data-key="ops-{{card.id}}" open>
       <summary>{{localize "MAIG.Drawer.Card.ops" n=card.opCount}}</summary>
       <ul>{{#each card.ops}}<li class="is-{{action}}"><span class="maig-op-icon" aria-hidden="true"><i class="fa-solid {{#if (eq action 'add')}}fa-plus{{else if (eq action 'remove')}}fa-minus{{else if (eq action 'swap')}}fa-right-left{{else if (eq action 'actor')}}fa-user-pen{{else}}fa-pen{{/if}}"></i></span><span class="maig-op-text">{{text}}</span>{{#if cost}}<span class="maig-op-cost">{{cost}}</span>{{/if}}</li>{{/each}}
       {{#each card.extra}}<li class="is-extra"><span class="maig-op-icon" aria-hidden="true"><i class="fa-solid fa-equals"></i></span><span class="maig-op-text">{{this}}</span></li>{{/each}}</ul>
     </details>
     {{#if card.errors.length}}<div class="maig-issues is-error"><h4>{{localize "MAIG.Drawer.Card.errors"}}</h4><ul>{{#each card.errors}}<li>{{text}}</li>{{/each}}</ul></div>{{/if}}
     {{#if card.confirm.length}}<div class="maig-issues is-confirm"><h4>{{localize "MAIG.Drawer.Card.confirm"}}</h4><ul>{{#each card.confirm}}<li>{{this}}</li>{{/each}}</ul></div>{{/if}}
-    {{#if card.reorders.length}}<details class="maig-issues is-info"><summary>{{localize "MAIG.Drawer.Card.reorders" n=card.reorders.length}}</summary><p class="maig-hint">{{localize "MAIG.Drawer.Card.reordersHint"}}</p><ul>{{#each card.reorders}}<li>{{#if roleChange}}<strong>{{text}}</strong>{{else}}{{text}}{{/if}}</li>{{/each}}</ul></details>{{/if}}
+    {{#if card.reorders.length}}<details class="maig-issues is-info" data-key="reorders-{{card.id}}"><summary>{{localize "MAIG.Drawer.Card.reorders" n=card.reorders.length}}</summary><p class="maig-hint">{{localize "MAIG.Drawer.Card.reordersHint"}}</p><ul>{{#each card.reorders}}<li>{{#if roleChange}}<strong>{{text}}</strong>{{else}}{{text}}{{/if}}</li>{{/each}}</ul></details>{{/if}}
     {{#if card.warnings.length}}<div class="maig-issues is-warn"><h4>{{localize "MAIG.Drawer.Card.warnings"}}</h4><ul>{{#each card.warnings}}<li>{{text}}{{#if gm}}<span class="maig-gm"><strong>{{localize "MAIG.Drawer.Card.gm"}}</strong> {{gm}}</span>{{/if}}</li>{{/each}}</ul></div>{{/if}}
-    {{#if card.info.length}}<details class="maig-issues is-info"><summary>{{localize "MAIG.Drawer.Card.info" n=card.info.length}}</summary><ul>{{#each card.info}}<li>{{text}}{{#if gm}}<span class="maig-gm"><strong>{{localize "MAIG.Drawer.Card.gm"}}</strong> {{gm}}</span>{{/if}}</li>{{/each}}</ul></details>{{/if}}
+    {{#if card.info.length}}<details class="maig-issues is-info" data-key="info-{{card.id}}"><summary>{{localize "MAIG.Drawer.Card.info" n=card.info.length}}</summary><ul>{{#each card.info}}<li>{{text}}{{#if gm}}<span class="maig-gm"><strong>{{localize "MAIG.Drawer.Card.gm"}}</strong> {{gm}}</span>{{/if}}</li>{{/each}}</ul></details>{{/if}}
     {{#if card.previewError}}<p class="maig-hint is-error">{{card.previewError}}</p>{{/if}}
     <div class="maig-card-actions">
       <button type="button" class="maig-btn is-primary" data-action="apply" {{#if anyBusy}}disabled{{/if}} {{#if (eq card.ok false)}}disabled{{/if}}>{{#if (eq working "apply")}}<i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i> {{localize "MAIG.Drawer.Card.applying"}}{{else}}<i class="fa-solid fa-check" aria-hidden="true"></i> {{localize "MAIG.Drawer.Card.apply"}}{{/if}}</button>
@@ -101,16 +101,14 @@
 {{else if part.composer}}
 <footer class="maig-composer">
   <div class="maig-inputrow">
-    <textarea name="message" rows="2" aria-label="{{localize 'MAIG.Drawer.InputLabel'}}" placeholder="{{localize 'MAIG.Drawer.Placeholder'}}" aria-describedby="maig-keys" {{#if working}}disabled{{/if}}></textarea>
-    {{#if busy}}
-    <button type="button" class="maig-btn is-stop" data-action="stop" aria-label="{{stopLabel}}" data-tooltip="{{stopLabel}}"><i class="fa-solid fa-stop" aria-hidden="true"></i></button>
-    {{else}}
-    <button type="button" class="maig-btn is-primary is-send" data-action="send" {{#if working}}disabled{{/if}} aria-label="{{sendLabel}}" data-tooltip="{{sendLabel}}"><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button>
-    {{/if}}
+    <textarea name="message" rows="2" aria-label="{{localize 'MAIG.Drawer.InputLabel'}}" placeholder="{{localize 'MAIG.Drawer.Placeholder'}}" aria-describedby="{{appId}}-keys" {{#if working}}disabled{{/if}}></textarea>
+    {{!-- both buttons always present: drawer-app.mjs #syncComposer swaps them in place, the textarea is never re-created mid-turn --}}
+    <button type="button" class="maig-btn is-stop" data-action="stop" aria-label="{{stopLabel}}" data-tooltip="{{stopLabel}}" {{#unless busy}}hidden{{/unless}}><i class="fa-solid fa-stop" aria-hidden="true"></i></button>
+    <button type="button" class="maig-btn is-primary is-send" data-action="send" {{#if working}}disabled{{/if}} aria-label="{{sendLabel}}" data-tooltip="{{sendLabel}}" {{#if busy}}hidden{{/if}}><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button>
   </div>
   <div class="maig-meta">
-    <span id="maig-keys" class="maig-keys">{{localize "MAIG.Drawer.Keys"}}</span>
-    {{#if usage}}<span class="maig-usage{{#if usage.amber}} is-amber{{/if}}" data-tooltip="{{usage.tip}}" data-tooltip-direction="UP">{{#if usage.turn}}{{localize "MAIG.Drawer.Usage.turn" requests=usage.turn.requests maxRequests=usage.turn.maxRequests tools=usage.turn.tools maxTools=usage.turn.maxTools usd=usage.turn.usd maxUsd=usage.turn.maxUsd}}{{else}}{{usage.line}}{{/if}}</span>{{/if}}
+    <span id="{{appId}}-keys" class="maig-keys">{{localize "MAIG.Drawer.Keys"}}</span>
+    <span class="maig-usage{{#if usage.amber}} is-amber{{/if}}" data-role="usage" data-tooltip="{{usage.tip}}" data-tooltip-direction="UP" {{#unless usage}}hidden{{/unless}}>{{#if usage.turn}}{{localize "MAIG.Drawer.Usage.turn" requests=usage.turn.requests maxRequests=usage.turn.maxRequests tools=usage.turn.tools maxTools=usage.turn.maxTools usd=usage.turn.usd maxUsd=usage.turn.maxUsd}}{{else}}{{usage.line}}{{/if}}</span>
   </div>
 </footer>
 {{/if}}

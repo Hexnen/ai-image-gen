@@ -11,12 +11,14 @@ export const SCHEMA_VERSION = 2;
 
 export function registerSettings() {
   // API keys: client scope on purpose. World-scope settings sync to every player.
+  // config: false (W5-F): v14's Configure Settings shows CLIENT settings to players too (`restricted` only matters for
+  // world settings), so the keys are edited in the GM-only window of keys-app.mjs (restricted settings menu, password inputs).
   for (const p of PROVIDER_IDS) {
     game.settings.register(MODULE_ID, `apiKey.${p}`, {
       name: `AIIMG.Settings.ApiKey.${p}.Name`,
       hint: "AIIMG.Settings.ApiKey.Hint",
       scope: "client",
-      config: true,
+      config: false,
       restricted: true,
       type: new StringField({ initial: "", blank: true })
     });
@@ -27,7 +29,7 @@ export function registerSettings() {
     name: "AIIMG.Settings.ApiKey.anthropic.Name",
     hint: "AIIMG.Settings.ApiKey.anthropic.Hint",
     scope: "client",
-    config: true,
+    config: false,
     restricted: true,
     type: new StringField({ initial: "", blank: true })
   });

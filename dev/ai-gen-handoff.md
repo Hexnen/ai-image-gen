@@ -168,3 +168,9 @@
 - B5 jedna Session per klucz (obietnica w locie), łańcuch zapisów nie zatruwa się, `send` i `markProposal` nie odrzucają; B6 `request-start` (`retry: true`) przy ponowieniu transportu; B7 429 bez `retry-after` po 10 s / 20 s; B9 powód „Not run” z tury, która zostawiła narzędzia.
 - B1 TYMCZASOWO: `PROPOSAL_TOOL_STRICT = false` (`validate.mjs`): limit złożoności strict niepotwierdzony, L0 `checkShape` sprawdza; decyzja właściciela po 1 prawdziwym żądaniu. B9a (zegar blokady writera) i B9c (lista modeli, `build-settings.mjs`) nie zmienione.
 - Testy: harness 48, transport 30, wszystkie zielone. Dla W5-F (szuflada: `unsent` do pola wiadomości, `emptyReply`, `cap.cost` z szacunkiem, lista modeli), teksty W5-T (W5-B-T1 pilniejsze), wybory W5-G-a..f (limit 0,50 przy zimnym Fable), niezweryfikowane: `dev/wave5-notes.md` (W5-G).
+
+## 2026-11-17 W5-F: poprawki bughunt 2
+- Klucze API i pre-warm: `config: false`; edycja w oknie MG `scripts/keys-app.mjs` (menu ustawień `restricted`, pola `password` z pokaż/ukryj, `api.openKeys()`); przechowywanie i migracja bez zmian. Gracz nic z modułu nie widzi w ustawieniach (sprawdzone na torze 20). `localStorage` nadal czyta każdy z dostępem do profilu przeglądarki.
+- Szuflada: tekst MG wraca po odmowie przed turą; stan `<details>` trwa między renderami; composer nie jest renderowany w trakcie tury (aktualizacja w miejscu); motyw za arkuszem (bez motywu = jasny); błąd otwarcia nie zostawia martwej szuflady; dokowanie przy dole okna; id z prefiksem, `aria-labelledby`, stały `role=status`, Esc zamyka tylko szufladę; menu trzech kropek z etykietą stanu.
+- Rejestr: hook `moinensAiGen.registerPacks` (jedyny moment, w którym zewnętrzny pakiet wygrywa z dołączonym); log: rodzaje `build` / `build-prewarm`. `module.json` nietknięty (decyzja właściciela).
+- Szczegóły, próba na żywo, niezweryfikowane: `dev/wave5-notes.md` (W5-F).

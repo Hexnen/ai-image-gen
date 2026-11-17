@@ -273,3 +273,72 @@ Pliki: `scripts/build/harness.mjs`, `scripts/anthropic/transport.mjs`, `scripts/
 
 ### Niezweryfikowane
 - Bez prawdziwego API i bez toru: czy limit złożoności strict istnieje (B1), czy API przyjmuje wiadomość MG po wiadomości `user` z wynikami (scalanie; zachowanie udokumentowane, nie sprawdzone tutaj), czy `retry-after` jest czytelny w przeglądarce (B7), wygląd pozycji `unsent`/`pending` w szufladzie (render W5-F).
+
+## W5-F: poprawki z `dev/bughunt-2.md` (wszystkie M + tanie L)
+
+Kod: HEAD `0b737d5` + ta zmiana. Nie ruszane: `module.json` (URL-e repo = decyzja właściciela, #12), teksty prefiksu, harness
+(w drzewie są równoległe, niezacommitowane zmiany innego agenta w `harness.mjs`, `anthropic/*`, `validate.mjs` i testach: nie moje).
+
+### Co zmienione
+- **#1 klucze API (M)**: `apiKey.openai|gemini|openrouter|anthropic` i `build.prewarm` mają `config: false` (v14 pokazuje
+  graczom ustawienia CLIENT; `restricted` działa tylko dla WORLD). Nowe okno `scripts/keys-app.mjs` + `templates/keys.hbs`:
+  menu ustawień `moinens-ai-gen.keys` z `restricted: true` (gracz go nie widzi), `_canRender` = tylko MG (druga blokada),
+  pola `type="password"` (`autocomplete="off"`, ignorowane przez menedżery haseł) z przyciskiem pokaż/ukryj (`aria-pressed`),
+  checkbox pre-warm, zapis tylko zmienionych wartości. Przechowywanie bez zmian (`localStorage` `moinens-ai-gen.apiKey.*`),
+  więc zapisane klucze i migracja ze starego id działają (`dev/test-migrate-id.mjs` 19/19, nowy test: każde ustawienie
+  client ma `config:false`). `api.openKeys()` (MG); linki „Otwórz ustawienia” w szufladzie, przy różdżce i w szufladzie testu
+  otwierają to okno. Nazwa klucza Anthropic: „(różdżka opisu i kreator AI)”. README i owner-readiness zaktualizowane.
+  Uwaga: `localStorage` dalej czyta każdy, kto ma dostęp do tego profilu przeglądarki (napisane w oknie).
+- **#2 (M)**: `#send` pamięta tekst do zdarzenia `user-message`; odmowa przed turą (brak klucza/pakietu, limit, pełna
+  historia) albo błąd przed zapisaniem wiadomości oddaje tekst do pola (przed tym, co MG zdążył dopisać).
+- **#3 (M)**: `<details data-key>` (`tools-<i>`, `ops-<id>`, `reorders-<id>`, `info-<id>`); stan zbierany zdarzeniem `toggle`
+  (capture na stałym korzeniu), przywracany w `_onRender`; czyszczony przy nowej rozmowie.
+- **#4 (M)**: część `composer` nie jest renderowana przy zmianach stanu: `#syncComposer` w miejscu przełącza wyślij/stop
+  (oba przyciski w szablonie, `hidden`), `disabled`, `is-busy` i linię zużycia. Pełny render (otwarcie) przenosi kursor,
+  zaznaczenie, wysokość, przewinięcie i fokus (`_preSyncPartState` / `_syncPartState`).
+- **#5 (L), decyzja**: motyw szuflady idzie za ARKUSZEM, nie za interfejsem: arkusz z `theme-dark` -> ciemna, każdy inny
+  (także arkusz bez motywu, jak zawsze papierowe Invincible) -> jasna. `dock()` ustawia `theme-dark`/`theme-light`; CSS ma
+  ciemne tokeny tylko na `.maig-drawer.theme-dark` (bez `body.theme-dark`).
+- **#6 / #14 (L)**: `openFor` w try/catch: błąd `ready()`/renderu -> szuflada wyjęta z mapy, zamknięta, jedno powiadomienie
+  `MAIG.Drawer.OpenFailed`; nieudana obietnica `ready()` nie jest zapamiętywana; klik w nagłówku i w menu łapie odrzucenia.
+  Po `await ready()`: arkusz zamknięty albo inna szuflada w mapie -> nic nie renderuje.
+- **#7 (L)**: `dockGeometry`: szuflada przy dole okna przesuwa się w górę (min. 160 px, nigdy poza oknem), arkusz nad górną
+  krawędzią -> `top` 0; testy w `test-drawer-model.mjs`.
+- **#8 / #9 (L)**: id z prefiksem id aplikacji (`<appId>-title|keys|card-title`); `<aside aria-labelledby>` -> tytuł;
+  `aria-live` przeniesione z wymienianej części logu na stały, ukryty `role=status` (zapowiada tylko nowe wiersze AI,
+  komunikaty i statusy, jako tekst); Esc w szufladzie zamyka tylko szufladę (nie arkusz) i wraca fokusem do przycisku.
+- **#10 (L)**: obietnica „przed ready” była nieosiągalna; teraz prawdziwa: `startBuildRegistry` woła hook
+  `moinensAiGen.registerPacks` (`{ registerSystemPack, contractVersion }`, MG, raz, tuż przed `load()`); pakiet z tego hooka
+  wygrywa z dołączonym, później tylko wypełnia system bez aktywnego pakietu. Kontrakt w `registry.mjs`, README i komentarz
+  przy `aiImageGen.ready` (`api.build` przychodzi później: `moinensAiGen.harnessReady` / `packReady`). Test w `test-packs.mjs` (24/24).
+- **#11 (L)**: `build`, `build-prewarm` w filtrach logu + etykiety en/pl. **#13 (L)**: wpis w menu trzech kropek mówi
+  „Zamknij kreator AI”, gdy szuflada jest otwarta.
+
+### Testy
+- `dev/test-*.mjs`: wszystkie zielone poza `test-harness.mjs` (37/40): 3 porażki (stop w strumieniu, refusal, held results)
+  pochodzą z niezacommitowanych zmian innego agenta w `harness.mjs`; na HEAD bez tych zmian 40/40. Moje pliki harnessu nie dotykają.
+
+### Próba na żywo (tor 20, slot `bh2fix`, własna karta, świat przywrócony `lane20.ps1 restore` bez potoku, slot oddany)
+- Moduł był wyłączony w świecie toru: włączony na czas testu (świat potem przywrócony).
+- MG: w Konfiguruj ustawienia brak pól kluczy i pre-warm, jest przycisk „Edit API keys”; okno: 4 pola `password`, oko
+  przełącza `text`/`password`, zapis fałszywej wartości testowej OpenAI i pre-warm, ponowne otwarcie maskowane, potem
+  wyczyszczone (klucz Anthropic nigdy nie ustawiony: zero ruchu do Anthropic).
+- Szuflada przy papierowym arkuszu na ciemnym interfejsie: `theme-light`; arkusz z `themed theme-dark` -> `theme-dark`.
+- Symulowana tura (zdarzenia sesji `state`, `turn-start`, `request-*`, `tool-start`, `turn-end`): ten sam węzeł textarea,
+  fokus, kursor 3, wysokość 120 px zachowane; stop/wyślij przełączone; linia zużycia „Request 1/12 · tools 1/40 · …”.
+  Pełny render: nowy węzeł, zaznaczenie 2-4, fokus i wysokość przeniesione.
+- `<details>` (wiersz narzędzi i karta wstrzyknięte przez podmieniony `_prepareContext`, potem przywrócony): otwarte
+  narzędzia, zwinięte operacje, otwarte info przetrwały 8 renderów logu i render karty.
+- Wysłanie bez klucza: tekst wrócił do pola, w transkrypcie tylko `notice`, zapowiedź w `role=status`.
+- Esc w polu: szuflada zamknięta, arkusz otwarty, fokus na przycisku. Menu trzech kropek: `Open` / `MenuClose`.
+- Błąd `openSession` (podmieniony): powiadomienie, brak szuflady w mapie i DOM, `aria-pressed=false`, 0 nieobsłużonych
+  odrzuceń; po przywróceniu następny klik otwiera.
+- Log wywołań: opcje `build`, `build-prewarm` z etykietami. Konsola: brak błędów modułu (poza zasymulowanym).
+- Test Gracz 1: brak kategorii Moinens AI Gen w ustawieniach, brak pól `password`, brak menu, `api` bez `openKeys`;
+  ręczny import `ApiKeysApp` + render -> nie renderuje się. Uwaga poboczna: `sketch-reveal` ma ten sam błąd (gracz widzi
+  „OpenRouter API key (light detection)” w ustawieniach), poza zakresem.
+
+### Niezweryfikowane
+- Prawdziwa tura (zdarzenia symulowane), IME na żywo (kod nie tworzy textarea w trakcie tury), czytnik ekranu,
+  PL interfejs na żywo, szuflada przy dolnej krawędzi na żywo (Foundry sam przycina pozycję arkusza; pokrywa test węzła),
+  dwie szuflady naraz (id z prefiksem tylko z kodu), hook `registerPacks` z prawdziwym modułem zewnętrznym.

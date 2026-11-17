@@ -250,3 +250,10 @@ button.link:focus-visible { outline: 2px solid var(--color-warm-2, #c9593f); out
 .aiimg-enhance-status[data-state="done"] i { color: var(--color-warm-2, #c9593f); }
 .aiimg-enhance-status[data-state="error"] { color: var(--color-level-error, #e05050); opacity: 1; }
 .aiimg-enhance-status .link { flex: 0 0 auto; }
+
+/* API keys window (scripts/keys-app.mjs, W5-F): GM only, password inputs with a show toggle */
+.aiimg-keys .aiimg-keys-part { display: flex; flex-direction: column; gap: 0.75rem; }
+.aiimg-keys .aiimg-keys-body { display: flex; flex-direction: column; gap: 0.5rem; }
+.aiimg-keys .aiimg-keys-lead { margin: 0; }
+.aiimg-keys .form-fields input[type="password"], .aiimg-keys .form-fields input[type="text"] { flex: 1 1 auto; font-family: var(--font-monospace, monospace); }
+.aiimg-keys .aiimg-keys-reveal { flex: 0 0 2rem; width: 2rem; height: var(--input-height, 2rem); padding: 0; }

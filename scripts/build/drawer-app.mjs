@@ -73,10 +73,30 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
     let d = drawers.get(sheet.id);
     if (!d) { d = new BuilderDrawer(sheet); drawers.set(sheet.id, d); }
     if (open) d.isOpen = true;
-    await d.ready();
-    await d.render({ force: true });
+    try {
+      await d.ready();
+      // the sheet closed (or another drawer took its place) while the session opened: never render an orphan (bughunt-2 #14)
+      if (!sheet.rendered || drawers.get(sheet.id) !== d) { d.#discard(); return null; }
+      await d.render({ force: true });
+    } catch (e) {
+      // a failed ready() / render must not leave a dead, "open" drawer in the map (bughunt-2 #6): forget it, say so once
+      d.#discard();
+      console.error(`${MODULE_ID} | AI builder drawer failed to open`, e);
+      if (open) ui.notifications?.error?.(L("MAIG.Drawer.OpenFailed", { error: String(e?.message ?? e) }), { console: false });
+      syncHeaderState(sheet);
+      return null;
+    }
     if (open) d.focusInput();
     return d;
+  }
+
+  /** drop a drawer that never became usable: out of the map, unsubscribed, closed */
+  #discard() {
+    if (drawers.get(this.sheet?.id) === this) drawers.delete(this.sheet.id);
+    this.isOpen = false;
+    this.#unsub?.();
+    this.#unsub = null;
+    this.close({ animate: false }).catch(() => {});
   }
 
   constructor(sheet) {
@@ -121,6 +141,7 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
   #hooks = [];
   #onWinResize = () => this.dock();
   #draft = "";
+  #sent = null;            // text of a send in flight until the harness stored it ("user-message")
   #focusInput = false;
   #stick = true;
   #flash = null;           // { level, text, items: [string] } banner from a drawer action
@@ -133,6 +154,9 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
   #renderQ = new Set();
   #renderT = null;
   #sheetRenders = 0;
+  #details = new Map();    // open state of <details data-key> across part renders (bughunt-2 #3)
+  #announced = -1;         // conversation rows already announced to screen readers (-1 = first render, announce nothing)
+  #liveEl = null;          // stable visually-hidden live region (the log part itself is replaced on every render)
   lastWriteStats = null;   // { kind, sheetRenders, forced, ms } of the last Apply / Undo (live check, W5-T7)
 
   /** Open the session once (IndexedDB restore) and subscribe to its events. */
@@ -145,6 +169,7 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
       if (this.session.busy) this.#live ??= { start: Date.now(), requests: 0, tools: 0, usd: 0, text: "" };
       this.session.prewarm?.().catch?.(() => {});
     })();
+    this.#readyP.catch(() => { this.#readyP = null; });   // a failure is not cached: the next click tries again
     return this.#readyP;
   }
 
@@ -168,9 +193,7 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
     const states = s?.proposals ?? [];
     const rows = M.conversationRows(items, { states, L });
     const card = this.pendingCard;
-    let caps = {};
-    try { caps = b?.harness?.settings?.() ?? {}; } catch { caps = {}; }
-    const usage = s ? M.usageView(s.usage(), caps, this.#live, L, { model: s.record?.model, effort: s.record?.effort }) : null;
+    const usage = this.#usageVm();
     const sup = b?.registry?.supports?.(this.actor);
     const dry = b?.dry ?? null;
     let hasKey = true;
@@ -202,6 +225,7 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
     }
     const busy = !!s?.busy;
     return {
+      appId: this.id,
       isOpen: this.isOpen, busy, working: this.#working, anyBusy: busy || !!this.#working,
       title: L("MAIG.Drawer.Title"),
       actorName: this.actor.name,
@@ -223,6 +247,16 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
       usage, draft: this.#draft,
       sendLabel: L("MAIG.Drawer.Send"), stopLabel: L("MAIG.Drawer.Stop")
     };
+  }
+
+  /** the usage line of the composer (also refreshed in place by #syncComposer during a turn) */
+  #usageVm() {
+    const s = this.session;
+    if (!s) return null;
+    let caps = {};
+    try { caps = build()?.harness?.settings?.() ?? {}; } catch { caps = {}; }
+    try { return M.usageView(s.usage(), caps, this.#live, L, { model: s.record?.model, effort: s.record?.effort }); }
+    catch { return null; }
   }
 
   async _preparePartContext(partId, context, options) {
@@ -294,7 +328,11 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
         if (this.#live) this.#live.fixRound = true;
         this.#queue("log");
         break;
-      case "tool-end": case "user-message": case "notice": case "submit-failed":
+      case "user-message":
+        this.#sent = null;   // the GM's text is in the conversation now: nothing to give back (bughunt-2 #2)
+        this.#queue("log");
+        break;
+      case "tool-end": case "notice": case "submit-failed":
         this.#queue("log");
         break;
       case "proposal":
@@ -309,6 +347,8 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
       case "conversation":
         this.#invalidatePreview();
         this.#flash = null;
+        this.#details.clear();
+        this.#announced = -1;
         this.#queue("log", "card", "composer", "head");
         break;
       case "state":
@@ -324,9 +364,13 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
     if (this.#renderT) return;
     this.#renderT = setTimeout(() => {
       this.#renderT = null;
-      const list = [...this.#renderQ];
+      let list = [...this.#renderQ];
       this.#renderQ.clear();
-      if (this.rendered) this.render({ parts: list }).catch((e) => console.warn(`${MODULE_ID} | drawer render`, e));
+      if (!this.rendered) return;
+      // the composer is never re-rendered for state changes (bughunt-2 #4): the textarea keeps value, caret, height and an
+      // IME composition; only the send/stop swap, the disabled state and the usage line change, in place
+      if (list.includes("composer") && this.#syncComposer()) list = list.filter((p) => p !== "composer");
+      if (list.length) this.render({ parts: list }).catch((e) => console.warn(`${MODULE_ID} | drawer render`, e));
     }, 80);
   }
 
@@ -366,6 +410,28 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
       });
     }
     this.element.addEventListener("pointerdown", () => { try { this.sheet.bringToFront(); } catch { /* frameless */ } }, { capture: true });
+    // <details> open state survives part renders (toggle does not bubble: capture on the stable root)
+    this.element.addEventListener("toggle", (ev) => {
+      const d = ev.target;
+      if (d?.tagName === "DETAILS" && d.dataset.key) this.#details.set(d.dataset.key, d.open);
+    }, { capture: true });
+    // Esc inside the drawer closes the drawer only (Foundry's Esc would close the sheet window with it); focus goes back
+    // to the header button. An IME composition keeps its Esc.
+    this.element.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Escape" || ev.isComposing || ev.defaultPrevented) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      BuilderDrawer.#onCollapse.call(this);
+    });
+    // landmark name + a live region that part renders do not replace (bughunt-2 #9)
+    this.element.setAttribute("aria-labelledby", `${this.id}-title`);
+    const live = document.createElement("div");
+    live.className = "visually-hidden";
+    live.setAttribute("role", "status");
+    live.setAttribute("aria-live", "polite");
+    live.dataset.role = "announce";
+    this.element.append(live);
+    this.#liveEl = live;
   }
 
   _onRender(context, options) {
@@ -376,15 +442,87 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
     el.classList.toggle("is-busy", !!context.anyBusy);
     if (parts.includes("composer")) this.#wireComposer();
     if (parts.includes("head")) this.#wireHead();
-    if (parts.includes("log")) this.#wireLog();
+    if (parts.includes("log")) { this.#wireLog(); this.#announce(context.rows ?? []); }
+    for (const d of el.querySelectorAll("details[data-key]")) {
+      const v = this.#details.get(d.dataset.key);
+      if (v !== undefined && d.open !== v) d.open = v;
+    }
+    this.#syncComposer();
     this.dock();
     syncHeaderState(this.sheet);
+  }
+
+  /** a full render (open, first render) still re-creates the textarea: carry caret, scroll, height and focus over */
+  _preSyncPartState(partId, newElement, priorElement, state) {
+    super._preSyncPartState?.(partId, newElement, priorElement, state);
+    if (partId !== "composer") return;
+    const ta = priorElement?.querySelector?.("textarea[name=message]");
+    if (!ta) return;
+    state.maigInput = {
+      start: ta.selectionStart, end: ta.selectionEnd, dir: ta.selectionDirection,
+      height: ta.style.height, scroll: ta.scrollTop, focused: document.activeElement === ta
+    };
+  }
+
+  _syncPartState(partId, newElement, priorElement, state) {
+    super._syncPartState?.(partId, newElement, priorElement, state);
+    const st = state?.maigInput;
+    if (partId !== "composer" || !st) return;
+    const ta = newElement?.querySelector?.("textarea[name=message]");
+    if (!ta) return;
+    ta.value = this.#draft;
+    if (st.height) ta.style.height = st.height;
+    if (st.focused && !ta.disabled) {
+      ta.focus({ preventScroll: true });
+      try { ta.setSelectionRange(st.start, st.end, st.dir); } catch { /* ignore */ }
+    }
+    ta.scrollTop = st.scroll;
+  }
+
+  /** send/stop swap, disabled state and usage line of the composer, in place. -> false when there is no composer yet */
+  #syncComposer() {
+    const root = this.element?.querySelector?.("[data-application-part=composer]");
+    if (!root) return false;
+    const busy = !!this.session?.busy, working = !!this.#working;
+    const ta = root.querySelector("textarea[name=message]");
+    if (ta) ta.disabled = working;
+    const stop = root.querySelector("[data-action=stop]"), send = root.querySelector("[data-action=send]");
+    if (stop) stop.hidden = !busy;
+    if (send) { send.hidden = busy; send.disabled = working; }
+    this.element.classList.toggle("is-busy", busy || working);
+    const u = root.querySelector("[data-role=usage]");
+    if (u) {
+      const v = this.#usageVm();
+      u.hidden = !v;
+      if (v) {
+        u.textContent = v.turn ? L("MAIG.Drawer.Usage.turn", v.turn) : v.line;
+        u.classList.toggle("is-amber", !!v.amber);
+        u.dataset.tooltip = v.tip ?? "";
+      }
+    }
+    return true;
+  }
+
+  /** new conversation rows (not the GM's own, not tool chips) go to the stable live region as plain text */
+  #announce(rows) {
+    const n = rows.length;
+    if (this.#announced < 0 || n < this.#announced) { this.#announced = n; return; }
+    const fresh = rows.slice(this.#announced);
+    this.#announced = n;
+    const plain = (html) => { const t = document.createElement("template"); t.innerHTML = String(html ?? ""); return t.content.textContent.trim(); };
+    const text = fresh.map((r) => {
+      if (r.kind === "ai" || r.kind === "proposal" || r.kind === "progress") return plain(r.html);
+      if (r.kind === "notice") return String(r.text ?? "");
+      if (r.kind === "status") return L(`MAIG.Drawer.Event.${r.status}`);
+      return "";
+    }).filter(Boolean).join(" ");
+    if (text && this.#liveEl) this.#liveEl.textContent = text.length > 600 ? `${text.slice(0, 600)}…` : text;
   }
 
   #wireComposer() {
     const ta = this.element.querySelector("textarea[name=message]");
     if (!ta) return;
-    ta.value = this.#draft;
+    if (ta.value !== this.#draft) ta.value = this.#draft;
     ta.addEventListener("input", () => { this.#draft = ta.value; });
     ta.addEventListener("focus", () => { this.#focusInput = true; });
     ta.addEventListener("blur", () => { this.#focusInput = false; });
@@ -394,7 +532,7 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
       ev.stopPropagation();
       this.#send();
     });
-    if (this.#focusInput) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    if (this.#focusInput && document.activeElement !== ta && !ta.disabled) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
   }
 
   #wireHead() {
@@ -436,6 +574,11 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
     el.style.width = `${g.width}px`;
     el.style.height = `${g.height}px`;
     el.style.zIndex = sh.style.zIndex || "";
+    // theme follows the sheet (bughunt-2 #5, W5-F): a sheet with its own theme (DocumentSheetConfig -> `themed theme-*`)
+    // gives it; an unthemed sheet (the Invincible sheets are always light paper) gives light, whatever the interface is
+    const dark = sh.classList.contains("theme-dark");
+    el.classList.toggle("theme-dark", dark);
+    el.classList.toggle("theme-light", !dark);
   }
 
   _onClose(options) {
@@ -468,12 +611,24 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
     const text = this.#draft.trim();
     if (!s || !text || s.busy || this.#working) return;
     this.#draft = "";
+    this.#sent = text;
     this.#stick = true;
     const ta = this.element.querySelector("textarea[name=message]");
     if (ta) ta.value = "";
     this.#focusInput = true;
     try { await s.send(text); }
     catch (e) { this.#setFlash("error", L("MAIG.Drawer.Flash.sendFailed", { error: String(e?.message ?? e) })); }
+    finally {
+      // refused before the turn (no key, no pack, history full, ...) or failed before the message was stored: the
+      // "user-message" event never came, so the text is not in the conversation. Give it back (bughunt-2 #2), in front
+      // of anything the GM typed in the meantime.
+      if (this.#sent === text) {
+        this.#draft = this.#draft.trim() ? `${text}\n${this.#draft}` : text;
+        const box = this.element?.querySelector?.("textarea[name=message]");
+        if (box) box.value = this.#draft;
+      }
+      this.#sent = null;
+    }
   }
 
   static #onStop() { this.session?.stop(); }
@@ -488,6 +643,8 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
   static #onDismiss() { this.#flash = null; this.render({ parts: ["head"] }); }
 
   static #onOpenSettings() {
+    // W5-F: the keys are no longer fields of Configure Settings: the GM-only keys window (keys-app.mjs)
+    try { if (api()?.openKeys?.()) return; } catch { /* fall back */ }
     try { game.settings.sheet.render({ force: true }); } catch { /* ignore */ }
   }
 
@@ -634,7 +791,7 @@ function syncButton(app, element) {
     btn.type = "button";
     btn.className = `header-control icon ${ICON} maig-header-btn`;
     btn.dataset.maigBuilder = "";
-    btn.addEventListener("click", (ev) => { ev.preventDefault(); ev.stopPropagation(); toggleFor(sheet); });
+    btn.addEventListener("click", (ev) => { ev.preventDefault(); ev.stopPropagation(); toggleFor(sheet).catch((e) => console.error(`${MODULE_ID} | AI builder toggle failed`, e)); });
     const anchor = header.querySelector('[data-action="copyUuid"]') ?? header.querySelector('[data-action="close"]');
     if (anchor) anchor.before(btn); else header.append(btn);
   }
@@ -697,7 +854,9 @@ export function startDrawer(moduleApi) {
   Hooks.on("getHeaderControlsActorSheetV2", (app, controls) => {
     const actor = app?.document;
     if (!actor) return;
-    controls.push({ action: "maigBuilder", icon: ICON, label: "MAIG.Drawer.Open", visible: () => canUse(actor), onClick: () => toggleFor(app) });
+    // runs each time the menu opens: the label says what a click does (bughunt-2 #13)
+    const label = drawers.get(app.id)?.isOpen ? "MAIG.Drawer.MenuClose" : "MAIG.Drawer.Open";
+    controls.push({ action: "maigBuilder", icon: ICON, label, visible: () => canUse(actor), onClick: () => toggleFor(app).catch((e) => console.error(`${MODULE_ID} | AI builder toggle failed`, e)) });
   });
   Hooks.on("moinensAiGen.packReady", () => syncAll());
   Hooks.on("moinensAiGen.harnessReady", () => syncAll());

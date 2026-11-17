@@ -42,9 +42,12 @@
 //                                         its own fallback (it must not throw; a throw counts as ok:false)
 //
 // Packs declare optional modules only through check().optional; helpers in ./deps.mjs (detectModule, hasPack,
-// compareVersions) do the detection. External modules may add packs with api.build.registerSystemPack(pack): such a pack
-// takes precedence over the bundled one for the same system when it is registered before `ready`, and replaces nothing
-// once a pack is already active (packs-notes.md P2).
+// compareVersions) do the detection. External modules may add packs with registerSystemPack(pack). The registry starts in
+// the GM's `ready` (after this module's settings copy), so "before ready" is not reachable: a pack takes precedence over
+// the bundled one only when it is registered from the HOOK_REGISTER hook ("moinensAiGen.registerPacks", GM only, fired
+// once right before load(), args { registerSystemPack, contractVersion }). Registered later (api.build.registerSystemPack),
+// it activates only when the system has no active pack (no bundled pack, or the bundled one failed); it never replaces an
+// active pack (packs-notes.md P2; bughunt-2 #10).
 // ---------------------------------------------------------------------------------------------------------------------
 
 import { t } from "./registry-lang.mjs";
@@ -65,6 +68,8 @@ export const BUNDLED_PACKS = Object.freeze({
 });
 
 export const HOOK_READY = "moinensAiGen.packReady";
+/** fired once (GM) right before the bundled pack loads: the only point where an external pack can take precedence */
+export const HOOK_REGISTER = "moinensAiGen.registerPacks";
 const NOTICE_KEY = "moinens-ai-gen.packs.noticeSeen";
 
 /** Contract check. -> { ok, errors:[string], capabilities:{group:boolean}, missing:{group:[fn]} } */
@@ -309,6 +314,10 @@ export function startBuildRegistry(moduleApi, deps = {}) {
   const game = deps.game ?? globalThis.game;
   if (!game?.user?.isGM) return null;
   const registry = createRegistry(deps);
+  // the window in which registerSystemPack() still "queues" (load() not started): let other modules use it (bughunt-2 #10)
+  const hooks = "hooks" in deps ? deps.hooks : globalThis.Hooks;
+  try { hooks?.callAll?.(HOOK_REGISTER, { registerSystemPack: registry.registerSystemPack, contractVersion: CONTRACT_VERSION }); }
+  catch (e) { console.warn("moinens-ai-gen | registerPacks hook failed", e); }
   if (moduleApi) {
     moduleApi.build = Object.assign(moduleApi.build ?? {}, {
       contractVersion: CONTRACT_VERSION,

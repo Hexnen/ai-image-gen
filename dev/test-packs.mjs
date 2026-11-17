@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
-  createRegistry, startBuildRegistry, validatePack, safeCheck, BUNDLED_PACKS, CAPABILITIES, HOOK_READY
+  createRegistry, startBuildRegistry, validatePack, safeCheck, BUNDLED_PACKS, CAPABILITIES, HOOK_READY, HOOK_REGISTER
 } from "../scripts/build/registry.mjs";
 import { compareVersions, detectModule } from "../scripts/build/deps.mjs";
 import { t } from "../scripts/build/registry-lang.mjs";
@@ -286,6 +286,24 @@ await test("registerSystemPack: other system ignored; on a system without bundle
   assert.equal(reg2.registerSystemPack(makeStubPack({ systemId: "dnd5e" })).reason, "activated");
   await reg2.load();
   assert.equal(reg2.status().status, "ready");
+});
+
+await test("W5-F (bughunt-2 #10): startBuildRegistry fires registerPacks before load; a pack registered there wins over the bundled one", async () => {
+  const inv = spyLoader({ default: invPack });
+  const s = spyDeps(mockGame({ modules: { [CORE_MODULE]: coreMod, [PU_MODULE]: puMod() } }), { invincible: inv });
+  const ext = makeStubPack({ systemId: "invincible", id: "inv-ext" });
+  const seen = [];
+  s.deps.hooks = { callAll: (name, data) => { s.hookCalls.push({ name, data }); if (name === HOOK_REGISTER) seen.push(data.registerSystemPack(ext)); } };
+  const moduleApi = {};
+  startBuildRegistry(moduleApi, s.deps);
+  assert.equal(s.hookCalls[0].name, HOOK_REGISTER);
+  assert.equal(s.hookCalls[0].data.contractVersion, 1);
+  assert.deepEqual(seen, [{ ok: true, reason: "queued" }]);
+  assert.equal(await moduleApi.build.ready, ext);
+  assert.equal(inv.calls, 0, "bundled loader not called");
+  assert.equal(moduleApi.build.status().source, "registered");
+  // after the hook (api.build.registerSystemPack): the bundled pack is active, nothing is replaced
+  assert.equal(moduleApi.build.registerSystemPack(makeStubPack({ systemId: "invincible", id: "late" })).reason, "pack-already-active");
 });
 
 /* ---------------------------------------------------------------- supports + self-test */

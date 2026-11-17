@@ -52,6 +52,17 @@ await test("dockGeometry: right edge, flip left, shrink, clamp, height below the
   assert.ok(d.left >= 0 && d.left + d.width <= 1600);
   const f = M.dockGeometry(r(200, 700, 500, 700), view);       // sheet runs below the window: the drawer stays inside
   assert.ok(f.top + f.height <= 900);
+  // W5-F (bughunt-2 #7): sheet top at 700 px in a 768 px window: min height kept, moved up, composer on screen
+  const g = M.dockGeometry(r(200, 700, 700, 700), { width: 1600, height: 768 });
+  assert.equal(g.height, M.DOCK.minHeight);
+  assert.equal(g.top + g.height, 768);
+  // a window lower than the min height: the drawer fills it, never negative
+  const h = M.dockGeometry(r(200, 700, 50, 700), { width: 1600, height: 120 });
+  assert.deepEqual([h.top, h.height], [0, 120]);
+  // a sheet dragged above the top edge: top clamps to 0
+  const k = M.dockGeometry(r(200, 700, -200, 700), view);
+  assert.equal(k.top, 0);
+  assert.ok(k.height >= M.DOCK.minHeight && k.top + k.height <= 900);
 });
 
 await test("headerButtonState: pressed when open, pending dot, working wins the tooltip", () => {
