@@ -58,3 +58,23 @@ nietknięty; `git merge-base origin/main HEAD` = c756999, więc push `main` to n
 3. LICENSE / ATTRIBUTION (A2).
 4. Nazwa repo i `module.json` (A3: adresy, wersja, wydanie).
 5. Czy `dev/` ma być publiczne (A7); nazwy postaci (A6).
+
+## Drugi przebieg (2026-11-17): stare wersje w historii zakresu
+
+Punkt 2 powyżej wykonany. Nic nie wypchnięte; `origin/main` = c756999 nietknięty, merge-base = c756999 (fast-forward).
+
+- Kopie: gałąź `backup/pre-scrub2` = da669db (historia po pierwszym przebiegu); `refs/original/refs/heads/main` = da669db
+  (nadpisane, wcześniej 165e647; ta wersja jest dalej w `backup/pre-cleanup-2026-11-17`); bundle `<SCRATCH>\pre-scrub2.bundle`
+  (`git bundle verify`: okay). Żadnej gałęzi `backup/*` ani `refs/original` nie pushować.
+- `git filter-branch -f --prune-empty --index-filter "node <SCRATCH>\scrub2\filter.cjs" -- origin/main..main`: filtr na indeksie
+  (bez checkoutu, więc bez konwersji CRLF), te same zamiany co pierwszy przebieg (regexy w `catalog.mjs`, teksty mock w obu testach,
+  ścieżki z nazwą konta i id sesji, e-mail w treści notatek), też dla starszych kształtów tych linii. Każda stara wersja bloba przechodzi
+  dokładnie w blob z HEAD.
+- Commity pierwszego przebiegu (f114343, 844d5e1, 8ec0a08, 47ef950) stały się puste i zostały usunięte: 68 -> 64 commity.
+  SHA w sekcjach wyżej odnoszą się do historii sprzed tego przebiegu (jest w `backup/pre-scrub2`).
+- Drzewo HEAD przed i po: `6d6a1deeee3d87bb79dfc4a1808b42665562c344` (identyczne). Wiadomości, autorzy, daty i trailery 64 commitów:
+  bajt w bajt jak w pozostawionych commitach `backup/pre-scrub2`.
+- Kontrola: `git log -p origin/main..HEAD` i każdy blob każdego commitu zakresu: 0 trafień nazwy konta, id sesji, ścieżek
+  `C:\Users\<konto>`, starych regexów i starych tekstów mock. E-mail autora tylko w nagłówkach `Author:` (metadane, zostają).
+  7-gramy z książką na wszystkich blobach zakresu: tylko `vendor/chargen/rules.mjs:43` (punkt 1) i fałszywe trafienie UUID w teście.
+- Wszystkie `dev/test-*.mjs` zielone, `test-vendor-sync.mjs`: ALL OK, `git status` czysty.
