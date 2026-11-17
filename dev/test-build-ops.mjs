@@ -1158,4 +1158,221 @@ await test("W4-A-3: replace with a gear list (catalogue ref + custom) writes gea
   assert.deepEqual(conv(hero(), { ...base, gear: [] }, cat).ops.map((o) => o.op), ["removeItem", "removeItem", "removeItem"]);
 });
 
+/* ---------------------------------------------------------------- wave 5, group A (W5-A-1 vitals, W5-A-2 undo order, W5-A-3 replace order) */
+const { restoreTarget, movePlan } = await import("../scripts/systems/invincible/undo.mjs");
+const { talentOrderOf } = await import("../scripts/systems/invincible/writer.mjs");
+const ids = (a) => [...a.items.keys()];
+const talentNames = (a) => talentRolesOf(a).items.map((t) => t.name);
+const rolesByName = (a) => { const { roles, items } = talentRolesOf(a); return Object.fromEntries(items.map((t) => [t.name, roles.get(String(t.id))])); };
+const sources = (a) => ids(a).map((id) => fingerprint(a.items.get(id)._source));
+const T5Pw5 = await import("../scripts/systems/invincible/proposal.mjs");
+const convW5 = (doc, prop, c) => T5Pw5.replaceToOps(doc, prop, { catalog: c });
+/** the typical hero restated as a replace proposal (converts to no ops on hero()) */
+const heroReplace = (over = {}) => ({
+  name: "Amber Kestrel", attributes: { fighting: 6, agility: 7, strength: 5, reason: 5, intuition: 5, presence: 5 },
+  sources: [{ key: "s", ref: refOf("powerSource", "Strange Meteor") }],
+  powers: [{ ref: refOf("power", "Glide Wings"), level: "basic", source: "s", boosts: [{ ref: refOf("boost", "Silent Flight", "Glide Wings") }] },
+    { ref: refOf("power", "Spark Bolt"), level: "major", source: "s", limits: [{ ref: refOf("limit", "Needs Charging", "Spark Bolt") }] },
+    { ref: refOf("power", "Echo Sense"), level: "basic", source: "s" }],
+  talents: [{ ref: refOf("talent", "Quick Wits") }, { ref: refOf("talent", "Streetwise") }], drawbacks: [{ ref: refOf("drawback", "Lean Times") }],
+  ...over
+});
+
+await test("W5-A-2 pure: restoreTarget (whole run / per item) and movePlan (minimal tail, deterministic)", () => {
+  // whole run: pre-run items back in their order, items from later runs after them, pending ones placed
+  assert.deepEqual(restoreTarget(["a", "c", "x", "b"], ["a", "b", "c", "d"], ["d"], true), ["a", "b", "c", "d", "x"]);
+  // per item: only the pending one goes back next to its old predecessor; the rest stays as it is
+  assert.deepEqual(restoreTarget(["a", "c", "x"], ["a", "b", "c"], ["b"], false), ["a", "b", "c", "x"]);
+  assert.deepEqual(restoreTarget(["c", "a"], ["b", "c", "a"], ["b"], false), ["b", "c", "a"], "no predecessor: first");
+  assert.deepEqual(restoreTarget(["a"], ["a"], [], false), ["a"]);
+  assert.deepEqual(movePlan(["a", "c", "x", "b"], ["a", "b", "c", "x"]), { keep: ["a", "b"], move: ["c", "x"] }, "items between kept ones move");
+  assert.deepEqual(movePlan(["a", "b"], ["a", "b"]).move, []);
+  assert.deepEqual(movePlan(["b", "a"], ["a", "b", "n"]), { keep: ["a"], move: ["b", "n"] }, "a pending (absent) id always moves");
+  // talent order from the validator's conversion: kept item wins over its note-update op; ops by path index
+  assert.deepEqual(talentOrderOf({ src: { ta1: { path: "proposal.talents[0]" }, ta2: { path: "proposal.talents[1]" }, act1: { path: "proposal" } }, srcItems: { K: { path: "proposal.talents[1]" } } }), [{ opId: "ta1" }, { itemId: "K" }]);
+  assert.equal(talentOrderOf({ src: {}, srcItems: {} }), null);
+  assert.deepEqual(talentOrderOf({ talentOrder: [{ opId: "tal-1" }] }), [{ opId: "tal-1" }]);
+});
+
+await test("W5-A-2: undo restores the item order after remove + re-add of the hero talent (dry6 run mcOZl9j2q53tpEtI); roles back", async () => {
+  for (const serverOrder of [false, true]) {
+    const a = hero(); a.serverOrder = serverOrder;
+    const before = ids(a), fps = sources(a), roles0 = rolesByName(a);
+    const quick = byName(a, "Quick Wits");
+    const r = await W.apply(a, { ops: [{ opId: "r", kind: "removeItem", itemId: quick.id }, { opId: "t", kind: "addItem", ref: refOf("talent", "Quick Wits") }] }, { confirmed: true });
+    assert.equal(r.ok, true, r.message);
+    assert.deepEqual(rolesByName(a), { Streetwise: "hero", "Quick Wits": "occupation" }, "the shift the run really made (ops mode: no reorder)");
+    assert.deepEqual(getPath(a._source, JOURNAL_PATH).runs[0].order, before, "pre-run order journaled");
+    const u = await W.undo(a, r.runId);
+    assert.equal(u.ok, true, u.message);
+    assert.deepEqual(ids(a), before, `same ids in the same order (serverOrder ${serverOrder})`);
+    assert.deepEqual(sources(a), fps, "same sources"); assert.deepEqual(rolesByName(a), roles0);
+    assert.ok(a.calls.filter((c) => c[0] === "create").every((c) => c[2] === true), "keepId everywhere");
+  }
+});
+
+await test("W5-A-2: undo of a split-power level swap puts the power back in place; an older run then shows no drift", async () => {
+  const a = hero();
+  const r1 = await W.apply(a, { ops: [{ opId: "p", kind: "addItem", ref: refOf("power", "Iron Hide"), level: "basic", sourceItemId: byName(a, "Strange Meteor").id }, { opId: "t", kind: "addItem", ref: refOf("talent", "Steady Hands") }] });
+  assert.equal(r1.ok, true, r1.message);
+  const mid = ids(a), fps = sources(a);
+  const r2 = await W.apply(a, { ops: [{ opId: "u", kind: "updateItem", itemId: r1.idMap.p, set: { level: "major" } }] }, { confirmed: true });
+  assert.equal(r2.ok, true, r2.message);
+  assert.equal(ids(a).at(-1), r1.idMap.p, "the swap re-created the power last");
+  const u = await W.undo(a, r2.runId);
+  assert.equal(u.ok, true, u.message);
+  assert.deepEqual(ids(a), mid); assert.deepEqual(sources(a), fps);
+  const st = W.undoStatus(a);
+  assert.equal(st.runId, r1.runId); assert.equal(st.clean, true, JSON.stringify(st.drift));
+  // drift detection still works on the re-created items
+  a.items.get(r1.idMap.t)._source.name = "Steady Hands (hand edit)";
+  assert.deepEqual(W.undoStatus(a).drift.map((d) => d.why), ["edited"]);
+});
+
+await test("W5-A-2: per-item undo puts the restored item back at its old place and leaves the rest of the run alone", async () => {
+  const a = hero();
+  const before = ids(a);
+  const street = byName(a, "Streetwise"), lean = byName(a, "Lean Times");
+  const r = await W.apply(a, { ops: [{ opId: "r1", kind: "removeItem", itemId: street.id }, { opId: "r2", kind: "removeItem", itemId: lean.id }, { opId: "t", kind: "addItem", ref: refOf("talent", "Tough Skin") }] }, { confirmed: true });
+  assert.equal(r.ok, true, r.message);
+  const u = await W.undo(a, r.runId, { opIds: ["r1"] });
+  assert.equal(u.ok, true, u.message);
+  assert.deepEqual(ids(a), [...before.filter((id) => id !== lean.id), r.idMap.t], "Streetwise between Quick Wits and the gear, Lean Times still gone, the add stays last");
+  assert.deepEqual(rolesByName(a), { "Quick Wits": "hero", Streetwise: "occupation", "Tough Skin": "extra" });
+  const u2 = await W.undo(a, r.runId);   // the rest of the run = whole-run order
+  assert.equal(u2.ok, true, u2.message);
+  assert.deepEqual(ids(a), before);
+});
+
+await test("W5-A-2: a failed apply rolls back to the pre-run order (removal + add written, failure in the actor phase)", async () => {
+  const a = hero();
+  const before = ids(a), fps = sources(a);
+  const upd = a.update.bind(a);
+  let armed = true;   // one failure: the rollback writes the attribute back through the same call
+  a.update = async (data) => { if (armed && Object.keys(data).some((k) => k.startsWith("system.attributes"))) { armed = false; throw new Error("injected actor failure"); } return upd(data); };
+  const r = await W.apply(a, { ops: [{ opId: "r", kind: "removeItem", itemId: byName(a, "Quick Wits").id }, { opId: "t", kind: "addItem", ref: refOf("talent", "Quick Wits") }, { opId: "x", kind: "updateActor", set: { "system.attributes.fighting.value": 5 } }] }, { confirmed: true });
+  assert.equal(r.ok, false); assert.equal(r.rolledBack, true, r.message);
+  assert.deepEqual(ids(a), before); assert.deepEqual(sources(a), fps);
+});
+
+await test("W5-A-2: a run journaled before W5-A (no `order`) still undoes (restored items at the end)", async () => {
+  const a = hero();
+  const quick = byName(a, "Quick Wits");
+  const r = await W.apply(a, { ops: [{ opId: "r", kind: "removeItem", itemId: quick.id }] }, { confirmed: true });
+  assert.equal(r.ok, true, r.message);
+  delete getPath(a._source, JOURNAL_PATH).runs[0].order;
+  const u = await W.undo(a, r.runId);
+  assert.equal(u.ok, true, u.message);
+  assert.equal(ids(a).at(-1), quick.id);
+});
+
+await test("W5-A-3: replace writes the proposal's talent order (kept talents re-created with their ids); confirm names the role change; undo", async () => {
+  const w = mkWriter({ toOps: convW5 });
+  for (const serverOrder of [false, true]) {
+    const a = hero(); a.serverOrder = serverOrder;
+    const before = ids(a), fps = sources(a);
+    const quick = byName(a, "Quick Wits"), street = byName(a, "Streetwise");
+    const P = heroReplace({ talents: [{ ref: refOf("talent", "Streetwise") }, { ref: refOf("talent", "Quick Wits") }] });
+    assert.deepEqual(convW5(a, P, cat).ops, [], "no item op: only the order differs");
+    const p = await w.plan(a, { mode: "replace", proposal: P });
+    assert.equal(p.ok, true, JSON.stringify(p.errors));
+    assert.deepEqual(p.reorders, [{ id: quick.id, opId: null, name: "Quick Wits", from: "hero", to: "occupation", roleChange: true }]);
+    assert.equal(p.destructive, true); assert.ok(p.info.some((i) => i.code === "talent.order"));
+    assert.deepEqual(p.projected.items.filter((i) => i.type === "talent").map((i) => i.name), ["Streetwise", "Quick Wits"], "projection in the written order");
+    const r0 = await w.apply(a, { mode: "replace", proposal: P });
+    assert.equal(r0.needsConfirm, true); assert.deepEqual(ids(a), before, "nothing written without confirmation");
+    const r = await w.apply(a, { mode: "replace", proposal: P }, { confirmed: true, expect: p.expect });
+    assert.equal(r.ok, true, r.message);
+    assert.deepEqual(talentNames(a), ["Streetwise", "Quick Wits"]); assert.deepEqual(rolesByName(a), { Streetwise: "hero", "Quick Wits": "occupation" });
+    assert.ok(a.items.has(quick.id) && a.items.has(street.id), "ids kept");
+    assert.equal(fingerprint(a.items.get(quick.id)._source), fps[before.indexOf(quick.id)], "same source");
+    assert.deepEqual(r.reordered, [{ itemId: quick.id, name: "Quick Wits", from: "hero", to: "occupation" }]);
+    assert.match(r.message, /Talents in the proposal's order \("Quick Wits" hero -> occupation; same ids\)/);
+    const j = getPath(a._source, JOURNAL_PATH).runs.at(-1);
+    assert.deepEqual(j.ops.find((e) => e.kind === "order"), { opId: "_order", kind: "order", itemId: null, type: "talent", name: "talent order", ids: [quick.id], before: null, after: null }, "no sources in the journal");
+    assert.equal(W.undoStatus(a).clean, true);
+    // the same proposal again: the order is right, nothing to re-create
+    const again = await w.plan(a, { mode: "replace", proposal: P });
+    assert.deepEqual(again.reorders, []); assert.equal(again.destructive, false);
+    const u = await w.undo(a, r.runId);
+    assert.equal(u.ok, true, u.message);
+    assert.deepEqual(ids(a), before); assert.deepEqual(sources(a), fps);
+  }
+});
+
+await test("W5-A-3: dry6 case through the writer group: new hero talent + kept one -> proposal order, talent.role.shift dropped, concise confirm", async () => {
+  const { writerGroup } = await import("../scripts/systems/invincible/writer-group.mjs");
+  let n = 0;
+  const shift = { code: "talent.role.shift", message: "\"Streetwise\" would become the hero talent", path: "items.x" };
+  const g = writerGroup(() => ({ validate: async () => ({ ok: true, errors: [], warnings: [shift, { code: "other.w", message: "kept" }] }) }), {
+    getCatalog: async () => cat, fetchData, isGM: () => true, userId: () => "gm1", userName: () => "Gamemaster", liveForm: () => null,
+    randomID: () => `rw5${String(++n).padStart(13, "0")}`, now: () => clock, sleep: async () => {}, lockSettle: 0, log: { warn() {}, error() {} }
+  });
+  const a = hero(); a.serverOrder = true; a._source.system.derived.health.value = 3;
+  const before = ids(a);
+  const quick = byName(a, "Quick Wits"), street = byName(a, "Streetwise");
+  // like the vampire: [Menacing (new), Compelling (kept)], Mighty removed -> here [Steady Hands (new), Streetwise (kept)], Quick Wits removed
+  const P = heroReplace({ talents: [{ ref: refOf("talent", "Steady Hands") }, { ref: refOf("talent", "Streetwise") }] });
+  const r0 = await g.apply(a, { mode: "replace", proposal: P }, { rank: "global" });
+  assert.equal(r0.needsConfirm, true);
+  assert.deepEqual(r0.confirm.map((c) => [c.action, c.name, c.from, c.to]), [["remove", "Quick Wits", undefined, undefined]], "Streetwise is re-created but stays occupation: not named");
+  assert.deepEqual(r0.reorders.map((x) => [x.name, x.from, x.to, x.roleChange]), [["Streetwise", "occupation", "occupation", false]]);
+  const r = await g.apply(a, { mode: "replace", proposal: P }, { rank: "global", confirmed: true });
+  assert.equal(r.ok, true, r.message);
+  assert.deepEqual(talentNames(a), ["Steady Hands", "Streetwise"]); assert.deepEqual(rolesByName(a), { "Steady Hands": "hero", Streetwise: "occupation" });
+  assert.ok(a.items.has(street.id) && !a.items.has(quick.id));
+  assert.equal(r.warnings.some((w) => w.code === "talent.role.shift"), false, "the shift the validator projected does not happen");
+  assert.ok(r.warnings.some((w) => w.code === "other.w"));
+  assert.equal(a.items.get(r.idMap[r.ops.find((o) => o.action === "add" && o.name === "Steady Hands").opId])?.name, "Steady Hands", "idMap right after the re-creation");
+  // W5-A-1: replace in creation = build: the replaced hero does not start wounded
+  assert.equal(a._source.system.derived.health.value, a.system.derived.health.max);
+  assert.deepEqual(r.vitals.health, { from: 3, to: a.system.derived.health.max });
+  const u = await g.undo(a, r.runId);
+  assert.equal(u.ok, true, u.message);
+  assert.deepEqual(ids(a), before); assert.equal(a._source.system.derived.health.value, 3);
+});
+
+await test("W5-A-3: ops mode never re-orders; the chargen-state replace (replace.mjs) carries talentOrder too", async () => {
+  const p = await W.plan(hero(), { ops: [{ opId: "r", kind: "removeItem", itemId: byName(hero(), "Quick Wits")?.id ?? "x" }] });
+  assert.deepEqual(p.reorders ?? [], []);
+  const a = hero();
+  const conv = toOps(a, { heroTalent: { ref: refOf("talent", "Steady Hands") }, occTalent: { ref: refOf("talent", "Quick Wits") } }, cat);
+  assert.deepEqual(conv.talentOrder, [{ opId: "tal-1" }, { itemId: byName(a, "Quick Wits").id }]);
+});
+
+await test("W5-A-1: replace in the creation profile sets current Health/Resolve to max also with removals; in-play replace and ops edits do not", async () => {
+  const w = mkWriter({ toOps: convW5 });
+  const mk = () => { const a = hero(); a._source.system.derived.health.value = 2; a._source.system.derived.resolve.value = 1; return a; };
+  const P = heroReplace({ attributes: { fighting: 8, agility: 7, strength: 7, reason: 5, intuition: 5, presence: 5 }, talents: [{ ref: refOf("talent", "Quick Wits") }, { ref: refOf("talent", "Tough Skin") }] });
+  const a = mk();
+  const p = await w.plan(a, { mode: "replace", proposal: P });
+  assert.equal(p.build, true); assert.match(p.info.find((i) => i.code === "vitals.build").message, /Replace in the creation profile is a build/);
+  assert.ok(p.deletes.length > 0, "the run removes an old item");
+  const r = await w.apply(a, { mode: "replace", proposal: P }, { confirmed: true });
+  assert.equal(r.ok, true, r.message);
+  const hMax = a.system.derived.health.max, rMax = a.system.derived.resolve.max;
+  assert.deepEqual(r.vitals, { health: { from: 2, to: hMax }, resolve: { from: 1, to: rMax } });
+  assert.match(r.message, new RegExp(`New build: current Health 2 -> ${hMax}, Resolve 1 -> ${rMax} \\(max\\)`));
+  const u = await w.undo(a, r.runId);
+  assert.equal(u.ok, true, u.message);
+  assert.equal(a._source.system.derived.health.value, 2); assert.equal(a._source.system.derived.resolve.value, 1);
+  // in-play replace: O25, values stay
+  const b = mk();
+  const rb = await w.apply(b, { mode: "replace", proposal: P }, { confirmed: true, profile: "in-play" });
+  assert.equal(rb.ok, true, rb.message); assert.equal(rb.vitals, undefined); assert.equal(b._source.system.derived.health.value, 2);
+  // ops edit with a removal on a hero that keeps creation items: O25, values stay
+  const c = mk();
+  const rc = await W.apply(c, { ops: [{ opId: "r", kind: "removeItem", itemId: byName(c, "Streetwise").id }, { opId: "t", kind: "addItem", ref: refOf("talent", "Tough Skin") }] }, { confirmed: true });
+  assert.equal(rc.ok, true, rc.message); assert.equal(rc.vitals, undefined); assert.equal(c._source.system.derived.health.value, 2);
+});
+
+await test("W5-B 6d: an updateItem op carries the new name (note change, gear rename); unchanged name stays", async () => {
+  const a = hero();
+  const lean = byName(a, "Lean Times"), cam = byName(a, "Pocket Camera"), bolt = byName(a, "Spark Bolt");
+  const p = await W.plan(a, { ops: [{ opId: "n", kind: "updateItem", itemId: lean.id, set: { note: "rent" } }, { opId: "g", kind: "updateItem", itemId: cam.id, set: { name: "Tiny Camera" } }, { opId: "l", kind: "updateItem", itemId: bolt.id, set: { level: "basic" } }] });
+  assert.equal(p.ok, true, JSON.stringify(p.errors));
+  assert.deepEqual(p.ops.map((o) => o.name), ["Lean Times (rent)", "Tiny Camera", "Spark Bolt"]);
+  assert.deepEqual(p.updates.map((u) => u.name), ["Lean Times (rent)", "Tiny Camera", "Spark Bolt"]);
+});
+
 console.log(`\n${passed} passed${process.exitCode ? ", some FAILED" : ""}`);

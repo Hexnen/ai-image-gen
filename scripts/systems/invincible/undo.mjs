@@ -10,6 +10,12 @@
 //     kind "actor"  : itemId = null, paths, before = { path: value | null }, after = { path: value }   undo = write the before values
 //                     (also the item drawer's own fields: then the paths are the item's)
 //     kind "world"  : uuid = a world item the run created (target "newItem"), after = fp        undo = delete that item
+//     kind "order"  : opId "_order", itemId = null, ids = the talents the run re-created (keepId) to put them in the replace
+//                     proposal's order (W5-A-3); no source is stored. undo = the run's whole `order` is restored (below).
+//   Run.order (W5-A-2) = ids of the actor's items in collection order BEFORE the run. Undo and rollback put the items back in
+//   that order (talent roles hang on it: first = hero, second = occupation; W2-3) by re-creating, with keepId and their current
+//   source, the items from the first out-of-order position on (restoreTarget / movePlan). Runs written before W5-A have no
+//   `order`: their undo works as before (re-created items land at the end).
 //   `cascadeOf` = opId of the removeItem op that caused this removal; `dependsOn` = opId of the add op this add was linked to
 //   (a boost added under a power added in the same run). Both make per-item undo take the group together.
 // Game data only (spec 10.4): never conversation text.
@@ -127,6 +133,7 @@ export function driftOf(entries, items, actorSrc) {
       continue;
     }
     if (e.kind === "world") continue;   // a world item created by the run: checked by the writer (async lookup)
+    if (e.kind === "order") continue;   // only positions: the re-created talents keep id and source (their own entries carry drift)
     const cur = items.get(e.itemId);
     if (e.kind === "remove") {
       if (cur) out.push({ opId: e.opId, itemId: e.itemId, name: e.name, why: "exists" });
@@ -149,6 +156,48 @@ export function undoOrder(entries) {
     swap: entries.filter((e) => e.kind === "swap").reverse(),
     remove: entries.filter((e) => e.kind === "add").sort((a, b) => typeRank(b) - typeRank(a))
   };
+}
+
+/* ------------------------------------------------------------------ collection order (W5-A-2, W5-A-3) */
+/**
+ * The order the items should have after an undo / rollback.
+ *   current: ids now on the actor (collection order); runOrder: ids before the run; pending: ids about to be re-created (not on
+ *   the actor yet: restored removals, swapped level documents); full: true = the whole run is undone (every item of the run's
+ *   `order` goes back to its old place), false = per-item undo (only the `pending` items go back to their old place, next to
+ *   their old predecessor; everything else keeps its current position).
+ * Items not in runOrder (added after the run, or by the run and not undone) follow the pre-run items in their current order.
+ * -> target ids (every current and pending id once)
+ */
+export function restoreTarget(current, runOrder, pending = [], full = true) {
+  const rank = new Map((runOrder ?? []).map((id, i) => [String(id), i]));
+  const cur = (current ?? []).map(String), pend = (pending ?? []).map(String).filter((id) => !cur.includes(id));
+  const extraPend = pend.filter((id) => !rank.has(id));
+  if (full) {
+    const present = new Set([...cur, ...pend]);
+    return [...runOrder.map(String).filter((id) => present.has(id)), ...cur.filter((id) => !rank.has(id)), ...extraPend];
+  }
+  const place = new Set(pend.filter((id) => rank.has(id)));
+  const out = cur.filter((id) => !place.has(id));
+  for (const p of [...place].sort((a, b) => rank.get(a) - rank.get(b))) {
+    let at = -1;
+    for (let i = rank.get(p) - 1; i >= 0 && at < 0; i--) at = out.indexOf(String(runOrder[i]));
+    out.splice(at + 1, 0, p);
+  }
+  return [...out, ...extraPend];
+}
+/**
+ * Minimal re-creation that turns `current` into `target` when re-created items always land at the end (Foundry: a created
+ * embedded document is appended to the collection; v14 keeps that order on the parent and after a reload, W2-3).
+ * keep = the longest prefix of target that already stands in that order in current (other items may sit between them: they
+ * move); move = the rest of target, to be (re-)created in this order. Deterministic. `current` may lack ids of target
+ * (pending re-creations): they are always moved.
+ * -> { keep: [ids], move: [ids] }
+ */
+export function movePlan(current, target) {
+  const t = (target ?? []).map(String);
+  let j = 0;
+  for (const id of (current ?? []).map(String)) if (j < t.length && id === t[j]) j++;
+  return { keep: t.slice(0, j), move: t.slice(j) };
 }
 
 /** a short, UI-safe view of the journal for undoStatus (no sources) */

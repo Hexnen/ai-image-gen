@@ -95,7 +95,7 @@ function desiredFromNpc(n) {
 }
 
 /**
- * toOps(actor, proposal, cat, opts) -> { ops, errors, warnings }
+ * toOps(actor, proposal, cat, opts) -> { ops, errors, warnings, talentOrder: [{ itemId } | { opId }] (wanted talent order, W5-A-3) }
  * Deterministic op ids: src-<key>, pow-<key>, pow-<key>-b<n> / -l<n>, tal-<n>, drw-<n>, upd-<itemId>, del-<itemId>, actor.
  */
 export function toOps(actor, proposal, cat, opts = {}) {
@@ -165,12 +165,15 @@ export function toOps(actor, proposal, cat, opts = {}) {
   }
 
   // talents and drawbacks (multisets by base name; drawback notes updated in place)
+  // talentOrder (W5-A-3): the wanted talent order (hero, occupation, extras) as kept item ids / add opIds; the writer writes it
+  const talentOrder = [];
   want.talents.forEach((t, n) => {
     const e = entryOf(cat, "talent", t);
     if (!e) { errors.push(msg("ref.unknown", `talent ${t?.ref ?? t?.name ?? t} is not in the catalogue`)); return; }
     const hit = free("talent").find((i) => norm(baseName(i.name)) === norm(e.name));
-    if (hit) { used.add(hit._id); return; }
+    if (hit) { used.add(hit._id); talentOrder.push({ itemId: hit._id }); return; }
     ops.push({ opId: `tal-${n + 1}`, kind: "addItem", ref: e.ref, ...(t?.note ? { note: writeNote(t.note) } : {}) });
+    talentOrder.push({ opId: `tal-${n + 1}` });
   });
   want.drawbacks.forEach((d, n) => {
     const e = entryOf(cat, "drawback", d);
@@ -198,7 +201,7 @@ export function toOps(actor, proposal, cat, opts = {}) {
   }
   if (Object.keys(set).length) ops.push({ opId: "actor", kind: "updateActor", set });
   if (!ops.length) warnings.push(msg("replace.same", "The proposal matches the sheet; nothing to write."));
-  return { ops, errors, warnings };
+  return { ops, errors, warnings, talentOrder };
 }
 
 export { LEVEL_WORDS };

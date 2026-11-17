@@ -18,7 +18,10 @@
 //     deletes:[{ opId, id, type, name, cascadeOf? }], swaps:[{ opId, id, name, from, to }], keeps:[{ id, type, name }],
 //     overwrites:[{ path, from, to }] (actor texts that replace non-empty text),
 //     counts:{ create, update, swap, delete, fields, keeps }, destructive (deletes or swaps > 0),
-//     build (W3-3: creation profile, no creation item survives, some are added -> current Health/Resolve = max after the write),
+//     build (W3-3: creation profile, no creation item survives, some are added -> current Health/Resolve = max after the write;
+//       W5-A-1: every replace in the creation profile is a build too),
+//     reorders:[{ id|null, opId|null, name, from, to, roleChange }] (W5-A-3: replace only; talents re-created with keepId after the
+//       other phases so the collection order = the proposal's talent order; roleChange = a KEPT talent changes role: destructive),
 //     unsaved:[{ path, stored, live }] (open sheet input not saved yet: apply refuses while non-empty),
 //     dropped:[{ opId, because }] (partial selection), expect: Expect, projected: ActorLike }
 //   Expect = { items: { <itemId>: { fp, name } }, actor: { <path>: value }, deletes:[itemId] }: pass back to apply() unchanged.
@@ -30,15 +33,18 @@
 //   "creation" (default) | "in-play"; `confirmed` (not `confirm`) = true for removals / level swaps.)
 //   warnings (plan + the validator's, once each), created:[id], updated:[id], deleted:[id], idMap:{ opId: itemId } (ids assigned
 //   before writing, created with keepId: W3-1), message, vitals?: { health?: {from,to}, resolve?: {from,to} } (build, W3-3),
+//   reordered?: [{ itemId, name, from?, to? }] (W5-A-3: talents re-created into the replace proposal's order),
 //   busy?, stale?, needsConfirm?, unsaved?,
 //   rolledBack?, budget? (the validator's, when validation ran) }. This is the writer's FULL result; the pack's apply
 //   (writer-group.mjs) returns a concise one unless { verbose: true }. GM only; refuses while the open sheet holds unsaved input; re-plans and re-validates on the CURRENT document;
 //   refuses the WHOLE write when an item it touches changed since the preview (expect); destructive plans need confirmed:true;
 //   a failure in any phase rolls back what this run wrote.
 // UNDO: undo(doc, runId?, { opIds?, confirmDrift }) whole run or per item (groups: undo.mjs selectEntries); undoStatus(doc) sync.
+//   W5-A-2: the run journals the item order before it (Run.order); a whole-run undo (and a rollback) puts every item back in
+//   that order, a per-item undo puts the restored items back at their old place (undo.mjs restoreTarget / movePlan).
 
-import { ATTRS, LEVEL_WORDS, getPath, norm, normBase, plainText, powerLevelOf, unsavedFrom, automationsOf } from "./reader.mjs";
-import { clone, fingerprint, readJournal, pruneJournal, findRun, selectEntries, driftOf, undoOrder, describeRun, UNDO_TTL } from "./undo.mjs";
+import { ATTRS, LEVEL_WORDS, getPath, norm, normBase, plainText, powerLevelOf, unsavedFrom, automationsOf, talentRoles } from "./reader.mjs";
+import { clone, fingerprint, readJournal, pruneJournal, findRun, selectEntries, driftOf, undoOrder, describeRun, restoreTarget, movePlan, UNDO_TTL } from "./undo.mjs";
 import { baseName, noteOf, withNote, cleanNote } from "./names.mjs";
 import { attributeFromNote, fillAttributeKey, onlyAttributePlaceholders } from "./proposal.mjs";
 
@@ -131,6 +137,8 @@ export function dropKey(path) {
   return FD?.create ? [path, FD.create()] : [`${parent}.-=${key}`, null];
 }
 const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+/** W5-B 6d: an updateItem op is named as the item will be called (a note or gear rename in `changes`), like the actor op (W3-2) */
+const newNameOf = (changes, name) => changes.find((c) => c.path === "name")?.to ?? name;
 const msg = (code, message, extra = {}) => ({ code, message, ...extra });
 
 /** non-split powers keep all level automations in one document: show those of the chosen level (plus-ultra apply.mjs rule).
@@ -260,6 +268,21 @@ function actorSetEntries(set, { allowVitals }, E, opId, W = () => {}) {
   return out;
 }
 
+/**
+ * W5-A-3: the talent order a replace asks for, from its conversion: `conv.talentOrder` ([{ itemId } | { opId }], replace.mjs) or,
+ * for the validator's converter (proposal.mjs replaceToOps), its `srcItems` (kept items) and `src` (ops) entries whose path is
+ * "proposal.talents[i]". A kept item wins over an op of the same entry (a note update). -> [{ itemId } | { opId }] | null
+ */
+export function talentOrderOf(conv) {
+  if (Array.isArray(conv?.talentOrder)) return conv.talentOrder;
+  const at = [];
+  const put = (path, tok) => { const m = /^proposal\.talents\[(\d+)\]$/.exec(String(path ?? "")); if (m && !at[Number(m[1])]) at[Number(m[1])] = tok; };
+  for (const [itemId, s] of Object.entries(conv?.srcItems ?? {})) put(s?.path, { itemId });
+  for (const [opId, s] of Object.entries(conv?.src ?? {})) put(s?.path, { opId });
+  const out = at.filter(Boolean);
+  return out.length ? out : null;
+}
+
 /* ------------------------------------------------------------------ partial selection (spec 7.5 point 6) */
 /** ops each op depends on (links to other add ops in the same list) */
 export const kindOf = (op) => op?.kind ?? op?.op;
@@ -350,7 +373,7 @@ export function createWriter(deps = {}) {
     if (dn !== "Actor" || !ACTOR_TYPES.includes(doc?.type)) { base.errors.push(msg("doc.type", `The builder writes ${ACTOR_TYPES.join(" and ")} actors and ${ITEM_DOC_TYPES.join(" / ")} items; this is "${doc?.type ?? "?"}".`)); return finish(base); }
     if (!proposal || typeof proposal !== "object") { base.errors.push(msg("proposal.shape", "No proposal.")); return finish(base); }
     const cat = await D.getCatalog();
-    let ops, derived = false;
+    let ops, derived = false, talentOrder = null;
     const mode = proposal.mode ?? (proposal.ops ? "ops" : "replace");
     if (mode === "ops") {
       if (!Array.isArray(proposal.ops) || !proposal.ops.length) { base.errors.push(msg("proposal.shape", "mode \"ops\" needs a non-empty `ops` list.")); return finish(base); }
@@ -360,7 +383,7 @@ export function createWriter(deps = {}) {
       const conv = await D.toOps(doc, proposal.proposal ?? proposal.state ?? null, cat, opts);
       base.warnings.push(...(conv.warnings ?? []));
       if (conv.errors?.length) { base.errors.push(...conv.errors); base.mode = "replace"; return finish(base); }
-      ops = normalizeOps(conv.ops); derived = true;
+      ops = normalizeOps(conv.ops); derived = true; talentOrder = talentOrderOf(conv);
     } else { base.errors.push(msg("proposal.mode", `Unknown mode "${mode}".`)); return finish(base); }
     let dropped = [];
     if (Array.isArray(opts.only)) ({ ops, dropped } = selectOps(ops, opts.only));
@@ -379,7 +402,7 @@ export function createWriter(deps = {}) {
         }
       }
     }
-    const out = buildPlan(doc, ops, res, { ...opts, randomID: D.randomID, liveForm: D.liveForm });
+    const out = buildPlan(doc, ops, res, { ...opts, mode, talentOrder, randomID: D.randomID, liveForm: D.liveForm });
     out.plan.mode = mode; out.plan.derived = derived; out.plan.dropped = dropped;
     return out;
   }
@@ -387,13 +410,14 @@ export function createWriter(deps = {}) {
   function emptyPlan(doc) {
     const s = srcOf(doc);
     return { ok: false, mode: "ops", derived: false, runId: null, doc: { uuid: String(doc?.uuid ?? ""), id: String(s._id ?? doc?.id ?? ""), type: String(doc?.type ?? s.type ?? ""), name: String(doc?.name ?? s.name ?? "") },
-      errors: [], warnings: [], info: [], ops: [], fields: [], creates: [], updates: [], deletes: [], swaps: [], keeps: [], overwrites: [],
-      counts: { create: 0, update: 0, swap: 0, delete: 0, fields: 0, keeps: 0 }, destructive: false, build: false, unsaved: [], dropped: [],
+      errors: [], warnings: [], info: [], ops: [], fields: [], creates: [], updates: [], deletes: [], swaps: [], keeps: [], overwrites: [], reorders: [],
+      counts: { create: 0, update: 0, swap: 0, delete: 0, fields: 0, keeps: 0, reorder: 0 }, destructive: false, build: false, unsaved: [], dropped: [],
       expect: { items: {}, actor: {}, deletes: [] }, projected: null };
   }
   function finish(p, exec = null) {
-    p.counts = { create: p.creates.length, update: p.updates.length, swap: p.swaps.length, delete: p.deletes.length, fields: p.fields.length, keeps: p.keeps.length };
-    p.destructive = p.deletes.length > 0 || p.swaps.length > 0;
+    p.counts = { create: p.creates.length, update: p.updates.length, swap: p.swaps.length, delete: p.deletes.length, fields: p.fields.length, keeps: p.keeps.length, reorder: (p.reorders ?? []).length };
+    // W5-A-3: a kept talent re-created into another role (hero <-> occupation <-> extra) is confirmed like a removal
+    p.destructive = p.deletes.length > 0 || p.swaps.length > 0 || (p.reorders ?? []).some((r) => r.roleChange);
     p.ok = !p.errors.length;
     return { plan: p, exec };
   }
@@ -624,8 +648,8 @@ export function createWriter(deps = {}) {
         proj.set(id, after);
         p.swaps.push({ opId, id, name: it.name, from: changes.find((c) => c.swap)?.from, to: changes.find((c) => c.swap)?.to });
         exec.swaps.push({ opId, itemId: id, data: swapData, name: it.name });
-        Object.assign(pl, { action: "swap", changes, destructive: true });
-        p.updates.push({ opId, itemId: id, type, name: it.name, changes });
+        Object.assign(pl, { action: "swap", changes, destructive: true, name: newNameOf(changes, it.name) });
+        p.updates.push({ opId, itemId: id, type, name: newNameOf(changes, it.name), changes });
       } else if (changes.length) {
         proj.set(id, next);
         const upd = {};
@@ -633,8 +657,8 @@ export function createWriter(deps = {}) {
           if (c.to === undefined) { const [k, v] = dropKey(c.path); upd[k] = v; } else upd[c.path] = c.to;
         }
         exec.updates.push({ opId, itemId: id, update: upd, paths: changes.map((c) => c.path), name: it.name });
-        Object.assign(pl, { action: "update", changes });
-        p.updates.push({ opId, itemId: id, type, name: it.name, changes });
+        Object.assign(pl, { action: "update", changes, name: newNameOf(changes, it.name) });
+        p.updates.push({ opId, itemId: id, type, name: newNameOf(changes, it.name), changes });
       } else if (!p.errors.some((e) => e.opId === opId)) { pl.action = "noop"; if (!p.warnings.some((w) => w.opId === opId)) W("op.noop", `op ${opId} changes nothing on "${it.name}"`, { opId }); }
     }
 
@@ -724,14 +748,47 @@ export function createWriter(deps = {}) {
     for (const a of exec.actor) for (const path of a.paths) p.expect.actor[path] = getPath(srcOf(actor), path) ?? null;
     p.expect.deletes = [...removed.keys()].sort();
     p.ops = opPlans;
+    // W5-A-3: a replace delivers the proposal's talent order (talent roles: first = hero, second = occupation; W2-3). Kept talents
+    // keep their place and new ones land at the end, so after the other phases the talents from the first out-of-order position
+    // on are re-created (keepId, same source) in the proposal's order. Deterministic (movePlan). ops mode: never (the model
+    // orders talents itself by remove + add). Talents the proposal does not name (a deselected removal) follow in their order.
+    exec.order = null; exec.orderKnown = false;
+    if (opts.mode === "replace" && Array.isArray(opts.talentOrder) && opts.talentOrder.length) {
+      const before = [...cur].filter(([id, s]) => s.type === "talent" && !removed.has(id)).map(([id]) => id)
+        .concat(exec.adds.filter((a) => a.type === "talent").map((a) => pid(a.opId)));
+      const desired = [...new Set(opts.talentOrder.map((t) => (t?.itemId != null ? String(t.itemId) : t?.opId != null ? pid(String(t.opId)) : "")).filter((id) => before.includes(id)))];
+      desired.push(...before.filter((id) => !desired.includes(id)));
+      exec.orderKnown = true;
+      const { keep, move } = movePlan(before, desired);
+      if (move.length) {
+        exec.order = { desired };
+        const curTal = [...cur].filter(([, s]) => s.type === "talent").map(([id]) => ({ id }));
+        const was = talentRoles(curTal, !!String(srcOf(actor).system?.occupation ?? "").trim());
+        const will = talentRoles([...keep, ...move].map((id) => ({ id })), !!String(actorSrc.system?.occupation ?? "").trim());
+        for (const id of move) {
+          const isNew = id.startsWith("+");
+          const from = isNew ? null : (was.get(id) ?? null), to = will.get(id) ?? null;
+          p.reorders.push({ id: isNew ? null : id, opId: isNew ? id.slice(1) : null, name: nameOf(id), from, to, roleChange: !isNew && !!from && from !== to });
+        }
+        const kept = p.reorders.filter((r) => r.id);
+        if (kept.length) p.info.push(msg("talent.order", `Talents in the proposal's order: ${kept.map((r) => `"${r.name}"${r.roleChange ? ` ${r.from} -> ${r.to}` : ""}`).join(", ")} re-created after the others with the same id${kept.length > 1 ? "s" : ""}.`, { names: kept.map((r) => r.name) }));
+      }
+    }
     const projItems = [...proj.values()].map((s) => ({ id: String(s._id), name: s.name, type: s.type, _source: s, effects: clone(s.effects ?? []) }));
+    if (exec.order) {   // the projection shows the written order: the re-created talents last, in the proposal's order
+      const moved = p.reorders.map((r) => r.id ?? pid(r.opId));
+      const at = new Map(projItems.map((i) => [i.id, i]));
+      projItems.splice(0, projItems.length, ...projItems.filter((i) => !moved.includes(i.id)), ...moved.map((id) => at.get(id)).filter(Boolean));
+    }
     actorSrc.items = projItems.map((i) => i._source);
     p.projected = { id: String(actorSrc._id ?? actor.id ?? ""), uuid: String(actor.uuid ?? ""), documentName: "Actor", name: actorSrc.name ?? actor.name, type: actorSrc.type ?? actor.type, _source: actorSrc, system: clone(actorSrc.system), items: projItems, effects: clone(srcOf(actor).effects ?? listOf(actor.effects).map(srcOf)), overrides: {} };
     // W3-3 (D-1): a build = creation profile, no creation item of the actor survives the run (empty or emptied) and the run adds
-    // some: current Health / Resolve go to max after the write. Edits and in-play keep them (O25; only the clamp below max).
+    // some: current Health / Resolve go to max after the write. W5-A-1 (provisional): a REPLACE in the creation profile is a build
+    // too (the model re-states the whole hero: "change him into X" must not start wounded), removals or not. ops-mode edits and
+    // in-play keep them (O25; only the clamp below max).
     const survivors = [...cur].filter(([id, s]) => CREATION_TYPES.includes(s.type) && !removed.has(id));
-    p.build = opts.profile !== "in-play" && !survivors.length && exec.adds.some((a) => CREATION_TYPES.includes(a.type));
-    if (p.build) p.info.push(msg("vitals.build", "New build: current Health and Resolve are set to their max after the write."));
+    p.build = opts.profile !== "in-play" && (opts.mode === "replace" || (!survivors.length && exec.adds.some((a) => CREATION_TYPES.includes(a.type))));
+    if (p.build) p.info.push(msg("vitals.build", opts.mode === "replace" ? "Replace in the creation profile is a build: current Health and Resolve are set to their max after the write." : "New build: current Health and Resolve are set to their max after the write."));
     p.info.push(msg("plan.summary", `${p.creates.length} to add, ${p.updates.length} to change, ${p.deletes.length} to remove, ${p.fields.length} actor field(s); ${p.keeps.length} item(s) unchanged, ids kept.`));
     return finish(p, exec);
   }
@@ -893,6 +950,9 @@ export function createWriter(deps = {}) {
       const seen = new Set(p.warnings.map((w) => `${w.code}|${w.opId ?? ""}|${w.message}`));
       for (const w of v?.warnings ?? []) {
         if (!w?.code) continue;
+        // W5-A-3: the writer writes a replace's talents in the proposal's order, so the validator's role shift (projected with
+        // kept talents in place) does not happen
+        if (w.code === "talent.role.shift" && exec?.orderKnown) continue;
         const m = { ...w, message: w.message ?? (w.code === "rank.defaulted" ? "No rank given: validated as the default rank." : w.code) };
         const k = `${m.code}|${m.opId ?? ""}|${m.message}`;
         if (!seen.has(k)) { seen.add(k); p.warnings.push(m); }
@@ -914,6 +974,9 @@ export function createWriter(deps = {}) {
     p.runId = runId;
     const run = { runId, at: D.now(), by: D.userId(), label: cleanText(label, 120), ops: [] };
     if (docName(doc) === "Item") return execItemDoc(doc, p, exec, run, base);
+    // W5-A-2: the collection order before the run; undo and rollback put the items back in it (talent roles hang on it)
+    run.order = listOf(doc.items).map((i) => String(srcOf(i)._id ?? i.id));
+    let reordered = [];
     const idMap = {};
     const created = [], updated = [], deleted = [];
     let phase = "start";
@@ -996,6 +1059,22 @@ export function createWriter(deps = {}) {
         }
         if (ids.length) { await doc.deleteEmbeddedDocuments("Item", ids); deleted.push(...ids); }
       }
+      // 4b. W5-A-3: talents into the replace proposal's order (re-created with keepId and their current source, minimal set)
+      if (exec.order) {
+        phase = "order"; stage(phase);
+        const real = (id) => (id.startsWith("+") ? idMap[id.slice(1)] ?? null : id);
+        const talents = listOf(doc.items).map(srcOf).filter((s) => s.type === "talent").map((s) => String(s._id));
+        const desired = [...new Set(exec.order.desired.map(real).filter((id) => id && talents.includes(id)))];
+        desired.push(...talents.filter((id) => !desired.includes(id)));
+        const { move } = movePlan(talents, desired);
+        if (move.length) {
+          const data = move.map((id) => clone(srcOf(doc.items.get(id))));
+          run.ops.push({ opId: "_order", kind: "order", itemId: null, type: "talent", name: "talent order", ids: move, before: data, after: null });
+          await doc.deleteEmbeddedDocuments("Item", move);
+          await createKeep(doc, data);
+          reordered = move.map((id) => { const r = p.reorders.find((x) => (x.id ?? idMap[x.opId]) === id); return { itemId: id, name: doc.items.get(id)?.name ?? r?.name ?? id, ...(r?.from ? { from: r.from } : {}), ...(r?.to ? { to: r.to } : {}) }; });
+        }
+      }
       // 5. actor fields (one call)
       if (exec.actor.length) {
         phase = "actor"; stage(phase);
@@ -1031,21 +1110,25 @@ export function createWriter(deps = {}) {
       phase = "journal"; stage(phase);
       for (const e of run.ops) {
         if (e.kind === "actor") e.after = Object.fromEntries(e.paths.map((path) => [path, clone(getPath(srcOf(doc), path)) ?? null]));
-        else if (e.kind !== "remove") { const it = doc.items.get(e.itemId); e.after = it ? fingerprint(srcOf(it)) : null; if (it) e.name = it.name; }
+        else if (e.kind !== "remove" && e.kind !== "order") { const it = doc.items.get(e.itemId); e.after = it ? fingerprint(srcOf(it)) : null; if (it) e.name = it.name; }
       }
-      const { journal, dropped } = pruneJournal({ runs: [...readJournal(srcOf(doc)).runs, run] }, D.now());
+      // the order entry keeps its sources only in memory (rollback); the journal needs the ids
+      const stored = { ...run, ops: run.ops.map((e) => { if (e.kind !== "order") return e; const { before, ...rest } = e; return { ...rest, before: null }; }) };
+      const { journal, dropped } = pruneJournal({ runs: [...readJournal(srcOf(doc)).runs, stored] }, D.now());
       await doc.update({ [JOURNAL_PATH]: journal });
       const warnings = [...p.warnings];
       if (!journal.runs.some((r) => r.runId === runId)) warnings.push(msg("undo.notStored", "The undo record could not be stored."));
       if (dropped.length) warnings.push(msg("undo.trimmed", `Older undo records were dropped to keep the actor small (${dropped.length}).`));
       const vText = Object.entries(vitals).map(([k, x]) => `${k === "health" ? "Health" : "Resolve"} ${x.from ?? "?"} -> ${x.to}`).join(", ");
-      const message = `Applied to "${doc.name}": ${created.length} added, ${updated.length} changed, ${deleted.length} removed, ${p.fields.length} field(s).${vText ? ` New build: current ${vText} (max).` : ""}`;
-      return { ...base, ok: true, runId, errors: [], warnings, created, updated: [...new Set(updated)], deleted, idMap, message, ...(vText ? { vitals } : {}) };
+      const keptMoved = reordered.filter((r) => !created.includes(r.itemId));
+      const oText = keptMoved.length ? ` Talents in the proposal's order (${keptMoved.map((r) => `"${r.name}"${r.from && r.to && r.from !== r.to ? ` ${r.from} -> ${r.to}` : ""}`).join(", ")}; same ids).` : "";
+      const message = `Applied to "${doc.name}": ${created.length} added, ${updated.length} changed, ${deleted.length} removed, ${p.fields.length} field(s).${vText ? ` New build: current ${vText} (max).` : ""}${oText}`;
+      return { ...base, ok: true, runId, errors: [], warnings, created, updated: [...new Set(updated)], deleted, idMap, message, ...(vText ? { vitals } : {}), ...(reordered.length ? { reordered } : {}) };
     } catch (err) {
       D.log?.error?.(`moinens-ai-gen | writer apply failed at ${phase}`, err);
       const reason = String(err?.message ?? err).replace(/[\s.]+$/, "");
       try {
-        await revert(doc, run.ops, { rollback: true });
+        await revert(doc, run.ops, { rollback: true, order: run.order, full: true });
         const e = msg("write.failed", `Writing failed at "${phase}" (${reason}); everything this run wrote was rolled back.`);
         return { ...base, errors: [e], rolledBack: true, message: e.message };
       } catch (rb) {
@@ -1081,7 +1164,39 @@ export function createWriter(deps = {}) {
   }
 
   /* -------------------------------------------------------------- reverse writes (undo and rollback) */
-  async function revert(doc, entries, { rollback = false } = {}) {
+  /** create items with their own ids (keepId); one retry for the ones still missing; throws naming what could not be created */
+  async function createKeep(doc, data) {
+    if (!data.length) return;
+    const missing = () => data.filter((d) => !doc.items?.get?.(String(d._id)));
+    try { await doc.createEmbeddedDocuments("Item", data, { keepId: true }); }
+    catch (err) {
+      const miss = missing();
+      if (!miss.length) return;
+      D.log?.warn?.("moinens-ai-gen | writer: re-creating items failed, one retry", err);
+      await doc.createEmbeddedDocuments("Item", clone(miss), { keepId: true });
+    }
+    const still = missing();
+    if (still.length) throw new Error(`could not re-create ${still.map((d) => `"${d.name}"`).join(", ")} with ${still.length > 1 ? "their" : "its"} id`);
+  }
+  /**
+   * W5-A-2: re-create `pending` items (restored removals, old level documents; Map id -> source) and put the actor's items into
+   * the run's pre-run `order` (restoreTarget: whole run = every item back in place; per item = only the pending ones), with ONE
+   * delete and ONE create (movePlan: from the first out-of-order position on, keepId, current source). Without an `order`
+   * (journal written before W5-A) the pending items are created at the end as before.
+   */
+  async function placeItems(doc, pending, order, full) {
+    const has = (id) => !!doc.items?.get?.(id);
+    if (!Array.isArray(order) || !order.length) { await createKeep(doc, [...pending.values()]); return; }
+    const current = listOf(doc.items).map((i) => String(srcOf(i)._id ?? i.id));
+    const { move } = movePlan(current, restoreTarget(current, order, [...pending.keys()], full));
+    if (!move.length) return;
+    const data = move.map((id) => pending.get(id) ?? clone(srcOf(doc.items.get(id))));
+    const del = move.filter(has);
+    if (del.length) await doc.deleteEmbeddedDocuments("Item", del);
+    await createKeep(doc, data);
+  }
+
+  async function revert(doc, entries, { rollback = false, order = null, full = true } = {}) {
     const isItem = docName(doc) === "Item";
     const o = undoOrder(entries);
     const skipped = [];
@@ -1100,9 +1215,9 @@ export function createWriter(deps = {}) {
       if (Object.keys(upd).length) await doc.update(upd);
     }
     if (!isItem) {
-      // removed items come back with their OLD ids (links from boosts/limits/powers stay intact)
-      const back = o.restore.filter((e) => { if (has(e.itemId)) { skipped.push(e); return false; } return true; }).map((e) => clone(e.before));
-      if (back.length) await doc.createEmbeddedDocuments("Item", back, { keepId: true });
+      // removed items come back with their OLD ids (links from boosts/limits/powers stay intact); created at the end (placeItems)
+      const pending = new Map();
+      for (const e of o.restore) { if (has(e.itemId)) skipped.push(e); else pending.set(String(e.itemId), clone(e.before)); }
       // field updates written back path by path
       const rows = [];
       for (const e of o.reverse) {
@@ -1115,14 +1230,20 @@ export function createWriter(deps = {}) {
         rows.push(row);
       }
       if (rows.length) await doc.updateEmbeddedDocuments("Item", rows);
-      // level swaps: the old level document back under the same id
+      // level swaps: the old level document back under the same id (created with the restored items)
       for (const e of o.swap) {
         if (has(e.itemId)) await doc.deleteEmbeddedDocuments("Item", [e.itemId]);
-        await doc.createEmbeddedDocuments("Item", [clone(e.before)], { keepId: true });
+        pending.set(String(e.itemId), clone(e.before));
+      }
+      // rollback of a failed run: talents the order phase deleted and had not re-created yet (only items from before the run)
+      if (rollback) for (const e of entries.filter((x) => x.kind === "order")) {
+        for (const s of e.before ?? []) { const id = String(s?._id ?? ""); if (id && !has(id) && (order ?? []).includes(id)) pending.set(id, clone(s)); }
       }
       // adds deleted
       const del = o.remove.filter((e) => { if (!has(e.itemId)) { skipped.push(e); return false; } return true; }).map((e) => e.itemId);
       if (del.length) await doc.deleteEmbeddedDocuments("Item", del);
+      // restored items created, everything back in the pre-run order (W5-A-2)
+      await placeItems(doc, pending, order, full);
     }
     for (const e of entries.filter((x) => x.kind === "world")) {
       const d = typeof D.fromUuid === "function" ? await D.fromUuid(e.uuid) : null;
@@ -1180,7 +1301,9 @@ export function createWriter(deps = {}) {
       return { ok: false, needsConfirm: true, drift, errors: [msg("undo.drift", text)], message: text, runId: run.runId };
     }
     try {
-      const { skipped } = await revert(doc, entries);
+      // whole run (or everything left of it) = every item back to its pre-run place; per item = only the restored ones
+      const full = !opIds?.length || entries.length === run.ops.filter((e) => !e.undone).length;
+      const { skipped } = await revert(doc, entries, { order: Array.isArray(run.order) ? run.order : null, full });
       const fresh = readJournal(srcOf(doc));
       const r = fresh.runs.find((x) => x.runId === run.runId);
       if (r) { const done = new Set(entries.map((e) => `${e.opId}:${e.itemId}:${e.kind}`)); for (const e of r.ops) if (done.has(`${e.opId}:${e.itemId}:${e.kind}`)) e.undone = true; }

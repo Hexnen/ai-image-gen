@@ -30,8 +30,11 @@ const shortBudget = (b) => {
  * -> { ok, runId, message, ops: [{ opId, action, type, name, itemId, outcome, because?, cascade? }],
  *      budget: { before: { points, spent, slots, rankPowers, cap }, after: {...} } | { kind, note } | null,
  *      warnings: [{ code, message, ... }], errors: [...], created, updated, deleted, idMap,
- *      needsConfirm?, confirm?: [{ opId, action, name }] (what confirmed:true would allow), stale?, unsaved?, busy?, rolledBack?,
- *      vitals?: { health?, resolve?: { from, to } } (a build set current Health / Resolve to max, W3-3) }
+ *      needsConfirm?, confirm?: [{ opId, action: "remove"|"swap"|"reorder", name, itemId?, from?, to? }] (what confirmed:true would
+ *      allow; "reorder" = a kept talent re-created into another role, W5-A-3), stale?, unsaved?, busy?, rolledBack?,
+ *      vitals?: { health?, resolve?: { from, to } } (a build set current Health / Resolve to max, W3-3; every replace in the
+ *      creation profile, W5-A-1), reorders?: [{ itemId, name, from, to, roleChange }] (plan: talents put into the replace
+ *      proposal's order), reordered?: [{ itemId, name, from?, to? }] (written) }
  *   warnings: the plan's and the validator's (on success too, W3-2), each once
  *   outcome: "written" | "unchanged" (noop) | "dropped" (deselected / partial selection, `because`) | "not written" (ok false)
  */
@@ -55,9 +58,12 @@ export function conciseApplyResult(r) {
   };
   if (r.needsConfirm) {
     out.needsConfirm = true;
-    out.confirm = [...(p?.deletes ?? []).map((d) => ({ opId: d.opId, action: "remove", name: d.name })), ...(p?.swaps ?? []).map((s) => ({ opId: s.opId, action: "swap", name: s.name }))];
+    // W5-A-3: a kept talent re-created into another role is named; re-creations that keep the role (and new talents) are not
+    out.confirm = [...(p?.deletes ?? []).map((d) => ({ opId: d.opId, action: "remove", name: d.name })), ...(p?.swaps ?? []).map((s) => ({ opId: s.opId, action: "swap", name: s.name })),
+      ...(p?.reorders ?? []).filter((x) => x.roleChange).map((x) => ({ opId: "_order", action: "reorder", name: x.name, itemId: x.id, from: x.from, to: x.to }))];
   }
-  for (const k of ["stale", "unsaved", "busy", "rolledBack", "vitals"]) if (r[k] !== undefined) out[k] = r[k];
+  if (p?.reorders?.length) out.reorders = p.reorders.map((x) => ({ itemId: x.id ?? (typeof idMap[x.opId] === "string" ? idMap[x.opId] : null), name: x.name, from: x.from, to: x.to, roleChange: !!x.roleChange }));
+  for (const k of ["stale", "unsaved", "busy", "rolledBack", "vitals", "reordered"]) if (r[k] !== undefined) out[k] = r[k];
   return out;
 }
 
@@ -71,7 +77,8 @@ export function writerGroup(getPack, deps = {}) {
   const pickToOps = async (doc, proposal, cat, opts) => {
     const conv = isStateShape(proposal) ? null : await loadConv();
     if (typeof conv === "function") {
-      try { const r = conv(doc, proposal, { catalog: cat, rank: opts?.rank, profile: opts?.profile }); return { ops: r.ops ?? [], errors: (r.errors ?? []).map((e) => ({ ...e, message: e.message ?? `${e.code} ${e.path ?? ""}`.trim() })), warnings: r.warnings ?? [] }; }
+      // src / srcItems ride along: the writer reads the proposal's talent order from them (W5-A-3, writer.talentOrderOf)
+      try { const r = conv(doc, proposal, { catalog: cat, rank: opts?.rank, profile: opts?.profile }); return { ops: r.ops ?? [], errors: (r.errors ?? []).map((e) => ({ ...e, message: e.message ?? `${e.code} ${e.path ?? ""}`.trim() })), warnings: r.warnings ?? [], src: r.src ?? {}, srcItems: r.srcItems ?? {} }; }
       catch (e) { return { ops: [], errors: [{ code: "replace.failed", message: String(e?.message ?? e) }], warnings: [] }; }
     }
     return toOps(doc, proposal, cat, opts);
