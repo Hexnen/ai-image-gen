@@ -14,6 +14,7 @@ import { createHarness, transcriptOf } from "./harness.mjs";
 import { createSessionStore } from "./session-store.mjs";
 import { readBuildSettings } from "./build-settings.mjs";
 import { t } from "./harness-lang.mjs";
+import { dryWiring } from "./dry-transport.mjs";
 
 const WARM_KEY = `${MODULE_ID}.build.prewarm`;
 
@@ -38,13 +39,16 @@ export function attachBuilder(api, { game = globalThis.game } = {}) {
     indexedDB: (() => { try { return globalThis.indexedDB ?? null; } catch { return null; } })(),
     onWarn: (e) => console.warn(`${MODULE_ID} | builder conversations kept in memory only (IndexedDB unavailable)`, e)
   });
+  // dev only: null unless a lane page (never :30000) opted in via localStorage (dry-transport.mjs, dev/dry-run/RUNBOOK.md)
+  const dry = dryWiring({ game });
   const harness = createHarness({
     getPack: () => api.build?.registry?.getPack?.() ?? null,
-    getApiKey: () => getKey("anthropic"),
-    settings: () => readBuildSettings(game),
+    getApiKey: () => (dry ? dry.apiKey : getKey("anthropic")),
+    settings: () => (dry ? dry.settings(readBuildSettings(game)) : readBuildSettings(game)),
     // module limits: the per-request estimate is checked against limit.perRequest too (reserveBudget rule)
     limits: { reserve: (usd) => reserveBudget(usd, { perRequest: usd }), record: (usd) => recordCost(usd) },
-    log: (entry) => logCall(entry),
+    log: (entry) => logCall(dry ? dry.log(entry) : entry),
+    ...(dry ? { fetchImpl: dry.fetchImpl, transport: dry.transport } : {}),
     store,
     worldId: () => game.world?.id ?? "world",
     redact: (s) => redact(s),
@@ -56,8 +60,10 @@ export function attachBuilder(api, { game = globalThis.game } = {}) {
     openSession: (doc) => harness.openSession(doc),
     getSession: (doc) => harness.getSession(doc),
     listArchive: (doc) => store.listArchive(`${game.world?.id ?? "world"}:${doc?.uuid ?? doc}`),
-    transcriptOf
+    transcriptOf,
+    dry: dry ? Object.freeze({ ...dry.config }) : null
   });
+  if (dry) globalThis.ui?.notifications?.warn?.("Moinens AI Gen: builder DRY RUN (lane test mode, no Anthropic calls)", { permanent: true });
   globalThis.Hooks?.callAll?.("moinensAiGen.harnessReady", api.build);
   return harness;
 }
