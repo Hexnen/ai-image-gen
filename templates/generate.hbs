@@ -7,9 +7,13 @@
     <button type="button" class="link" data-action="openConfig">{{localize "AIIMG.Gen.OpenConfig"}}</button></p>
   {{/unless}}
 
-  <div class="form-group stacked">
-    <label>{{localize "AIIMG.Gen.Description"}}</label>
-    <textarea name="description" rows="5" placeholder="{{localize 'AIIMG.Gen.Placeholder'}}" {{#if busy}}disabled{{/if}}>{{description}}</textarea>
+  <div class="form-group stacked aiimg-desc">
+    <div class="aiimg-desc-head">
+      <label for="{{descId}}">{{localize "AIIMG.Gen.Description"}}</label>
+      <div class="aiimg-enhance" data-role="enhance"></div>
+    </div>
+    <textarea id="{{descId}}" name="description" rows="5" placeholder="{{localize 'AIIMG.Gen.Placeholder'}}" {{#if busy}}disabled{{/if}}>{{description}}</textarea>
+    <p class="aiimg-enhance-status" data-role="enhanceStatus" role="status" aria-live="polite" hidden></p>
   </div>
 
   <div class="aiimg-extra-refs">

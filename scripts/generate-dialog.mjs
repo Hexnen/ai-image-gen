@@ -11,6 +11,7 @@ import { saveRefFile } from "./save-image.mjs";
 import { resolveTypeKey } from "./image-types.mjs";
 import { getConfig, setConfig, isConfigured, clampCount, fitConfig } from "./config-store.mjs";
 import { supportsTransparent } from "./providers/index.mjs";
+import { createEnhanceStore, mountEnhance, resetEnhance, cancelEnhance } from "./enhance/ui.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
@@ -72,6 +73,9 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
   /** @type {{uid:string, blob:Blob, name:string, url:string}[]} dodatkowe referencje tylko na to wywołanie */
   extraRefs = [];
 
+  /** Różdżka przy opisie (Claude): stan cofnięcia i trwającego żądania, przeżywa re-render. */
+  #enhance = createEnhanceStore();
+
   constructor({ document, ...options }) {
     super(options);
     this.document = document;
@@ -114,6 +118,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     const prompt = buildPrompt(this.document, this.description, r.cfg);
     return {
       description: this.description,
+      descId: `${this.id}-description`,
       prompt,
       promptChars: prompt.length,
       promptEmpty: !prompt.trim(),
@@ -191,6 +196,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     super._onClose?.(options);
     document.removeEventListener("paste", this.#paste);
     for (const r of this.extraRefs) URL.revokeObjectURL(r.url);
+    resetEnhance(this.#enhance);
   }
 
   _onRender(context, options) {
@@ -198,6 +204,13 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     const el = this.element;
     el.querySelector("textarea[name=description]")
       ?.addEventListener("input", (ev) => { this.description = ev.target.value; this.#refreshPrompt(); });
+    mountEnhance(this.#enhance, {
+      textarea: el.querySelector("textarea[name=description]"),
+      slot: el.querySelector("[data-role=enhance]"),
+      statusEl: el.querySelector("[data-role=enhanceStatus]"),
+      disabled: !!this.busy,
+      getContext: () => ({ name: this.document.name, type: resolveTypeKey(this.document) ?? this.document.documentName })
+    });
     el.querySelector("details.aiimg-prompt")?.addEventListener("toggle", (ev) => {
       this.promptOpen = ev.target.open;
       savePrefs({ promptOpen: this.promptOpen });
@@ -256,6 +269,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
 
   async #run(mode) {
     if (this.busy) return;
+    cancelEnhance(this.#enhance); // generujemy z tym, co jest w polu; trwające ulepszanie przerywamy (cofnięcie zostaje)
     this.error = "";
     if (!this.description.trim()) {
       this.error = game.i18n.localize("AIIMG.Gen.NeedDescription");

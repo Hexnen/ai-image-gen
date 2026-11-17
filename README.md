@@ -58,3 +58,13 @@ no switch because no native alpha is documented.
 OpenAI is limited to `gpt-image-2.5-flare` (default) and `-sunburst`; older GPT Image models (1, 1-mini, 1.5, 2) are no longer
 offered, also on OpenRouter. A type saved with an old model keeps all its other settings: it runs on Flare (size and quality are
 fitted to 2.5) and the editor says so until you save the type again. Old entries in the call log keep their model names.
+
+## Enhance a description with Claude (wand)
+The magic-wand button next to the description (the "Generate image" dialog and the test drawer's sample description)
+sends what you typed to Anthropic's Messages API and replaces the text with a richer appearance description in the same
+language (e.g. "młody superbohater" becomes a paragraph about build, costume, pose, light and background). The arrow
+button (or Ctrl+Z) restores the text from before; Ctrl+Enter in the field runs the wand. It needs its own **Anthropic API
+key** (client setting, like the other keys). The model (`claude-sonnet-5-5` by default) and the reasoning effort
+(`medium` by default) are world settings. The call goes straight from the GM's browser (`anthropic-dangerous-direct-browser-access`);
+it is not written to the call log and does not count towards the image budget limits. The system prompt lives in
+`scripts/enhance/anthropic.mjs`; tests with a mocked fetch: `node dev/test-enhance.mjs`. Open choices: `dev/enhance-notes.md`.

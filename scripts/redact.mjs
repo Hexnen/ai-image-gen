@@ -6,7 +6,7 @@ import { getKey } from "./settings.mjs";
 /** Wycina klucze/tokeny z tekstu. Zawsze zwraca string o długości <= maxLen. */
 export function redact(text, maxLen = 2000) {
   let s = String(text ?? "");
-  for (const p of PROVIDER_IDS) {
+  for (const p of [...PROVIDER_IDS, "anthropic"]) {
     let k = "";
     try { k = getKey(p); } catch { /* settings not ready */ }
     if (k && k.length >= 8) s = s.split(k).join("[redacted]");

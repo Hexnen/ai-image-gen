@@ -234,3 +234,19 @@ button.link:focus-visible { outline: 2px solid var(--color-warm-2, #c9593f); out
 /* Transparent background switch */
 .aiimg-check { display: inline-flex; align-items: center; gap: 0.5em; cursor: pointer; }
 .aiimg-check input { margin: 0; }
+
+/* Description field + Claude wand (enhance): label row with compact icon buttons, status line under the field */
+.aiimg-desc-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 26px; }
+.aiimg-desc-head label { flex: 1 1 auto; min-width: 0; }
+.aiimg-enhance { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.aiimg-enhance-btn { flex: 0 0 auto; width: 26px; height: 26px; min-height: 0; padding: 0; margin: 0; line-height: 24px; font-size: var(--font-size-12, 12px); border-radius: 6px; }
+.aiimg-enhance-btn i { margin: 0; }
+.aiimg-enhance-btn.is-wand:not(:disabled):hover, .aiimg-enhance.is-busy .aiimg-enhance-btn.is-wand { background: var(--color-warm-2, #c9593f); border-color: var(--color-warm-2, #c9593f); color: #fff; }
+.aiimg-enhance-btn:focus-visible { outline: 2px solid var(--color-warm-2, #c9593f); outline-offset: 1px; }
+.aiimg-desc textarea[aria-busy="true"] { opacity: .7; cursor: progress; }
+.aiimg-enhance-status { display: flex; align-items: baseline; gap: 6px; margin: 4px 0 0; font-size: var(--font-size-12, 12px); line-height: 1.35; opacity: .85; }
+.aiimg-enhance-status[hidden] { display: none; }
+.aiimg-enhance-status i { flex: 0 0 auto; }
+.aiimg-enhance-status[data-state="done"] i { color: var(--color-warm-2, #c9593f); }
+.aiimg-enhance-status[data-state="error"] { color: var(--color-level-error, #e05050); opacity: 1; }
+.aiimg-enhance-status .link { flex: 0 0 auto; }

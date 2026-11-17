@@ -1,6 +1,7 @@
 import { MODULE_ID, PROVIDER_IDS } from "./constants.mjs";
 import { SLOTS, slotKey } from "./batch/record.mjs";
 import { syncOptimizerProfile } from "./optimize.mjs";
+import { DEFAULT_MODEL as ENHANCE_DEFAULT_MODEL, DEFAULT_EFFORT as ENHANCE_DEFAULT_EFFORT, EFFORTS } from "./enhance/anthropic.mjs";
 
 const { NumberField, StringField, ObjectField, BooleanField } = foundry.data.fields;
 
@@ -19,6 +20,36 @@ export function registerSettings() {
       type: new StringField({ initial: "", blank: true })
     });
   }
+
+  // Ulepszanie opisów (Claude): osobny klucz Anthropic, też klient (nie synchronizuje się do graczy).
+  game.settings.register(MODULE_ID, "apiKey.anthropic", {
+    name: "AIIMG.Settings.ApiKey.anthropic.Name",
+    hint: "AIIMG.Settings.ApiKey.anthropic.Hint",
+    scope: "client",
+    config: true,
+    restricted: true,
+    type: new StringField({ initial: "", blank: true })
+  });
+  game.settings.register(MODULE_ID, "enhance.model", {
+    name: "AIIMG.Settings.EnhanceModel.Name",
+    hint: "AIIMG.Settings.EnhanceModel.Hint",
+    scope: "world",
+    config: true,
+    restricted: true,
+    type: new StringField({ initial: ENHANCE_DEFAULT_MODEL, blank: true })
+  });
+  game.settings.register(MODULE_ID, "enhance.effort", {
+    name: "AIIMG.Settings.EnhanceEffort.Name",
+    hint: "AIIMG.Settings.EnhanceEffort.Hint",
+    scope: "world",
+    config: true,
+    restricted: true,
+    type: new StringField({
+      initial: ENHANCE_DEFAULT_EFFORT,
+      blank: true,
+      choices: Object.fromEntries(EFFORTS.map((e) => [e, `AIIMG.Settings.EnhanceEffort.${e || "default"}`]))
+    })
+  });
 
   const limit = (key, initial) =>
     game.settings.register(MODULE_ID, `limit.${key}`, {

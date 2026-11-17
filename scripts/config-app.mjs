@@ -11,6 +11,7 @@ import { buildTestPrompt, fitTestConfig, estimateTest, estimateTestInfo, generat
 import { sourceTag } from "./cost-learning.mjs";
 import { TestDrawerApp } from "./test-drawer-app.mjs";
 import { aspectInfo } from "./aspect.mjs";
+import { createEnhanceStore, mountEnhance, resetEnhance } from "./enhance/ui.mjs";
 import { generatedSize, outputPreview, edgeIsNoop } from "./output-preview.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin, DialogV2 } = foundry.applications.api;
@@ -73,10 +74,14 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
   /** The side panel docked to this window (GM only). */
   #drawer = null;
 
+  /** Różdżka (Claude) przy przykładowym opisie w szufladzie testu; cofnięcie czyści się przy zmianie typu. */
+  #enhanceTest = createEnhanceStore();
+
   /** Closing without Save discards the draft (the window is a singleton and would otherwise keep it). */
   _onClose(options) {
     this.draft = null;
     this.#clearRuns();
+    resetEnhance(this.#enhanceTest);
     this.test.key = null; // an in-flight test keeps `running` until it settles, so a reopened window cannot start a second one
     this.#drawer?.close();
     this.#drawer = null;
@@ -535,6 +540,13 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const live = () => this.#onDraftInput();
     for (const n of ["testDescription", "testName", "testType"]) el.querySelector(`[name=${n}]`)?.addEventListener("input", live);
     el.querySelector("select[name=testCount]")?.addEventListener("change", live);
+    mountEnhance(this.#enhanceTest, {
+      textarea: el.querySelector("textarea[name=testDescription]"),
+      slot: el.querySelector("[data-role=enhance]"),
+      statusEl: el.querySelector("[data-role=enhanceStatus]"),
+      scope: this.test.key,
+      getContext: () => ({ name: this.test.name, type: this.test.type })
+    });
   }
 
   toggleDrawer() {
@@ -726,6 +738,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const run = this.test.runs.find((r) => r.id === id);
     if (!run) return;
     this.#readForm();
+    resetEnhance(this.#enhanceTest); // wczytany opis z historii: stare cofnięcie nie dotyczy nowego tekstu
     Object.assign(this.test, { description: run.description, name: run.name, type: run.type, shown: run.id, open: true });
     this.#persistTest();
     this.#drawer?.render();

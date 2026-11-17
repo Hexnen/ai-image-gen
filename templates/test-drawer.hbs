@@ -10,9 +10,13 @@
   <div class="aiimg-drawer-body aiimg-test">
     <p class="hint">{{localize "AIIMG.Test.Hint"}}</p>
 
-    <div class="form-group stacked">
-      <label for="aiimg-test-description">{{localize "AIIMG.Test.Description"}}</label>
+    <div class="form-group stacked aiimg-desc">
+      <div class="aiimg-desc-head">
+        <label for="aiimg-test-description">{{localize "AIIMG.Test.Description"}}</label>
+        <div class="aiimg-enhance" data-role="enhance"></div>
+      </div>
       <textarea id="aiimg-test-description" name="testDescription" rows="3" placeholder="{{localize 'AIIMG.Test.DescriptionPlaceholder'}}">{{test.description}}</textarea>
+      <p class="aiimg-enhance-status" data-role="enhanceStatus" role="status" aria-live="polite" hidden></p>
     </div>
     <div class="aiimg-test-row">
       <label>{{localize "AIIMG.Test.Name"}} <input type="text" name="testName" value="{{test.name}}"></label>
