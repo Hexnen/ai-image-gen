@@ -8,6 +8,12 @@
 //         -> stream -> book real cost (limits + call log) -> append the assistant message EXACTLY as returned
 //         -> tool_use: run every tool through the active pack's runTool (parallel), append ONE user message of results
 //         -> repeat until end_turn / cap / Stop / error
+//         -> W3-4 (D-5): a tool batch made ONLY of submit_* calls that all succeeded ends the turn (reason "submitted",
+//            setting endTurnOnSubmit, default on) WITHOUT another request; its tool_result blocks are HELD in
+//            record.heldToolResults (not in messages) and lead the NEXT GM message (held results, sheet, marker, text),
+//            so the history never has two user messages in a row and stays a strict append-only prefix.
+// The turn's `text` is the text of the assistant message that ended the turn without a tool call (W3-5); text written
+// before a tool call is `progress[]` (and a "progress" transcript item), never part of `text`.
 // History is append-only (spec 5.2): nothing appended is ever edited, reordered or removed; the store refuses edits.
 // Nothing partial is appended: a refused, failed or stopped request leaves the history ending with the last user message
 // (the next GM message then follows as a second user message, which the API merges). A tool_use whose results were never
@@ -21,12 +27,12 @@ import { HARNESS_RULES } from "./harness-prompt.mjs";
 import { decideSheetBlock, encodeHeld, decodeHeld } from "./sheet-sync.mjs";
 import { docKey } from "./session-store.mjs";
 import { t as tDefault } from "./harness-lang.mjs";
-import { DEFAULT_CAPS } from "./harness-defaults.mjs";
+import { DEFAULT_CAPS, DEFAULT_END_TURN_ON_SUBMIT } from "./harness-defaults.mjs";
 
 export const RECORD_VERSION = 1;
 
 /** Defaults of the per-message caps (spec 5.3); the Foundry wiring reads the settings and passes them in. */
-export { DEFAULT_CAPS };
+export { DEFAULT_CAPS, DEFAULT_END_TURN_ON_SUBMIT };
 /** Conversation size above which a new conversation is required (spec 5.3, not a setting). */
 export const HISTORY_TOKEN_CAP = 150_000;
 /** Output tokens assumed for the cost estimate of the next request [E]; real cost is booked from usage. */
@@ -43,7 +49,7 @@ export const EVENT_TYPES = Object.freeze([
   "user-message",     // { index }
   "request-start",    // { request, estimateUsd }
   "stream",           // transport event (text / thinking / tool_input / tool_use / retry / fallback / usage ...)
-  "assistant-message",// { index, stop, text }
+  "assistant-message",// { index, stop, text, progress } progress: the text came before a tool call (W3-5)
   "request-end",      // { request, usage, usd, durationMs }
   "tool-start",       // { id, name, input }
   "tool-end",         // { id, name, ok, isError, summary }
@@ -114,7 +120,8 @@ function newRecord({ key, worldId, doc, pack, settings, now }) {
     messages: [], timeline: [], turns: [],
     usage: { ...anthropic.emptyUsage(), usd: 0, requests: 0 },
     lastPromptTokens: 0, prefixFp: null, sheet: null, snapshotFingerprint: null,
-    pendingProposal: null, lastRunId: null, options: {}, proposalStates: []
+    pendingProposal: null, lastRunId: null, options: {}, proposalStates: [],
+    heldToolResults: null   // W3-4: tool_result blocks of a turn ended on submit, sent at the start of the next GM message
   };
 }
 
@@ -151,6 +158,7 @@ export function createHarness(deps = {}) {
       effort: s.effort ?? anthropic.DEFAULT_EFFORT,
       cacheTtl: anthropic.CACHE_TTLS.includes(s.cacheTtl) ? s.cacheTtl : anthropic.DEFAULT_PREFIX_TTL,
       prewarm: s.prewarm !== false,
+      endTurnOnSubmit: (s.endTurnOnSubmit ?? DEFAULT_END_TURN_ON_SUBMIT) !== false,
       maxRequests: Math.max(1, Math.floor(num(s.maxRequests, DEFAULT_CAPS.maxRequests))),
       maxToolCalls: Math.max(0, Math.floor(num(s.maxToolCalls, DEFAULT_CAPS.maxToolCalls))),
       maxInvalidSubmits: Math.max(1, Math.floor(num(s.maxInvalidSubmits, DEFAULT_CAPS.maxInvalidSubmits))),
@@ -443,15 +451,19 @@ export class Session {
 
   /**
    * Run one GM turn. Resolves with a TurnSummary (never rejects for model/transport/limit problems):
-   * { ok, reason, cap?, turn, requests, toolCalls, usage, usd, text, stop, proposal, error? }
-   * reason: done | cap | stopped | refusal | max_tokens | context | error | limit | busy | empty | no-key | no-pack | history-full
+   * { ok, reason, cap?, turn, requests, toolCalls, usage, usd, text, progress, stop, proposal, error? }
+   * reason: done | submitted | cap | stopped | refusal | max_tokens | context | error | limit | busy | empty | no-key | no-pack | history-full
+   *   submitted (W3-4): a successful submit ended the turn without another request; ok true, text "" (the drawer shows
+   *   the proposal's rationale), stop "tool_use".
+   * text (W3-5): text of the assistant message that ended the turn without a tool call ("" when the last one called
+   *   tools); progress: texts the model wrote before its tool calls in this turn, oldest first.
    */
   async send(text) {
     const h = this.#h;
     const msg = String(text ?? "").trim();
     const early = (reason, code, level = "warn", data = {}) => {
       const n = code ? this.#notice(code, level, data) : null;
-      return { ok: false, reason, notice: n, turn: null, requests: 0, toolCalls: 0, usage: anthropic.emptyUsage(), usd: 0, text: "", stop: null, proposal: null };
+      return { ok: false, reason, notice: n, turn: null, requests: 0, toolCalls: 0, usage: anthropic.emptyUsage(), usd: 0, text: "", progress: [], stop: null, proposal: null };
     };
     if (this.busy) return early("busy", "busy", "info");
     if (!msg) return early("empty", "empty", "info");
@@ -472,7 +484,7 @@ export class Session {
     const signal = this.#ctl.signal;
     const wall = h.setTimer(() => { this.#abortReason ??= "wall"; try { this.#ctl?.abort(); } catch { /* ignore */ } }, s.wallClockMs);
     const turn = { turn: this.record.turns.length + 1, at: h.now(), requests: 0, toolCalls: 0, usage: anthropic.emptyUsage(), usd: 0, reason: null, cap: null, stop: null, sheet: null, proposalId: null };
-    const out = { text: "" };
+    const said = []; // W3-5: { text, more } per assistant message of this turn; more = a tool call / pause followed
     let reason = null, cap = null, error = null, lastStop = null;
 
     try {
@@ -485,13 +497,19 @@ export class Session {
       const tools = pack.tools();
       const system = { rules: HARNESS_RULES, digest: String(sp?.rulesDigest ?? ""), catalog: String(sp?.catalogIndex ?? "") };
 
-      // the GM message: unanswered tool_uses first (results must lead the user message), then the sheet block, then the text
-      const pending = unansweredToolUses(this.record.messages);
+      // the GM message: results of the last assistant message's tool_uses first (results must lead the user message):
+      // held real results of a turn that ended on submit (W3-4), is_error "Not run" for the rest; then sheet, then text
+      const unanswered = unansweredToolUses(this.record.messages);
+      const openIds = new Set(unanswered.map((b) => b.id));
+      const held = (Array.isArray(this.record.heldToolResults) ? this.record.heldToolResults : []).filter((b) => b?.type === "tool_result" && openIds.has(b.tool_use_id));
+      const heldIds = new Set(held.map((b) => b.tool_use_id));
+      const pending = unanswered.filter((b) => !heldIds.has(b.id));
       const lastStopReason = this.record.turns.at(-1)?.reason ?? "stopped";
-      const content = pending.map((b) => ({
+      const content = plain(held);
+      content.push(...pending.map((b) => ({
         type: "tool_result", tool_use_id: b.id, is_error: true,
         content: `Not run: the previous turn stopped (${lastStopReason}) before this tool ran. The GM has sent a new message.`
-      }));
+      })));
       const sheet = await this.#sheetBlock(pack);
       turn.sheet = sheet.kind;
       this.emit("sheet", { kind: sheet.kind, tokensEst: sheet.tokensEst ?? 0 });
@@ -501,6 +519,7 @@ export class Session {
       if (marker) gmBlocks.splice(gmBlocks.length - 1, 0, { type: "text", text: marker });
       content.push(...gmBlocks);
       this.record.timeline.push({ at: h.now(), msgIndex: this.record.messages.length, type: "gm", text: msg });
+      this.record.heldToolResults = null; // sent now (or stale): cleared in the same save as the append
       const idx = await this.#append({ role: "user", content });
       if (marker) for (const x of this.record.proposalStates ?? []) x.reported = x.status;
       this.emit("user-message", { index: idx });
@@ -553,8 +572,9 @@ export class Session {
 
         if (r.stop === "refusal") { reason = "refusal"; break; } // partial refused output is never appended (P10)
         const aIdx = await this.#append({ role: "assistant", content: r.historyContent });
-        if (r.text) out.text += (out.text ? "\n\n" : "") + r.text;
-        this.emit("assistant-message", { index: aIdx, stop: r.stop, text: r.text });
+        const more = r.stop === "pause_turn" || (r.stop === "tool_use" && (r.toolUses ?? []).length > 0);
+        said.push({ text: String(r.text ?? ""), more });
+        this.emit("assistant-message", { index: aIdx, stop: r.stop, text: r.text, progress: more && !!r.text });
         // pause_turn (only with server tools, which the builder does not use): the transport refuses an assistant-last
         // request (no prefill), so the harness appends a short user "Continue." and goes on (harness-notes H5).
         if (r.stop === "pause_turn") { await this.#append({ role: "user", content: [{ type: "text", text: "Continue." }] }); continue; }
@@ -568,7 +588,11 @@ export class Session {
         if (signal.aborted) { reason = "stopped"; break; }
         const results = await this.#runTools(pack, uses, turn, signal);
         if (!results || signal.aborted) { reason = "stopped"; break; } // unanswered: answered at the next GM message
-        await this.#append(h.tr.toolResultsTurn(results.map((x) => ({ toolUseId: x.use.id, content: x.content, isError: x.isError }))));
+        const resultsTurn = h.tr.toolResultsTurn(results.map((x) => ({ toolUseId: x.use.id, content: x.content, isError: x.isError })));
+        // W3-4 (D-5): only submit_* calls, all accepted -> the turn ends here; the results wait for the next GM message
+        const endOnSubmit = s.endTurnOnSubmit && results.length > 0
+          && results.every((x) => isSubmitTool(x.use.name) && !x.isError && x.res?.ok === true);
+        if (!endOnSubmit) await this.#append(resultsTurn);
         turn.toolCalls += uses.length;
 
         let stopForSubmit = null;
@@ -604,8 +628,10 @@ export class Session {
             else if (consecutiveInvalid >= s.maxInvalidSubmits) stopForSubmit ??= "invalidSubmits";
           }
         }
+        if (endOnSubmit) this.record.heldToolResults = plain(resultsTurn.content);
         await this.#persist();
         if (stopForSubmit) { reason = "cap"; cap = stopForSubmit; break; }
+        if (endOnSubmit) { reason = "submitted"; break; }
       }
     } catch (e) {
       if (e?.code === "history-edit") throw e;
@@ -634,9 +660,12 @@ export class Session {
       try { await this.#persist(); } catch { /* reported */ }
       this.emit("state", { busy: false });
     }
+    const last = said.at(-1);
+    const finalText = last && !last.more ? last.text : "";
+    const progress = said.filter((x) => x !== last || x.more).map((x) => x.text).filter((x) => x.trim());
     const summary = {
-      ok: turn.reason === "done", reason: turn.reason, cap, turn: turn.turn, requests: turn.requests, toolCalls: turn.toolCalls,
-      usage: plain(turn.usage), usd: turn.usd, text: out.text, stop: lastStop, sheet: turn.sheet,
+      ok: turn.reason === "done" || turn.reason === "submitted", reason: turn.reason, cap, turn: turn.turn, requests: turn.requests, toolCalls: turn.toolCalls,
+      usage: plain(turn.usage), usd: turn.usd, text: finalText, progress, stop: lastStop, sheet: turn.sheet,
       proposal: turn.proposalId ? plain(this.record.pendingProposal) : null,
       ...(error ? { error } : {}),
       ...(cap === "invalidSubmits" || cap === "identicalInvalid" ? { lastDraft: plain(this.record.lastFailedSubmit ?? null) } : {})
@@ -696,6 +725,7 @@ export function transcriptOf(record) {
   const flush = (i) => { while (tl.length && (tl[0].msgIndex ?? 0) <= i) { const e = tl.shift(); if (e.type !== "gm") items.push({ role: e.type, ...e }); } };
   (record?.messages ?? []).forEach((m, i) => {
     flush(i);
+    const callsTools = m.role === "assistant" && Array.isArray(m.content) && m.content.some((b) => b?.type === "tool_use");
     for (const b of Array.isArray(m.content) ? m.content : [{ type: "text", text: String(m.content ?? "") }]) {
       if (m.role === "user") {
         if (b.type === "tool_result") {
@@ -709,11 +739,17 @@ export function transcriptOf(record) {
           else items.push({ role: "gm", text: s });
         }
       } else if (m.role === "assistant") {
-        if (b.type === "text" && b.text) items.push({ role: "ai", text: String(b.text) });
+        // W3-5: text in a message that also calls tools is a progress note, not the answer
+        if (b.type === "text" && b.text) items.push({ role: callsTools ? "progress" : "ai", text: String(b.text) });
         else if (b.type === "tool_use") { const it = { role: "tool", id: b.id, name: b.name, input: plain(b.input), status: "pending" }; tools.set(b.id, it); items.push(it); }
       }
     }
   });
+  // W3-4: results held after a turn that ended on submit are not in messages yet; their tools did run
+  for (const b of Array.isArray(record?.heldToolResults) ? record.heldToolResults : []) {
+    const tItem = tools.get(b?.tool_use_id);
+    if (tItem) tItem.status = b.is_error ? "error" : "done";
+  }
   flush(Infinity);
   return items;
 }

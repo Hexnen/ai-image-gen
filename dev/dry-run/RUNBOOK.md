@@ -27,7 +27,7 @@ Paths used below:
   - Only `text` and `tool_use` blocks. No thinking blocks.
   - Tool inputs must fit the tool's `input_schema`. The driver checks the schema like the API does.
   - Parallel tool calls are several `tool_use` blocks in one answer.
-- **Stopping.** End the turn (text only) when the system prompt says so, for example after a successful `submit_proposal`, or when you need the GM.
+- **Stopping.** End the turn (text only) when the system prompt says so, or when you need the GM. After a successful `submit_proposal` (alone in its answer) the harness ends the turn itself (W3-4, setting `build.endTurnOnSubmit`, default on): no request comes, and the submit's tool_result arrives at the start of the next GM message.
 - **No secrets.** Never type a real API key anywhere. In dry mode the key is an in-memory placeholder.
 - **No downloads. No commits.** Transcripts stay in `DRY`.
 
@@ -195,7 +195,7 @@ Check what was written. Read the sheet the way the model will see it:
 ## 7. Results, accounting, transcripts
 
 In the page:
-- `window.__dry.turns.at(-1)` is the TurnSummary: `ok`, `reason`, `cap`, `requests`, `toolCalls`, `usage`, `usd`, `text`, `proposal`, `error`.
+- `window.__dry.turns.at(-1)` is the TurnSummary: `ok`, `reason` (`submitted` = ended by an accepted submit, W3-4), `cap`, `requests`, `toolCalls`, `usage`, `usd`, `text` (last assistant message only), `progress` (texts written before tool calls, W3-5), `proposal`, `error`.
 - `s.transcript()` gives the drawer items; `s.pendingProposal` gives the proposal.
 
 Cost and limits run through the real wiring:

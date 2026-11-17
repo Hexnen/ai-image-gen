@@ -182,7 +182,7 @@ const allText = (m) => (Array.isArray(m.content) ? m.content.filter((b) => b.typ
 
 // =========================================================================================== tests
 
-await test("happy path: search -> get -> submit ok -> end_turn; tool results in history; proposal pending; costs booked + logged", async () => {
+await test("happy path (endTurnOnSubmit off): search -> get -> submit ok -> end_turn; tool results in history; proposal pending; costs booked + logged", async () => {
   const sheet = makeSheet();
   const fetchImpl = fakeModel([
     reply({ text: "Searching.", tools: [{ id: "tu1", name: "search_catalog", input: { query: "web" } }] }),
@@ -191,7 +191,7 @@ await test("happy path: search -> get -> submit ok -> end_turn; tool results in 
     reply({ text: "Done: Spider-Man is ready." })
   ]);
   const pack = makePack({ sheet });
-  const { deps, logs, booked, reservations } = makeDeps({ pack, fetchImpl });
+  const { deps, logs, booked, reservations } = makeDeps({ pack, fetchImpl, settings: { endTurnOnSubmit: false } });
   const h = createHarness(deps);
   const s = await h.openSession(ACTOR);
   const events = [];
@@ -202,7 +202,8 @@ await test("happy path: search -> get -> submit ok -> end_turn; tool results in 
   assert.equal(r.requests, 4);
   assert.equal(r.toolCalls, 3);
   assert.equal(r.proposal.proposalId, "p-1");
-  assert.match(r.text, /Spider-Man is ready/);
+  assert.equal(r.text, "Done: Spider-Man is ready.", "W3-5: text = the last assistant message only");
+  assert.deepEqual(r.progress, ["Searching."], "W3-5: text before a tool call is progress");
   const m = s.messages;
   assert.deepEqual(m.map((x) => x.role), ["user", "assistant", "user", "assistant", "user", "assistant", "user", "assistant"]);
   assert.match(m[0].content[0].text, /^<sheet doc="Actor.aaa111"/, "sheet block is the FIRST block of the GM message");
@@ -268,7 +269,8 @@ await test("self-repair: invalid submit -> errors back to the model -> valid sub
   const failed = [];
   s.on("submit-failed", (d) => failed.push(d));
   const r = await s.send("build");
-  assert.equal(r.reason, "done");
+  assert.equal(r.reason, "submitted", "a failed submit continues the turn; the accepted one ends it (W3-4)");
+  assert.equal(r.requests, 2);
   assert.equal(r.proposal.proposalId, "p2");
   assert.equal(failed.length, 1);
   assert.match(s.messages[2].content[0].content, /attr\.unspent/);
@@ -735,6 +737,8 @@ await test("static wiring: module.mjs loads builder-api dynamically for the GM; 
   assert.ok([...reg.values()].every((o) => o.restricted === true));
   const r = readBuildSettings(game);
   assert.equal(r.maxRequests, 12); assert.equal(r.wallClockMs, 300_000); assert.equal(r.maxCostPerMessage, 0.5); assert.equal(r.cacheTtl, "1h");
+  assert.equal(reg.get("build.endTurnOnSubmit").scope, "world"); assert.equal(reg.get("build.endTurnOnSubmit").type.initial, true);
+  assert.equal(r.endTurnOnSubmit, true, "W3-4 default on");
   delete globalThis.foundry;
 });
 
@@ -772,8 +776,9 @@ await test("W2-7 proposal marker (P1-H): pending on the next GM message, applied
   await s.send("what now?");                                     // p1 still pending -> marker pending
   let gm = s.messages.filter((m) => m.role === "user" && m.content.some((b) => b.type === "text" && b.text === "what now?"))[0];
   assert.deepEqual(markersOf(gm), ['<proposal id="p1" status="pending"/>']);
-  const texts = gm.content.map((b) => b.text);
-  assert.match(texts[0], /^<sheet/, "sheet first");
+  assert.deepEqual([gm.content[0].type, gm.content[0].tool_use_id], ["tool_result", "sub0"], "W3-4: held submit result leads the next GM message");
+  const texts = gm.content.filter((b) => b.type === "text").map((b) => b.text);
+  assert.match(texts[0], /^<sheet/, "sheet first after the results");
   assert.equal(texts.at(-1), "what now?", "GM text last");
   assert.equal(texts.at(-2), '<proposal id="p1" status="pending"/>', "marker right before the GM text");
   await s.send("again");                                         // unchanged -> no marker
@@ -799,7 +804,7 @@ await test("W2-7 proposal marker (P1-H): pending on the next GM message, applied
 
 await test("W2-7 proposal marker: discarded; a newer submit supersedes an older pending one; GM text that looks like a marker stays GM text", async () => {
   const fetchImpl = fakeModel((i) => (i < 4 ? submitThenText(i) : reply({ text: `t${i}` })));
-  const { deps } = makeDeps({ pack: proposalPack(), fetchImpl });
+  const { deps } = makeDeps({ pack: proposalPack(), fetchImpl, settings: { endTurnOnSubmit: false } });
   const s = await createHarness(deps).openSession(ACTOR);
   await s.send("one");                                           // p1
   await s.send("two");                                           // marker p1 pending, then p2 submitted
@@ -837,6 +842,151 @@ await test("W2-7 prefix stability with proposal markers: tools + system bytes id
     const prev = fetchImpl.calls[i - 1].body.messages, cur = fetchImpl.calls[i].body.messages;
     for (let j = 0; j < prev.length; j++) assert.equal(JSON.stringify(cur[j]), JSON.stringify(prev[j]), `request ${i} message ${j} unchanged`);
   }
+});
+
+// ------------------------------------------------------------------------------------------- W3-4 / W3-5
+
+/** roles strictly alternate user/assistant, starting with user; every tool_use is answered at the start of the next message */
+function assertValidHistory(messages, { allowOpenTail = false } = {}) {
+  messages.forEach((m, i) => assert.equal(m.role, i % 2 === 0 ? "user" : "assistant", `message ${i} role (no two ${m.role} in a row)`));
+  messages.forEach((m, i) => {
+    if (m.role !== "assistant") return;
+    const ids = m.content.filter((b) => b.type === "tool_use").map((b) => b.id);
+    if (!ids.length) return;
+    const next = messages[i + 1];
+    if (!next) { assert.ok(allowOpenTail, `tool_use in the last message ${i} not answered`); return; }
+    const lead = next.content.slice(0, ids.length);
+    assert.deepEqual(lead.map((b) => [b.type, b.tool_use_id]), ids.map((id) => ["tool_result", id]), `results of message ${i} lead message ${i + 1}`);
+  });
+}
+
+await test("W3-4 end on submit (default): no request after an accepted submit; results held, then lead the next GM message; history valid and append-only; survives a reload", async () => {
+  const idb = fakeIndexedDB();
+  const store = createSessionStore({ indexedDB: idb });
+  const fetchImpl = fakeModel([
+    reply({ text: "Searching.", tools: [{ id: "w1", name: "search_catalog", input: { query: "web" } }] }),
+    reply({ text: "Here is the build.", tools: [{ id: "w2", name: "submit_proposal", input: { ops: [{ opId: "a" }] } }] }),
+    reply({ text: "Answer to the second message." })
+  ]);
+  const { deps } = makeDeps({ pack: proposalPack(), fetchImpl, store });
+  const s = await createHarness(deps).openSession(ACTOR);
+  const ends = [], aMsgs = [];
+  s.on("turn-end", (x) => ends.push(x));
+  s.on("assistant-message", (x) => aMsgs.push(x));
+  const r = await s.send("Build Spider-Man");
+  assert.equal(r.ok, true); assert.equal(r.reason, "submitted"); assert.equal(r.stop, "tool_use");
+  assert.equal(r.requests, 2, "no third request"); assert.equal(fetchImpl.calls.length, 2);
+  assert.equal(r.toolCalls, 2);
+  assert.equal(r.text, "", "W3-4: the turn's text is empty, the drawer shows the rationale");
+  assert.deepEqual(r.progress, ["Searching.", "Here is the build."], "W3-5");
+  assert.equal(r.proposal.proposalId, "p1");
+  assert.equal(ends[0].reason, "submitted");
+  assert.deepEqual(aMsgs.map((x) => x.progress), [true, true]);
+  // history ends with the assistant tool_use; its result is held outside messages
+  assert.deepEqual(s.messages.map((m) => m.role), ["user", "assistant", "user", "assistant"]);
+  assertValidHistory(s.messages, { allowOpenTail: true });
+  assert.deepEqual(s.record.heldToolResults.map((b) => [b.type, b.tool_use_id, !!b.is_error]), [["tool_result", "w2", false]]);
+  assert.match(s.record.heldToolResults[0].content, /"ok":true/);
+  const tr = s.transcript();
+  assert.equal(tr.find((x) => x.role === "tool" && x.id === "w2").status, "done", "held result marks the chip done");
+  assert.deepEqual(tr.filter((x) => x.role === "progress").map((x) => x.text), ["Searching.", "Here is the build."]);
+  assert.ok(!tr.some((x) => x.role === "ai"));
+  // reload (new store + harness on the same DB): the held results survive
+  const s2 = await createHarness({ ...deps, store: createSessionStore({ indexedDB: idb }) }).openSession(ACTOR);
+  assert.equal(s2.record.heldToolResults.length, 1);
+  const r2 = await s2.send("Make him faster");
+  assert.equal(r2.reason, "done"); assert.equal(r2.text, "Answer to the second message."); assert.deepEqual(r2.progress, []);
+  const sent = fetchImpl.calls[2].body.messages;
+  assertValidHistory(sent);
+  const gm = sent.at(-1);
+  assert.equal(gm.role, "user");
+  assert.deepEqual(gm.content.map((b) => b.type === "tool_result" ? `result:${b.tool_use_id}` : /^<sheet/.test(b.text) ? "sheet" : /^<proposal/.test(b.text) ? b.text : b.text),
+    ["result:w2", "sheet", '<proposal id="p1" status="pending"/>', "Make him faster"], "held result, sheet, marker, GM text: one user message");
+  assert.match(gm.content[0].content, /"ok":true/, "the REAL submit result, not a 'Not run' error");
+  assert.equal(gm.content[0].is_error, undefined);
+  assert.equal(s2.record.heldToolResults, null, "cleared once sent");
+  assertValidHistory(s2.messages);
+  // append-only + cache-stable: every request's messages are a strict prefix of the next
+  for (let i = 1; i < fetchImpl.calls.length; i++) {
+    const prev = fetchImpl.calls[i - 1].body.messages, cur = fetchImpl.calls[i].body.messages;
+    for (let j = 0; j < prev.length; j++) assert.equal(JSON.stringify(cur[j]), JSON.stringify(prev[j]), `request ${i} message ${j} unchanged`);
+  }
+  const bytes = fetchImpl.calls.map((c) => prefixBytes({ body: c.body }));
+  assert.ok(bytes.every((b) => b === bytes[0]), "tools + system bytes identical");
+  assert.equal(s2.transcript().find((x) => x.role === "tool" && x.id === "w2").status, "done");
+});
+
+await test("W3-4 only a batch of accepted submits ends the turn: submit + other tool, failed submit, mixed submits continue; setting off continues", async () => {
+  const run = async (first, settings = {}, pack = proposalPack()) => {
+    const fetchImpl = fakeModel([first, reply({ text: "after" })]);
+    const { deps } = makeDeps({ pack, fetchImpl, settings });
+    const s = await createHarness(deps).openSession(ACTOR);
+    const r = await s.send("go");
+    return { r, s, fetchImpl };
+  };
+  let x = await run(reply({ tools: [{ id: "m1", name: "submit_proposal", input: { ops: [] } }, { id: "m2", name: "search_catalog", input: { query: "q" } }] }));
+  assert.equal(x.r.reason, "done"); assert.equal(x.r.requests, 2, "submit with another tool: the model sees the other result");
+  assert.equal(x.s.record.heldToolResults, null);
+  assertValidHistory(x.s.messages);
+  let n = 0;
+  const failing = makePack({ sheet: makeSheet(), runTool: async () => (++n === 1 ? { ok: false, errors: [{ code: "e", message: "bad" }] } : { ok: true, proposalId: "q" }) });
+  x = await run(reply({ tools: [{ id: "f1", name: "submit_proposal", input: { ops: [] } }] }), {}, failing);
+  assert.equal(x.r.reason, "done"); assert.equal(x.r.requests, 2, "a failed submit goes back to the model");
+  n = 0;
+  x = await run(reply({ tools: [{ id: "g1", name: "submit_proposal", input: { ops: [] } }, { id: "g2", name: "submit_proposal", input: { ops: [] } }] }), {}, failing);
+  assert.equal(x.r.reason, "done"); assert.equal(x.r.requests, 2, "one of two submits failed: continue");
+  x = await run(reply({ tools: [{ id: "h1", name: "submit_proposal", input: { ops: [] } }, { id: "h2", name: "submit_proposal", input: { ops: [] } }] }));
+  assert.equal(x.r.reason, "submitted"); assert.equal(x.r.requests, 1, "two accepted submits: end");
+  assert.deepEqual(x.s.record.heldToolResults.map((b) => b.tool_use_id), ["h1", "h2"]);
+  assert.equal(x.r.proposal.proposalId, "p2", "the later submit is the pending proposal");
+  x = await run(reply({ tools: [{ id: "o1", name: "submit_proposal", input: { ops: [] } }] }), { endTurnOnSubmit: false });
+  assert.equal(x.r.reason, "done"); assert.equal(x.r.requests, 2, "setting off: the old extra request");
+  assert.equal(x.r.text, "after");
+  assertValidHistory(x.s.messages);
+});
+
+await test("W3-4 held results: a new conversation drops them; Stop / cap on the next message keeps the history valid", async () => {
+  const fetchImpl = fakeModel((i) => (i === 0 ? reply({ tools: [{ id: "n1", name: "submit_proposal", input: { ops: [] } }] }) : { hang: true }));
+  const { deps } = makeDeps({ pack: proposalPack(), fetchImpl, settings: { wallClockMs: 100 } });
+  const s = await createHarness(deps).openSession(ACTOR);
+  assert.equal((await s.send("build")).reason, "submitted");
+  const r = await s.send("next");                                  // request hangs -> wall cap; the GM message was appended with the result
+  assert.equal(r.cap, "wall");
+  assert.equal(s.record.heldToolResults, null);
+  assert.equal(s.messages.at(-1).content[0].tool_use_id, "n1");
+  assertValidHistory(s.messages);
+  // a fresh submit, then a new conversation: nothing carried over
+  const f2 = fakeModel([reply({ tools: [{ id: "n2", name: "submit_proposal", input: { ops: [] } }] }), reply({ text: "fresh" })]);
+  const d2 = makeDeps({ pack: proposalPack(), fetchImpl: f2 });
+  const s2 = await createHarness(d2.deps).openSession(ACTOR2);
+  await s2.send("build");
+  assert.equal(s2.record.heldToolResults.length, 1);
+  await s2.newConversation();
+  assert.equal(s2.record.heldToolResults, null);
+  await s2.send("hello");
+  assert.deepEqual(f2.calls[1].body.messages.map((m) => m.role), ["user"]);
+  assert.ok(!f2.calls[1].body.messages[0].content.some((b) => b.type === "tool_result"));
+});
+
+await test("W3-5 text = last assistant message only; progress = texts before tool calls; cap after tools -> text empty", async () => {
+  const fetchImpl = fakeModel([
+    reply({ text: "Let me look.", tools: [{ id: "x1", name: "search_catalog", input: { query: "a" } }] }),
+    reply({ text: "One more.", tools: [{ id: "x2", name: "search_catalog", input: { query: "b" } }] }),
+    reply({ text: "Final answer." })
+  ]);
+  const { deps } = makeDeps({ pack: makePack(), fetchImpl });
+  const s = await createHarness(deps).openSession(ACTOR);
+  const r = await s.send("look");
+  assert.equal(r.text, "Final answer.");
+  assert.deepEqual(r.progress, ["Let me look.", "One more."]);
+  assert.deepEqual(s.transcript().filter((x) => x.role === "ai" || x.role === "progress").map((x) => [x.role, x.text]),
+    [["progress", "Let me look."], ["progress", "One more."], ["ai", "Final answer."]]);
+  const f2 = fakeModel(() => reply({ text: "Still looking.", tools: [{ id: `y${msgSeq + 1}`, name: "search_catalog", input: { query: "q" } }] }));
+  const d2 = makeDeps({ pack: makePack(), fetchImpl: f2, settings: { maxRequests: 2 } });
+  const r2 = await (await createHarness(d2.deps).openSession(ACTOR2)).send("loop");
+  assert.equal(r2.cap, "requests");
+  assert.equal(r2.text, "");
+  assert.deepEqual(r2.progress, ["Still looking.", "Still looking."]);
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);

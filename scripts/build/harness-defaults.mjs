@@ -8,3 +8,5 @@ export const DEFAULT_CAPS = Object.freeze({
   maxCostPerMessage: 0.5,     // USD; 0 = no cap
   wallClockMs: 5 * 60_000
 });
+// W3-4 (D-5, provisional yes): a successful submit_* (alone in its tool batch) ends the GM turn without another request.
+export const DEFAULT_END_TURN_ON_SUBMIT = true;

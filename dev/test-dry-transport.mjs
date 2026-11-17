@@ -207,7 +207,8 @@ await test("end to end: real harness + real transport + stub pack, stand-in answ
   assert.equal(sum.reason, "done");
   assert.equal(sum.requests, 2);
   assert.equal(sum.toolCalls, 1);
-  assert.match(sum.text, /Let me look\.[\s\S]*done\./);
+  assert.equal(sum.text, "Nothing found in the stub; done.", "W3-5: text of the last assistant message only");
+  assert.deepEqual(sum.progress, ["Let me look."], "W3-5: text before the tool call");
   assert.ok(sum.usd > 0 && sum.usage.cacheRead > 0, JSON.stringify(sum.usage));
   assert.equal(booked.length, 2);
   assert.ok(logs.length === 2 && logs.every((l) => l.provider === DRY_PROVIDER && l.kind === "build" && l.status === "ok"));

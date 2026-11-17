@@ -5,7 +5,7 @@
 import { MODULE_ID } from "../constants.mjs";
 import { EFFORTS } from "../enhance/anthropic.mjs";
 import { DEFAULT_MODEL, DEFAULT_EFFORT, DEFAULT_PREFIX_TTL } from "../anthropic/request.mjs";
-import { DEFAULT_CAPS } from "./harness-defaults.mjs";
+import { DEFAULT_CAPS, DEFAULT_END_TURN_ON_SUBMIT } from "./harness-defaults.mjs";
 import { injectStrings } from "./harness-lang.mjs";
 
 export const BUILD_SETTINGS = Object.freeze({
@@ -17,7 +17,8 @@ export const BUILD_SETTINGS = Object.freeze({
   maxToolCalls: "build.maxToolCallsPerMessage",
   maxInvalidSubmits: "build.maxInvalidSubmits",
   maxMinutes: "build.maxMinutesPerMessage",
-  prewarm: "build.prewarm"
+  prewarm: "build.prewarm",
+  endTurnOnSubmit: "build.endTurnOnSubmit"
 });
 
 export function registerBuildSettings(game = globalThis.game) {
@@ -60,6 +61,10 @@ export function registerBuildSettings(game = globalThis.game) {
     name: "MAIG.Settings.Build.Prewarm.Name", hint: "MAIG.Settings.Build.Prewarm.Hint", scope: "client",
     type: new BooleanField({ initial: true })
   });
+  reg(BUILD_SETTINGS.endTurnOnSubmit, {
+    name: "MAIG.Settings.Build.EndTurnOnSubmit.Name", hint: "MAIG.Settings.Build.EndTurnOnSubmit.Hint", scope: "world",
+    type: new BooleanField({ initial: DEFAULT_END_TURN_ON_SUBMIT })
+  });
 }
 
 /** Current values for the harness (createHarness deps.settings). Missing / unregistered settings fall back to defaults. */
@@ -74,6 +79,7 @@ export function readBuildSettings(game = globalThis.game) {
     maxToolCalls: get(BUILD_SETTINGS.maxToolCalls, DEFAULT_CAPS.maxToolCalls),
     maxInvalidSubmits: get(BUILD_SETTINGS.maxInvalidSubmits, DEFAULT_CAPS.maxInvalidSubmits),
     wallClockMs: Number(get(BUILD_SETTINGS.maxMinutes, DEFAULT_CAPS.wallClockMs / 60_000)) * 60_000,
-    prewarm: get(BUILD_SETTINGS.prewarm, true)
+    prewarm: get(BUILD_SETTINGS.prewarm, true),
+    endTurnOnSubmit: get(BUILD_SETTINGS.endTurnOnSubmit, DEFAULT_END_TURN_ON_SUBMIT)
   };
 }
