@@ -30,7 +30,9 @@ const shortBudget = (b) => {
  * -> { ok, runId, message, ops: [{ opId, action, type, name, itemId, outcome, because?, cascade? }],
  *      budget: { before: { points, spent, slots, rankPowers, cap }, after: {...} } | { kind, note } | null,
  *      warnings: [{ code, message, ... }], errors: [...], created, updated, deleted, idMap,
- *      needsConfirm?, confirm?: [{ opId, action, name }] (what confirmed:true would allow), stale?, unsaved?, busy?, rolledBack? }
+ *      needsConfirm?, confirm?: [{ opId, action, name }] (what confirmed:true would allow), stale?, unsaved?, busy?, rolledBack?,
+ *      vitals?: { health?, resolve?: { from, to } } (a build set current Health / Resolve to max, W3-3) }
+ *   warnings: the plan's and the validator's (on success too, W3-2), each once
  *   outcome: "written" | "unchanged" (noop) | "dropped" (deselected / partial selection, `because`) | "not written" (ok false)
  */
 export function conciseApplyResult(r) {
@@ -55,7 +57,7 @@ export function conciseApplyResult(r) {
     out.needsConfirm = true;
     out.confirm = [...(p?.deletes ?? []).map((d) => ({ opId: d.opId, action: "remove", name: d.name })), ...(p?.swaps ?? []).map((s) => ({ opId: s.opId, action: "swap", name: s.name }))];
   }
-  for (const k of ["stale", "unsaved", "busy", "rolledBack"]) if (r[k] !== undefined) out[k] = r[k];
+  for (const k of ["stale", "unsaved", "busy", "rolledBack", "vitals"]) if (r[k] !== undefined) out[k] = r[k];
   return out;
 }
 

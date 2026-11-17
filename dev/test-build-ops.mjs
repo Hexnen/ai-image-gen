@@ -88,17 +88,22 @@ class FakeActor {
   async update(data) { this.calls.push(["update", Object.keys(data)]); this._maybeFail("update"); mergeInto(this._source, data); return this; }
   async createEmbeddedDocuments(type, data, { keepId = false } = {}) {
     this.calls.push(["create", data.length, keepId]); this._maybeFail("create");
+    // serverOrder (W3-1, F0): like the v14 server, documents WITHOUT keepId are inserted and returned in completion order (here
+    // reversed); WITH keepId the server keeps the given order, but the returned array is still shuffled (rotated) so a caller
+    // that maps it by index breaks. ignoreKeepId: the server assigns its own ids anyway.
+    let order = data.map((_, i) => i);
+    if (this.serverOrder && !keepId) order = order.reverse();
     const out = [];
-    for (const d of data) {
+    for (const d of order.map((i) => data[i])) {
       const s = clone(d);
-      if (keepId && s._id) { if (this.items.has(s._id)) throw new Error(`id ${s._id} exists`); }
+      if (keepId && s._id && !this.ignoreKeepId) { if (this.items.has(s._id)) throw new Error(`id ${s._id} exists`); }
       else s._id = idSeq();
       s._stats = { modifiedTime: ++clock };
       s.effects ??= []; s.flags ??= {};
       const it = new FakeItem(s, this);
       this.items.set(s._id, it); out.push(it);
     }
-    return out;
+    return this.serverOrder && out.length > 1 ? [...out.slice(1), out[0]] : out;
   }
   async updateEmbeddedDocuments(type, rows) {
     this.calls.push(["updateItems", rows.length]); this._maybeFail("updateItems");
@@ -935,6 +940,146 @@ await test("W2-7: pack.ranks() = the vendored rank table with book names (same n
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../scripts/build/builder-api.mjs", import.meta.url), "utf8");
   assert.match(src, /ranks: \(\) => \{ try \{ const p = api\.build\?\.registry\?\.getPack\?\.\(\); return typeof p\?\.ranks === "function" \? p\.ranks\(\) : \[\]; \}/);
+});
+
+/* ================================================================ wave 3, group A (W3-1, W3-2, W3-3) */
+const { actor: mkBlankFx } = await import("./fixtures/invincible-sheets.mjs");
+const { serializeSheet } = await import("../scripts/systems/invincible/snapshot.mjs");
+const { talentRolesOf } = await import("../scripts/systems/invincible/reader.mjs");
+let blankSeq = 0;
+const blankActor = ({ health = 2, resolve = 2 } = {}) => {
+  const a = new FakeActor(mkBlankFx({ id: `blankW3a${String(++blankSeq).padStart(8, "0")}`, name: "Blank", attrs: { fighting: 6, agility: 5, strength: 3, reason: 4, intuition: 5, presence: 3 }, items: [] }));
+  a._source.system.derived.health.value = health; a._source.system.derived.resolve.value = resolve;
+  return a;
+};
+const BUILD_OPS = () => [
+  { opId: "s1", kind: "addItem", ref: refOf("powerSource", "Strange Meteor") },
+  { opId: "p1", kind: "addItem", ref: refOf("power", "Spark Bolt"), sourceOpId: "s1" },
+  { opId: "p2", kind: "addItem", ref: refOf("power", "Glide Wings"), sourceOpId: "s1" },
+  { opId: "b1", kind: "addItem", ref: refOf("boost", "Silent Flight", "Glide Wings"), powerOpId: "p2" },
+  { opId: "l1", kind: "addItem", ref: refOf("limit", "Needs Charging", "Spark Bolt"), powerOpId: "p1" },
+  { opId: "t1", kind: "addItem", ref: refOf("talent", "Steady Hands") },
+  { opId: "t2", kind: "addItem", ref: refOf("talent", "Quick Wits") },
+  { opId: "t3", kind: "addItem", ref: refOf("talent", "Tough Skin") },
+  { opId: "d1", kind: "addItem", ref: refOf("drawback", "Lean Times"), note: "rent" },
+  { opId: "d2", kind: "addItem", ref: refOf("drawback", "Haunted") },
+  { opId: "x1", kind: "updateActor", set: { name: "Volt Moth", "system.occupation": "Courier" } }
+];
+const EXPECT_NAME = { s1: "Strange Meteor", p1: "Spark Bolt", p2: "Glide Wings", b1: "Silent Flight", l1: "Needs Charging", t1: "Steady Hands", t2: "Quick Wits", t3: "Tough Skin", d1: "Lean Times (rent)", d2: "Haunted" };
+
+await test("W3-1 (F0): server returns created items shuffled -> idMap, journal, links, talent order and roles still right", async () => {
+  // the old index mapping fails on this fake: prove the fake really shuffles
+  const probe = blankActor(); probe.serverOrder = true;
+  const ret = await probe.createEmbeddedDocuments("Item", [{ name: "A", type: "talent", _id: "aaaaaaaaaaaaaaaa" }, { name: "B", type: "talent", _id: "bbbbbbbbbbbbbbbb" }], { keepId: true });
+  assert.deepEqual(ret.map((d) => d.name), ["B", "A"], "returned array shuffled");
+  assert.deepEqual([...probe.items.values()].map((d) => d.name), ["A", "B"], "keepId keeps the insertion order");
+  const p0 = blankActor(); p0.serverOrder = true;
+  await p0.createEmbeddedDocuments("Item", [{ name: "A", type: "talent" }, { name: "B", type: "talent" }]);
+  assert.deepEqual([...p0.items.values()].map((d) => d.name), ["B", "A"], "without keepId: completion order");
+
+  const a = blankActor(); a.serverOrder = true;
+  const r = await W.apply(a, { mode: "ops", ops: BUILD_OPS() });
+  assert.equal(r.ok, true, r.message);
+  for (const [opId, name] of Object.entries(EXPECT_NAME)) assert.equal(a.items.get(r.idMap[opId])?.name, name, `idMap.${opId}`);
+  assert.ok(a.calls.filter((c) => c[0] === "create").every((c) => c[2] === true), "every create with keepId");
+  assert.deepEqual(r.created, ["s1", "p1", "p2", "b1", "l1", "t1", "t2", "t3", "d1", "d2"].map((o) => r.idMap[o]), "created in op order");
+  // links
+  const it = (o) => a.items.get(r.idMap[o]);
+  assert.equal(it("p1").system.powerSource, r.idMap.s1); assert.equal(it("p2").system.powerSource, r.idMap.s1);
+  assert.equal(it("b1").system.power, r.idMap.p2, "boost on its own power"); assert.equal(it("l1").system.power, r.idMap.p1, "limit on its own power");
+  // talent collection order = op order, so roles hero / occupation / extra
+  const { roles, items } = talentRolesOf(a);
+  assert.deepEqual(items.map((t) => t.name), ["Steady Hands", "Quick Wits", "Tough Skin"]);
+  assert.deepEqual(["t1", "t2", "t3"].map((o) => roles.get(r.idMap[o])), ["hero", "occupation", "extra"]);
+  // the sheet block: src= and pow= point to the right items, role= on the talent lines
+  const text = serializeSheet(readActor(a)).text ?? String(serializeSheet(readActor(a)));
+  const line = (o) => text.split("\n").find((l) => l.includes(` ${r.idMap[o]} `)) ?? "";
+  assert.match(line("b1"), new RegExp(`pow=${r.idMap.p2}\\b`)); assert.match(line("l1"), new RegExp(`pow=${r.idMap.p1}\\b`));
+  assert.match(line("p2"), new RegExp(`src=${r.idMap.s1}\\b`));
+  assert.match(line("t1"), /role=hero/); assert.match(line("t2"), /role=occupation/); assert.match(line("t3"), /role=extra/);
+  // undo journal: one add entry per op with ITS item
+  const j = getPath(a._source, JOURNAL_PATH).runs[0];
+  for (const e of j.ops.filter((x) => x.kind === "add")) { assert.equal(e.itemId, r.idMap[e.opId], `journal ${e.opId}`); assert.equal(e.name, EXPECT_NAME[e.opId]); }
+  // per-item undo of p2 takes its boost (dependsOn) and nothing else
+  const u = await W.undo(a, r.runId, { opIds: ["p2"] });
+  assert.equal(u.ok, true, u.message);
+  assert.ok(!a.items.has(r.idMap.p2) && !a.items.has(r.idMap.b1)); assert.ok(a.items.has(r.idMap.p1) && a.items.has(r.idMap.l1));
+});
+
+await test("W3-1: same through the writer group's replace path (talents in proposal order, concise ops itemIds = actor items)", async () => {
+  const { writerGroup } = await import("../scripts/systems/invincible/writer-group.mjs");
+  let n = 0;
+  const g = writerGroup(() => ({ validate: null }), {
+    getCatalog: async () => cat, fetchData, toOps, isGM: () => true, userId: () => "gm1", userName: () => "Gamemaster", liveForm: () => null,
+    randomID: () => `rw3${String(++n).padStart(13, "0")}`, now: () => clock, sleep: async () => {}, lockSettle: 0, log: { warn() {}, error() {} }
+  });
+  const a = blankActor(); a.serverOrder = true;
+  const r = await g.apply(a, { mode: "ops", ops: BUILD_OPS() });
+  assert.equal(r.ok, true, r.message);
+  for (const o of r.ops.filter((x) => x.action === "add")) { assert.equal(a.items.get(o.itemId)?.name, EXPECT_NAME[o.opId], o.opId); assert.equal(o.itemId, r.idMap[o.opId]); }
+  assert.equal(r.ops.find((o) => o.opId === "x1").name, "Volt Moth", "W3-2: the actor op carries the new name");
+});
+
+await test("W3-1: server ignoring keepId -> refused and rolled back, nothing left behind", async () => {
+  const a = blankActor(); a.ignoreKeepId = true;
+  const r = await W.apply(a, { mode: "ops", ops: BUILD_OPS().slice(0, 3) });
+  assert.equal(r.ok, false); assert.equal(r.rolledBack, true, r.message); assert.equal(r.errors[0].code, "write.failed");
+  assert.equal(a.items.size, 0, "the foreign-id item is removed by the rollback");
+});
+
+await test("W3-3 (D-1): a build sets current Health / Resolve to max (journal, message); undo restores; in-play and edits do not", async () => {
+  const a = blankActor();
+  const p = await W.plan(a, { mode: "ops", ops: BUILD_OPS() });
+  assert.equal(p.build, true); assert.ok(p.info.some((i) => i.code === "vitals.build"));
+  const r = await W.apply(a, { mode: "ops", ops: BUILD_OPS() });
+  assert.equal(r.ok, true, r.message);
+  const hMax = a.system.derived.health.max, rMax = a.system.derived.resolve.max;
+  assert.ok(hMax > 2 && rMax > 2);
+  assert.equal(a._source.system.derived.health.value, hMax); assert.equal(a._source.system.derived.resolve.value, rMax);
+  assert.deepEqual(r.vitals, { health: { from: 2, to: hMax }, resolve: { from: 2, to: rMax } });
+  assert.match(r.message, new RegExp(`New build: current Health 2 -> ${hMax}, Resolve 2 -> ${rMax} \\(max\\)`));
+  const j = getPath(a._source, JOURNAL_PATH).runs[0];
+  assert.ok(j.ops.some((e) => e.opId === "_vitals" && e.kind === "actor"));
+  const u = await W.undo(a, r.runId);
+  assert.equal(u.ok, true, u.message);
+  assert.equal(a._source.system.derived.health.value, 2); assert.equal(a._source.system.derived.resolve.value, 2); assert.equal(a.items.size, 0);
+  // in-play profile: no build
+  const b = blankActor();
+  const rb = await W.apply(b, { mode: "ops", ops: BUILD_OPS() }, { profile: "in-play" });
+  assert.equal(rb.ok, true); assert.equal(b._source.system.derived.health.value, 2); assert.equal(rb.vitals, undefined);
+  // an edit of an existing hero (creation items survive): no build, O25
+  const h = hero(); h._source.system.derived.health.value = 1;
+  const rh = await W.apply(h, { ops: [{ opId: "t", kind: "addItem", ref: refOf("talent", "Steady Hands") }] });
+  assert.equal(rh.ok, true); assert.equal(h._source.system.derived.health.value, 1); assert.equal(rh.vitals, undefined);
+  // emptied: every creation item removed and new ones added in the same run = a build
+  const e = hero(); e._source.system.derived.health.value = 1;
+  const ops = [...e.items.values()].filter((i) => !["gear", "vehicleWeapon"].includes(i.type)).map((i, k) => ({ opId: `r${k}`, kind: "removeItem", itemId: i.id, cascade: true }));
+  const re = await W.apply(e, { ops: [...ops, ...BUILD_OPS().slice(0, 3)] }, { confirmed: true });
+  assert.equal(re.ok, true, re.message); assert.equal(e._source.system.derived.health.value, e.system.derived.health.max);
+  // an explicit current Health written by the GM's request wins over the build rule
+  const c = blankActor();
+  const rc = await W.apply(c, { ops: [...BUILD_OPS().slice(0, 3), { opId: "v", kind: "updateActor", set: { health: 3 } }] }, { allowVitals: true });
+  assert.equal(rc.ok, true, rc.message); assert.equal(c._source.system.derived.health.value, 3); assert.equal(c._source.system.derived.resolve.value, c.system.derived.resolve.max);
+});
+
+await test("W3-2: the actor op names the new name; validator warnings reach a successful (concise) result once each", async () => {
+  const p = await W.plan(hero(), { ops: [{ opId: "x", kind: "updateActor", set: { name: "New Name", "system.resources": 4 } }] });
+  assert.equal(p.ops[0].name, "New Name");
+  const p2 = await W.plan(hero(), { ops: [{ opId: "x", kind: "updateActor", set: { "system.resources": 4 } }] });
+  assert.equal(p2.ops[0].name, "Amber Kestrel");
+  const { writerGroup } = await import("../scripts/systems/invincible/writer-group.mjs");
+  const vw = [{ code: "rank.defaulted", message: "No rank." }, { code: "npc.name.blank", message: "no NPC relationship", opId: "x", gm: "gm only" }, { code: "rank.defaulted", message: "No rank." }];
+  let n = 0;
+  const g = writerGroup(() => ({ validate: async () => ({ ok: true, errors: [], warnings: vw }) }), {
+    getCatalog: async () => cat, fetchData, toOps, isGM: () => true, userId: () => "gm1", userName: () => "Gamemaster", liveForm: () => null,
+    randomID: () => `rw2${String(++n).padStart(13, "0")}`, now: () => clock, sleep: async () => {}, lockSettle: 0, log: { warn() {}, error() {} }
+  });
+  const a = hero();
+  const r = await g.apply(a, { ops: [{ opId: "x", kind: "updateActor", set: { name: "New Name" } }] });
+  assert.equal(r.ok, true, r.message);
+  assert.equal(r.warnings.filter((w) => w.code === "rank.defaulted").length, 1);
+  assert.deepEqual(r.warnings.find((w) => w.code === "npc.name.blank"), { code: "npc.name.blank", message: "no NPC relationship", opId: "x" }, "gm field stays out of the concise result");
+  assert.equal(r.ops[0].name, "New Name");
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", some FAILED" : ""}`);

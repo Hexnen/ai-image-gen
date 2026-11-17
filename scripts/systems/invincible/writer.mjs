@@ -18,6 +18,7 @@
 //     deletes:[{ opId, id, type, name, cascadeOf? }], swaps:[{ opId, id, name, from, to }], keeps:[{ id, type, name }],
 //     overwrites:[{ path, from, to }] (actor texts that replace non-empty text),
 //     counts:{ create, update, swap, delete, fields, keeps }, destructive (deletes or swaps > 0),
+//     build (W3-3: creation profile, no creation item survives, some are added -> current Health/Resolve = max after the write),
 //     unsaved:[{ path, stored, live }] (open sheet input not saved yet: apply refuses while non-empty),
 //     dropped:[{ opId, because }] (partial selection), expect: Expect, projected: ActorLike }
 //   Expect = { items: { <itemId>: { fp, name } }, actor: { <path>: value }, deletes:[itemId] }: pass back to apply() unchanged.
@@ -27,7 +28,9 @@
 //   (`rank` = the drawer's rank, REQUIRED for superheroes: teen|street|global|cosmic. Without it the hero is validated by
 //   plus-ultra's chargen rank flag, else as Global, and the result carries the warning `rank.defaulted` (P1-G). `profile` =
 //   "creation" (default) | "in-play"; `confirmed` (not `confirm`) = true for removals / level swaps.)
-//   warnings, created:[id], updated:[id], deleted:[id], idMap:{ opId: itemId }, message, busy?, stale?, needsConfirm?, unsaved?,
+//   warnings (plan + the validator's, once each), created:[id], updated:[id], deleted:[id], idMap:{ opId: itemId } (ids assigned
+//   before writing, created with keepId: W3-1), message, vitals?: { health?: {from,to}, resolve?: {from,to} } (build, W3-3),
+//   busy?, stale?, needsConfirm?, unsaved?,
 //   rolledBack?, budget? (the validator's, when validation ran) }. This is the writer's FULL result; the pack's apply
 //   (writer-group.mjs) returns a concise one unless { verbose: true }. GM only; refuses while the open sheet holds unsaved input; re-plans and re-validates on the CURRENT document;
 //   refuses the WHOLE write when an item it touches changed since the preview (expect); destructive plans need confirmed:true;
@@ -49,6 +52,10 @@ export const OP_KINDS = Object.freeze(["addItem", "updateItem", "removeItem", "u
 /** write order of creates (spec 8.4: sources -> powers -> boosts/limits -> talents/drawbacks -> rest) */
 export const CREATE_PHASES = Object.freeze([["powerSource"], ["power"], ["boost", "limit"], ["talent", "drawback"], ["gear", "vehicleWeapon"]]);
 export const ADDABLE = Object.freeze(CREATE_PHASES.flat());
+/** item types a build creates (an actor without any of them is "empty" for W3-3) */
+export const CREATION_TYPES = Object.freeze(["powerSource", "power", "boost", "limit", "talent", "drawback"]);
+/** a Foundry document id (16 alphanumerics) */
+const ID_RE = /^[A-Za-z0-9]{16}$/;
 /** `custom` adds (no catalogue ref): gear and vehicle weapons (spec 10.3) + a named power source (writer-notes W3) */
 export const CUSTOM_TYPES = Object.freeze(["gear", "vehicleWeapon", "powerSource"]);
 export const TEXT_FIELDS = Object.freeze(["civilianName", "role", "appearance", "occupation", "personality", "drive", "flaw", "relationships", "team", "teamBase"]);
@@ -350,7 +357,7 @@ export function createWriter(deps = {}) {
     const s = srcOf(doc);
     return { ok: false, mode: "ops", derived: false, runId: null, doc: { uuid: String(doc?.uuid ?? ""), id: String(s._id ?? doc?.id ?? ""), type: String(doc?.type ?? s.type ?? ""), name: String(doc?.name ?? s.name ?? "") },
       errors: [], warnings: [], info: [], ops: [], fields: [], creates: [], updates: [], deletes: [], swaps: [], keeps: [], overwrites: [],
-      counts: { create: 0, update: 0, swap: 0, delete: 0, fields: 0, keeps: 0 }, destructive: false, unsaved: [], dropped: [],
+      counts: { create: 0, update: 0, swap: 0, delete: 0, fields: 0, keeps: 0 }, destructive: false, build: false, unsaved: [], dropped: [],
       expect: { items: {}, actor: {}, deletes: [] }, projected: null };
   }
   function finish(p, exec = null) {
@@ -665,7 +672,9 @@ export function createWriter(deps = {}) {
         if (spec.kind === "text" && value === "") continue;
         if (!same(from ?? (spec.kind === "text" ? "" : null), value)) { changes.push({ path, from: from ?? null, to: value }); setPath(actorSrc, path, value); }
       }
-      Object.assign(pl, { action: changes.length ? "actor" : "noop", type: "actor", name: actor.name, changes });
+      // W3-2: the op names the actor as it will be called (set.name present: the new name, even when unchanged)
+      const newName = entries.find((e) => e.path === "name")?.value;
+      Object.assign(pl, { action: changes.length ? "actor" : "noop", type: "actor", name: newName || actor.name, changes });
       if (!changes.length && !p.errors.some((e) => e.opId === opId)) W("op.noop", `op ${opId} changes no actor field`, { opId });
       for (const c of changes) {
         p.fields.push({ opId, ...c });
@@ -684,6 +693,11 @@ export function createWriter(deps = {}) {
     const projItems = [...proj.values()].map((s) => ({ id: String(s._id), name: s.name, type: s.type, _source: s, effects: clone(s.effects ?? []) }));
     actorSrc.items = projItems.map((i) => i._source);
     p.projected = { id: String(actorSrc._id ?? actor.id ?? ""), uuid: String(actor.uuid ?? ""), documentName: "Actor", name: actorSrc.name ?? actor.name, type: actorSrc.type ?? actor.type, _source: actorSrc, system: clone(actorSrc.system), items: projItems, effects: clone(srcOf(actor).effects ?? listOf(actor.effects).map(srcOf)), overrides: {} };
+    // W3-3 (D-1): a build = creation profile, no creation item of the actor survives the run (empty or emptied) and the run adds
+    // some: current Health / Resolve go to max after the write. Edits and in-play keep them (O25; only the clamp below max).
+    const survivors = [...cur].filter(([id, s]) => CREATION_TYPES.includes(s.type) && !removed.has(id));
+    p.build = opts.profile !== "in-play" && !survivors.length && exec.adds.some((a) => CREATION_TYPES.includes(a.type));
+    if (p.build) p.info.push(msg("vitals.build", "New build: current Health and Resolve are set to their max after the write."));
     p.info.push(msg("plan.summary", `${p.creates.length} to add, ${p.updates.length} to change, ${p.deletes.length} to remove, ${p.fields.length} actor field(s); ${p.keeps.length} item(s) unchanged, ids kept.`));
     return finish(p, exec);
   }
@@ -841,8 +855,14 @@ export function createWriter(deps = {}) {
       // the validator's budget (before / after the ops) rides on every later result (W2-7: the concise apply result shows it)
       if (v?.budget) base.budget = v.budget;
       if (v && v.ok === false) return { ...base, validation: v, errors: v.errors ?? [], message: v.errors?.[0]?.message ?? "validation failed" };
-      // P1-G: an apply without `rank` (and no plus-ultra flag) was validated as Global: the caller sees that in the result
-      for (const w of v?.warnings ?? []) if (w?.code === "rank.defaulted") p.warnings.push(msg(w.code, w.message ?? "No rank given: validated as the default rank."));
+      // W3-2 (was P1-G, rank.defaulted only): the validator's warnings ride on the result, each once (same code + op + message)
+      const seen = new Set(p.warnings.map((w) => `${w.code}|${w.opId ?? ""}|${w.message}`));
+      for (const w of v?.warnings ?? []) {
+        if (!w?.code) continue;
+        const m = { ...w, message: w.message ?? (w.code === "rank.defaulted" ? "No rank given: validated as the default rank." : w.code) };
+        const k = `${m.code}|${m.opId ?? ""}|${m.message}`;
+        if (!seen.has(k)) { seen.add(k); p.warnings.push(m); }
+      }
     }
     if (expect) {
       const stale = staleCheck(p, expect, doc);
@@ -863,23 +883,44 @@ export function createWriter(deps = {}) {
     const idMap = {};
     const created = [], updated = [], deleted = [];
     let phase = "start";
+    // W3-1 (F0): every add gets its id BEFORE writing and is created with keepId. The v14 server returns (and, without keepId,
+    // inserts) created documents in completion order, so mapping the returned array by index could swap ids; with keepId the
+    // server keeps the given order, which is also the talents' collection order (their roles, W2-3).
+    const newIds = {};
+    {
+      const taken = new Set(listOf(doc.items).map((i) => String(srcOf(i)._id ?? i.id)));
+      for (const a of exec.adds) {
+        let id = null;
+        for (let k = 0; k < 20 && !id; k++) { const c = String(D.randomID() ?? ""); if (ID_RE.test(c) && !taken.has(c)) id = c; }
+        if (!id) { do id = Array.from({ length: 16 }, () => "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[Math.floor(Math.random() * 62)]).join(""); while (taken.has(id)); }
+        taken.add(id); newIds[a.opId] = id;
+      }
+    }
     try {
-      // 1. creates, phase by phase, links to earlier adds resolved through idMap
+      // 1. creates, phase by phase, links to earlier adds resolved through the pre-assigned ids (only once written)
       for (const types of CREATE_PHASES) {
         const batch = exec.adds.filter((a) => types.includes(a.type));
         if (!batch.length) continue;
         phase = `create ${types.join("/")}`; stage(phase);
         const data = batch.map((a) => {
-          const d = clone(a.data);
+          const d = { ...clone(a.data), _id: newIds[a.opId] };
           for (const f of ["powerSource", "power"]) { const t = d.system?.[f]; if (typeof t === "string" && t.startsWith("+")) { const real = idMap[t.slice(1)]; if (!real) throw new Error(`link to ${t} unresolved`); d.system[f] = real; } }
           return d;
         });
-        const docs = await doc.createEmbeddedDocuments("Item", data);
-        docs.forEach((d, i) => {
-          const a = batch[i];
-          idMap[a.opId] = d.id; created.push(d.id);
-          run.ops.push({ opId: a.opId, kind: "add", itemId: d.id, type: a.type, name: d.name, before: null, after: null, ...(a.dependsOn ? { dependsOn: a.dependsOn } : {}) });
-        });
+        const docs = listOf(await doc.createEmbeddedDocuments("Item", data, { keepId: true }));
+        const back = new Set(docs.map((d) => String(d?.id ?? d?._id ?? "")));
+        // record what exists before checking, so a rollback deletes every item this batch did write
+        for (const a of batch) {
+          const id = newIds[a.opId];
+          const it = doc.items?.get?.(id);
+          if (!it && !back.has(id)) continue;
+          idMap[a.opId] = id; created.push(id);
+          run.ops.push({ opId: a.opId, kind: "add", itemId: id, type: a.type, name: it?.name ?? a.data.name, before: null, after: null, ...(a.dependsOn ? { dependsOn: a.dependsOn } : {}) });
+        }
+        const ours = new Set(batch.map((a) => newIds[a.opId]));
+        for (const d of docs) { const id = String(d?.id ?? d?._id ?? ""); if (id && !ours.has(id)) run.ops.push({ opId: "_foreign", kind: "add", itemId: id, type: d.type ?? "", name: d.name ?? id, before: null, after: null }); }
+        const missing = batch.filter((a) => !idMap[a.opId]);
+        if (missing.length || docs.length !== batch.length) throw new Error(`created items do not match the requested ids (${missing.map((a) => a.opId).join(", ") || `${docs.length} of ${batch.length}`})`);
       }
       // 2. level swaps of split powers: same id, keepId
       for (const s of exec.swaps) {
@@ -933,17 +974,23 @@ export function createWriter(deps = {}) {
         }
         await doc.update(upd);
       }
-      // 6. current Health / Resolve re-clamped only when the new max is lower (spec 8.4)
+      // 6. current Health / Resolve: re-clamped only when the new max is lower (spec 8.4); at a build (W3-3, D-1) set to max.
+      //    A value an op of this run wrote explicitly (allowVitals) is left alone.
       phase = "clamp"; stage(phase);
       const clamp = {};
+      const vitals = {};
+      const written = new Set(exec.actor.flatMap((a) => a.paths));
       for (const k of ["health", "resolve"]) {
+        const path = `system.derived.${k}.value`;
         const d = doc.system?.derived?.[k];
-        const v = Number(getPath(srcOf(doc), `system.derived.${k}.value`)), mx = Number(d?.max);
-        if (Number.isFinite(v) && Number.isFinite(mx) && v > mx) clamp[`system.derived.${k}.value`] = mx;
+        const v = Number(getPath(srcOf(doc), path)), mx = Number(d?.max);
+        if (!Number.isFinite(mx)) continue;
+        if (p.build && !written.has(path)) { if (v !== mx) { clamp[path] = mx; vitals[k] = { from: Number.isFinite(v) ? v : null, to: mx }; } }
+        else if (Number.isFinite(v) && v > mx) clamp[path] = mx;
       }
       if (Object.keys(clamp).length) {
         const before = Object.fromEntries(Object.keys(clamp).map((path) => [path, getPath(srcOf(doc), path) ?? null]));
-        run.ops.push({ opId: "_clamp", kind: "actor", itemId: null, type: "actor", name: doc.name, paths: Object.keys(clamp), before, after: clamp });
+        run.ops.push({ opId: p.build ? "_vitals" : "_clamp", kind: "actor", itemId: null, type: "actor", name: doc.name, paths: Object.keys(clamp), before, after: clamp });
         await doc.update(clamp);
       }
       // after-fingerprints (drift detection for undo), then the journal
@@ -957,8 +1004,9 @@ export function createWriter(deps = {}) {
       const warnings = [...p.warnings];
       if (!journal.runs.some((r) => r.runId === runId)) warnings.push(msg("undo.notStored", "The undo record could not be stored."));
       if (dropped.length) warnings.push(msg("undo.trimmed", `Older undo records were dropped to keep the actor small (${dropped.length}).`));
-      const message = `Applied to "${doc.name}": ${created.length} added, ${updated.length} changed, ${deleted.length} removed, ${p.fields.length} field(s).`;
-      return { ...base, ok: true, runId, errors: [], warnings, created, updated: [...new Set(updated)], deleted, idMap, message };
+      const vText = Object.entries(vitals).map(([k, x]) => `${k === "health" ? "Health" : "Resolve"} ${x.from ?? "?"} -> ${x.to}`).join(", ");
+      const message = `Applied to "${doc.name}": ${created.length} added, ${updated.length} changed, ${deleted.length} removed, ${p.fields.length} field(s).${vText ? ` New build: current ${vText} (max).` : ""}`;
+      return { ...base, ok: true, runId, errors: [], warnings, created, updated: [...new Set(updated)], deleted, idMap, message, ...(vText ? { vitals } : {}) };
     } catch (err) {
       D.log?.error?.(`moinens-ai-gen | writer apply failed at ${phase}`, err);
       const reason = String(err?.message ?? err).replace(/[\s.]+$/, "");
