@@ -87,6 +87,7 @@ Hooks.once("ready", async () => {
   game.modules.get(MODULE_ID).api = api;
   // AI builder pack registry (spec 3.3): GM only, loaded dynamically; it imports a system pack only for the matching system, and a failure never touches image generation.
   if (game.user.isGM) import("./build/registry.mjs").then((m) => m.startBuildRegistry(api)).catch((e) => console.error(`${MODULE_ID} | AI builder registry failed to load`, e));
+  if (game.user.isGM) import("./build/builder-api.mjs").then((m) => m.attachBuilder(api)).catch((e) => console.error(`${MODULE_ID} | AI builder harness failed to load`, e));
   Hooks.callAll("aiImageGen.ready", api); // hook name kept from the old id: modules that started earlier can now register their types
   // local-media-optimizer (jeśli jest): profil folderu danych ai-image-gen/ (DATA_ROOT) z naszymi domyślnymi limitami.
   syncOptimizerProfile();

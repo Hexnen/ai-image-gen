@@ -16,7 +16,8 @@ export const LOG_FIELDS = [
   "id", "ts", "durationMs", "kind", "status", "provider", "model", "route", "prompt", "description",
   "size", "quality", "imageSize", "thinkingLevel", "refsCount", "cost", "costKind", "tokens",
   "docUuid", "docName", "typeKey", "batchId", "itemId", "error", "user",
-  "bytesBefore", "bytesAfter", "optimizedVia", "caller", "transparent"
+  "bytesBefore", "bytesAfter", "optimizedVia", "caller", "transparent",
+  "cacheRead", "cacheWrite"   // AI builder (kind "build"): prompt-cache tokens read / written per request
 ];
 
 const months = new Map();   // "YYYY-MM" -> entry[]
@@ -279,7 +280,7 @@ export function logBatchResult(rec, itemId, { ok, error, cost = 0, tokens = null
 // ---------- export ----------
 
 export const CSV_COLUMNS = ["ts", "kind", "status", "provider", "model", "route", "durationMs", "cost", "costKind",
-  "tokensIn", "tokensOut", "size", "quality", "imageSize", "thinkingLevel", "refsCount", "docName", "docUuid",
+  "tokensIn", "tokensOut", "cacheRead", "cacheWrite", "size", "quality", "imageSize", "thinkingLevel", "refsCount", "docName", "docUuid",
   "typeKey", "batchId", "bytesBefore", "bytesAfter", "optimizedVia", "transparent", "caller", "user", "description", "prompt", "error"];
 
 const csvCell = (v) => {

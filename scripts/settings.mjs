@@ -2,6 +2,7 @@ import { MODULE_ID, PROVIDER_IDS, MIGRATED_CLIENT, MIGRATED_WORLD } from "./cons
 import { SLOTS, slotKey } from "./batch/record.mjs";
 import { syncOptimizerProfile } from "./optimize.mjs";
 import { DEFAULT_MODEL as ENHANCE_DEFAULT_MODEL, DEFAULT_EFFORT as ENHANCE_DEFAULT_EFFORT, EFFORTS } from "./enhance/anthropic.mjs";
+import { registerBuildSettings } from "./build/build-settings.mjs";
 
 const { NumberField, StringField, ObjectField, BooleanField } = foundry.data.fields;
 
@@ -64,6 +65,7 @@ export function registerSettings() {
   limit("monthly", 50);       // USD per month, 0 = unlimited
   limit("perRequest", 1);     // USD, max estimated cost of one request, 0 = unlimited
   limit("batchSize", 50);     // max images in one batch, 0 = unlimited
+  registerBuildSettings();    // AI builder harness: model, effort, cache TTL, per-message caps, pre-warm (build/build-settings.mjs)
 
   // Zmniejszanie/WebP wyników przed zapisem (szczegóły per typ: sekcja „Output” w konfiguracji typu).
   game.settings.register(MODULE_ID, "optimizeImages", {
