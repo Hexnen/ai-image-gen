@@ -7,3 +7,8 @@
 - Testy: `node dev/test-migrate-id.mjs` (kopia, nienaruszalność starych wartości, schemat 1->2, kontrole statyczne repo), `node dev/test-enhance.mjs`.
 - Nowe pliki builder-a (T1-T7) używają `MODULE_ID` z `constants.mjs`; ścieżek w `Data/` nigdy z `MODULE_ID`, tylko `DATA_ROOT`.
 - sketch-reveal: szuka `moinens-ai-gen`, potem `ai-image-gen` (aktywny i z `api`), relacja `recommends` na nowe id.
+
+## 2026-11-17 T3: rejestr pakietów systemowych
+- `scripts/build/registry.mjs` (kontrakt pakietu w nagłówku, dynamiczny import tylko dla `game.system.id`, tylko MG, `api.build`, `emptyState`, `ensureSelfTest`, hook `moinensAiGen.packReady`), `deps.mjs`, `registry-lang.mjs`; `scripts/systems/invincible/pack.mjs` (szkielet: `check` + `supports`; grupy prompt/validate/sheet/writer dopisują T4/T5/T12/T6), `scripts/systems/_stub/pack.mjs` (mock pełnego kontraktu).
+- `module.mjs`: jedna linia, dynamiczny import rejestru z `.catch`. Brak `requires` na plus-ultra.
+- Testy: `node dev/test-packs.mjs`. Otwarte wybory P1-P6 i weryfikacja: `dev/packs-notes.md`.
