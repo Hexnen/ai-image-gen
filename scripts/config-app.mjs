@@ -11,7 +11,7 @@ import { buildTestPrompt, fitTestConfig, estimateTest, estimateTestInfo, generat
 import { sourceTag } from "./cost-learning.mjs";
 import { TestDrawerApp } from "./test-drawer-app.mjs";
 import { aspectInfo } from "./aspect.mjs";
-import { createEnhanceStore, mountEnhance, resetEnhance } from "./enhance/ui.mjs";
+import { createEnhanceStore, mountEnhance, resetEnhance, cancelEnhance } from "./enhance/ui.mjs";
 import { generatedSize, outputPreview, edgeIsNoop } from "./output-preview.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin, DialogV2 } = foundry.applications.api;
@@ -545,6 +545,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       slot: el.querySelector("[data-role=enhance]"),
       statusEl: el.querySelector("[data-role=enhanceStatus]"),
       scope: this.test.key,
+      // Jak w oknie „Generuj obraz”: w trakcie (płatnego) testu różdżka nie podmienia opisu.
+      disabled: this.test.running || this.test.confirming,
       getContext: () => ({ name: this.test.name, type: this.test.type })
     });
   }
@@ -661,6 +663,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
   async runTest() {
     const t = this.test;
     if (t.running || t.confirming) return;
+    // Trwające ulepszanie przerywamy: test idzie z tym, co jest w polu teraz, i potem nic go nie podmienia.
+    cancelEnhance(this.#enhanceTest);
     this.#readForm();
     this.#readTest();
     const key = this.selectedKey;

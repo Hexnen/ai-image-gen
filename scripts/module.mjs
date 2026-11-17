@@ -24,7 +24,15 @@ import { generateImage, estimateGeneration } from "./api.mjs";
  * no settings copy) so the same batch is never ingested twice and the copy is not taken from values that still change.
  * Evaluated lazily: game.modules is ready from `init` on.
  */
-const oldModuleActive = () => !!game.modules.get(OLD_MODULE_ID)?.active;
+/**
+ * This code runs, but not as "moinens-ai-gen": the server still has the package registered under the OLD id (it was
+ * started before the rename and the folder was renamed or the manifest changed under it). Then the "old module" that is
+ * active IS this module, so the both-active warning would tell the GM to disable the only copy. Stay idle with an
+ * accurate message instead (template paths use modules/moinens-ai-gen, which the server does not serve yet).
+ */
+export const runningUnderOldId = () => !game.modules.get(MODULE_ID)?.active;
+const oldModuleActive = () => !runningUnderOldId() && !!game.modules.get(OLD_MODULE_ID)?.active;
+const dormant = () => runningUnderOldId() || oldModuleActive();
 
 /** GM-owe powiadomienie: batch z wieloma wersjami czeka na wybór (klik w powiadomienie otwiera okno). */
 function notifyPick(rec) {
@@ -35,6 +43,7 @@ function notifyPick(rec) {
 }
 
 Hooks.once("init", () => {
+  if (runningUnderOldId()) return;   // nothing under the new namespace until the server knows the new id
   registerSettings();   // always: the settings must exist for the later copy and for the config window
   if (oldModuleActive()) return;
   registerSheetButtons();
@@ -42,6 +51,11 @@ Hooks.once("init", () => {
 });
 
 Hooks.once("ready", async () => {
+  if (runningUnderOldId()) {
+    if (game.user.isGM) ui.notifications.warn(game.i18n.localize("AIIMG.Rename.StaleServer"), { permanent: true });
+    console.warn(`${MODULE_ID} | loaded under the old id "${OLD_MODULE_ID}" (the server has not picked up the rename yet): idle until Foundry is restarted`);
+    return;
+  }
   if (oldModuleActive()) {
     if (game.user.isGM) ui.notifications.warn(game.i18n.localize("AIIMG.Rename.BothActive"), { permanent: true });
     console.warn(`${MODULE_ID} | "${OLD_MODULE_ID}" is still active: this module stays idle until it is disabled`);
@@ -96,7 +110,7 @@ Hooks.once("ready", async () => {
 
 // Left-hand toolbar buttons (GM only). v14: controls is a record keyed by control name.
 Hooks.on("getSceneControlButtons", (controls) => {
-  if (!game.user.isGM || oldModuleActive()) return;
+  if (!game.user.isGM || dormant()) return;
   // Own control category (no canvas layer): the three buttons live here, not under Token Controls.
   const group = controls[MODULE_ID] = {
     name: MODULE_ID,

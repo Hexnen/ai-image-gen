@@ -16,7 +16,8 @@ function enhanceSettings() {
 
 /** Nowy stan dla jednego pola opisu. */
 export function createEnhanceStore() {
-  return { scope: null, original: null, controller: null, status: null, inserting: false, textarea: null, slot: null, statusEl: null, disabled: false };
+  // original = tekst sprzed pierwszego ulepszenia; enhanced = tekst wstawiony przez różdżkę (cofnięcie działa, póki pole go trzyma).
+  return { scope: null, original: null, enhanced: null, controller: null, status: null, inserting: false, textarea: null, slot: null, statusEl: null, disabled: false };
 }
 
 /** Błąd → tekst dla człowieka (PL/EN z lang/), z zamaskowanymi kluczami. */
@@ -40,8 +41,28 @@ export function enhanceErrorText(e) {
   }
 }
 
-/** Wstaw tekst tak, żeby działało też natywne Ctrl+Z (execCommand), z zapasowym ustawieniem value. */
-function replaceText(textarea, text) {
+/**
+ * Czy wolno przenieść fokus do pola opisu? Tylko gdy użytkownik nie pracuje gdzie indziej: fokus jest na polu, na
+ * przyciskach różdżki albo nigdzie (body). Pisanie w innym polu albo w czacie nie może zostać przerwane.
+ */
+export function mayTakeFocus(active, textarea, slot, body = globalThis.document?.body) {
+  if (!active || active === body || active === textarea) return true;
+  return !!slot?.contains?.(active);
+}
+
+/** Cofnięcie ma sens tylko, gdy pole nadal trzyma tekst wstawiony przez różdżkę (ręczne zmiany go unieważniają). */
+export const canUndo = (store, value = store.textarea?.value) => store.original !== null && store.enhanced !== null && value === store.enhanced;
+
+/**
+ * Wstaw tekst. Gdy wolno wziąć fokus: przez execCommand, żeby działało też natywne Ctrl+Z (z zapasowym value).
+ * Gdy użytkownik pisze gdzie indziej: samo value (bez kradzieży fokusu; natywne Ctrl+Z tu nie obejmie wstawki).
+ */
+function replaceText(textarea, text, { focus = true } = {}) {
+  if (!focus) {
+    textarea.value = text;
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    return;
+  }
   textarea.focus();
   textarea.select();
   let ok = false;
@@ -51,6 +72,15 @@ function replaceText(textarea, text) {
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
   }
   textarea.setSelectionRange(text.length, text.length);
+}
+
+/** Otwórz ustawienia Foundry od razu na kategorii tego modułu (domyślnie otwierają się na „core”). */
+async function openModuleSettings() {
+  const sheet = game.settings.sheet;
+  try {
+    await sheet.render({ force: true });
+    sheet.changeTab?.(MODULE_ID, "categories");
+  } catch (e) { console.warn(`${MODULE_ID} | could not open the settings on this module's tab`, e); }
 }
 
 function button({ action, icon, label, primary = false, disabled = false }) {
@@ -75,7 +105,7 @@ function paint(store) {
   if (slot?.isConnected) {
     const busy = !!store.controller;
     const parts = [];
-    if (store.original !== null && !busy) {
+    if (canUndo(store) && !busy) {
       parts.push(button({ action: "undo", icon: "fa-solid fa-rotate-left", label: L("Undo"), disabled: store.disabled }));
     }
     parts.push(busy
@@ -105,7 +135,7 @@ function paint(store) {
         link.type = "button";
         link.className = "link";
         link.textContent = L("OpenSettings");
-        link.addEventListener("click", () => game.settings.sheet.render({ force: true }));
+        link.addEventListener("click", () => openModuleSettings());
         statusEl.append(" ", link);
       }
     }
@@ -145,11 +175,16 @@ async function run(store, getContext) {
       store.status = { type: "error", text: L("Err.changed") };
       return;
     }
-    store.original = before;
+    // Kolejne ulepszenie tego samego wyniku: cofnięcie wraca do tekstu sprzed pierwszego.
+    if (!canUndo(store, before)) store.original = before;
+    store.enhanced = res.text;
     store.status = { type: "done", text: L("Done") };
-    paint(store);
+    paint(store); // zdejmuje readonly z pola, inaczej execCommand nic nie wstawi
+    const focus = mayTakeFocus(document.activeElement, ta, store.slot);
     store.inserting = true;
-    try { replaceText(ta, res.text); } finally { store.inserting = false; }
+    try { replaceText(ta, res.text, { focus }); } finally { store.inserting = false; }
+    store.enhanced = ta.value; // to, co pole faktycznie trzyma (np. po normalizacji końców linii)
+    paint(store);
   } catch (e) {
     if (store.controller !== controller) return;
     store.controller = null;
@@ -162,21 +197,25 @@ async function run(store, getContext) {
   }
 }
 
-/** Przerwij od razu (UI nie czeka, aż fetch odrzuci obietnicę; spóźniony wynik zostanie zignorowany). */
-export function cancelEnhance(store) {
+/**
+ * Przerwij od razu (UI nie czeka, aż fetch odrzuci obietnicę; spóźniony wynik zostanie zignorowany).
+ * focus: wróć do pola (klik „Anuluj” przy polu); wywołania z zewnątrz (generowanie, test) fokusu nie ruszają.
+ */
+export function cancelEnhance(store, { focus = false } = {}) {
   if (!store.controller) return;
   store.controller.abort();
   store.controller = null;
   store.status = null;
   paint(store);
-  store.textarea?.focus();
+  if (focus) store.textarea?.focus();
 }
 
 function undo(store) {
   const ta = store.textarea;
-  if (store.original === null || !ta?.isConnected || store.controller) return;
+  if (!ta?.isConnected || store.controller) return;
+  if (!canUndo(store)) { store.original = store.enhanced = null; paint(store); return; } // ręczne zmiany: nie nadpisuj
   const text = store.original;
-  store.original = null;
+  store.original = store.enhanced = null;
   store.status = null;
   paint(store);
   store.inserting = true;
@@ -188,6 +227,7 @@ export function resetEnhance(store) {
   store.controller?.abort();
   store.controller = null;
   store.original = null;
+  store.enhanced = null;
   store.status = null;
 }
 
@@ -211,7 +251,7 @@ export function mountEnhance(store, { textarea, slot, statusEl, scope = null, di
     if (!b || b.disabled) return;
     ev.preventDefault();
     if (b.dataset.enhance === "run") run(store, getContext);
-    else if (b.dataset.enhance === "cancel") cancelEnhance(store);
+    else if (b.dataset.enhance === "cancel") cancelEnhance(store, { focus: true });
     else if (b.dataset.enhance === "undo") undo(store);
   });
   // Ctrl/Cmd+Enter w polu opisu = ulepsz.
@@ -221,9 +261,14 @@ export function mountEnhance(store, { textarea, slot, statusEl, scope = null, di
       run(store, getContext);
     }
   });
-  // Stary komunikat o sukcesie znika po ręcznej edycji (błąd zostaje, aż ktoś spróbuje ponownie).
+  // Ręczna edycja: znika stary komunikat o sukcesie (błąd zostaje, aż ktoś spróbuje ponownie) i cofnięcie,
+  // bo wstawiłoby oryginał w miejsce ręcznych poprawek (natywne Ctrl+Z dalej działa).
   textarea.addEventListener("input", () => {
-    if (!store.inserting && store.status?.type === "done") { store.status = null; paint(store); }
+    if (store.inserting) return;
+    let dirty = false;
+    if (store.status?.type === "done") { store.status = null; dirty = true; }
+    if (store.original !== null && !canUndo(store, textarea.value)) { store.original = store.enhanced = null; dirty = true; }
+    if (dirty) paint(store);
   });
   paint(store);
 }

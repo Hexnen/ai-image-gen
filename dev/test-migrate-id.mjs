@@ -80,7 +80,7 @@ const FAKE = { openai: "sk-test-not-real-openai-0000", gemini: "AIza-test-not-re
 const seedLocal = (ls) => {
   for (const [p, k] of Object.entries(FAKE)) ls.setItem(`${OLD}.apiKey.${p}`, JSON.stringify(k));
   ls.setItem(`${OLD}.dialogPrefs`, JSON.stringify({ count: 3, mode: "batch" }));
-  ls.setItem(`${OLD}.test.invincible|Actor|npc`, JSON.stringify({ description: "zielony olbrzym", count: 2 }));
+  ls.setItem(`${OLD}.test.invincible.Actor.superhero`, JSON.stringify({ description: "zielony olbrzym", count: 2 }));   // real format: test.<selectedKey>
   ls.setItem(`${OLD}.test.keepmine`, JSON.stringify({ description: "stary" }));
   ls.setItem(`${NEW}.test.keepmine`, JSON.stringify({ description: "nowszy" }));   // już istnieje w nowej przestrzeni
   ls.setItem(`unrelated.key`, "x");
@@ -148,7 +148,7 @@ await test("GM first run copies keys, world settings, slots and raw prefs", asyn
   assert.deepEqual(game.settings.get(NEW, "batch.5"), BATCH);
   assert.equal(game.settings.get(NEW, "schema"), 1);
   assert.deepEqual(JSON.parse(ls.getItem(`${NEW}.dialogPrefs`)), { count: 3, mode: "batch" });
-  assert.deepEqual(JSON.parse(ls.getItem(`${NEW}.test.invincible|Actor|npc`)), { description: "zielony olbrzym", count: 2 });
+  assert.deepEqual(JSON.parse(ls.getItem(`${NEW}.test.invincible.Actor.superhero`)), { description: "zielony olbrzym", count: 2 });
   assert.equal(game.settings.get(NEW, C.MIGRATED_CLIENT), true);
   assert.equal(game.settings.get(NEW, C.MIGRATED_WORLD), true);
   assert.ok(hookCalls.some(([n, v]) => n === "aiImageGen.batchUpdate" && v?.id === "b-123"), "slot onChange fired");
@@ -184,6 +184,63 @@ await test("second start: flags set, nothing copied again even after the user ch
   const again = await M.migrateFromAiImageGen();
   assert.deepEqual(again, { client: [], world: [], raw: [] });
   assert.equal(game.settings.get(NEW, "limit.daily"), 5);
+});
+
+await test("manual re-copy (flags reset) never resurrects a collected+removed batch nor re-copies a value set back to default", async () => {
+  const { removeBatch, getBatch } = await import("../scripts/batch/record.mjs");
+  assert.ok(getBatch("b-123"), "copied batch present");
+  assert.equal(await removeBatch("b-123"), true);          // collected, then removed by the GM / prune: slot is {} again
+  assert.deepEqual(game.settings.get(NEW, "batch.5"), {});
+  await game.settings.set(NEW, "limit.daily", 5);          // a value deliberately back at its default
+  await game.settings.set(NEW, C.MIGRATED_WORLD, false);   // rename-notes #4: manual re-copy
+  await game.settings.set(NEW, C.MIGRATED_CLIENT, false);
+  ls.removeItem(`${NEW}.apiKey.gemini`);                  // never stored any more -> may be copied again
+  M._resetForTests();
+  const r = await M.migrateFromAiImageGen();
+  assert.deepEqual(game.settings.get(NEW, "batch.5"), {}, "freed slot stays free");
+  assert.equal(getBatch("b-123"), null, "batch not resurrected");
+  assert.equal(game.settings.get(NEW, "limit.daily"), 5);
+  assert.deepEqual(r.world, []);
+  assert.deepEqual(r.client, ["apiKey.gemini"]);
+  assert.equal(game.settings.get(NEW, C.MIGRATED_WORLD), true);
+});
+
+await test("partial first copy retried next start: freed slot not refilled; batch id already in another slot not copied again", async () => {
+  const lsP = new MemStorage(); seedLocal(lsP);
+  globalThis.window = { localStorage: lsP }; globalThis.localStorage = lsP;
+  const docs = [...oldWorld(), { key: `${OLD}.batch.9`, value: { id: "b-moved", provider: "openai", status: "pending", createdAt: 2 } }];
+  globalThis.game = makeGame({ ls: lsP, worldDocs: docs });
+  registerSettings();
+  const cfg7 = game.settings.settings.get(`${NEW}.batch.7`);
+  game.settings.settings.delete(`${NEW}.batch.7`);        // first start: one key missing -> world flag stays unset
+  M._resetForTests();
+  await M.migrateFromAiImageGen();
+  assert.equal(game.settings.get(NEW, C.MIGRATED_WORLD), false);
+  game.settings.settings.set(`${NEW}.batch.7`, cfg7);      // next start: everything registered (also needed by the record helpers)
+  const { removeBatch, getBatch } = await import("../scripts/batch/record.mjs");
+  assert.ok(getBatch("b-123"));
+  await removeBatch("b-123");                              // collected and removed before the next start
+  assert.ok(getBatch("b-moved"));
+  await game.settings.set(NEW, "batch.9", {});             // b-moved now lives in another slot (simulated move)
+  await game.settings.set(NEW, "batch.20", { id: "b-moved", provider: "openai", status: "done", createdAt: 2 });
+  M._resetForTests();
+  const r = await M.migrateFromAiImageGen();
+  assert.equal(getBatch("b-123"), null, "removed batch not resurrected by the retry");
+  assert.deepEqual(game.settings.get(NEW, "batch.9"), {}, "freed slot not refilled");
+  assert.ok(!r.world.some((k) => k.startsWith("batch.")), r.world.join());
+  assert.equal(game.settings.get(NEW, C.MIGRATED_WORLD), true);
+});
+
+await test("a batch id already tracked in another new slot is not copied a second time", async () => {
+  const lsD = new MemStorage();
+  globalThis.window = { localStorage: lsD }; globalThis.localStorage = lsD;
+  globalThis.game = makeGame({ ls: lsD, worldDocs: [{ key: `${OLD}.batch.5`, value: BATCH }] });
+  registerSettings();
+  await game.settings.set(NEW, "batch.3", { ...BATCH, status: "done" });
+  M._resetForTests();
+  const r = await M.migrateFromAiImageGen();
+  assert.ok(!r.world.includes("batch.5"));
+  assert.equal(game._world.find((d) => d.key === `${NEW}.batch.5`), undefined);
 });
 
 await test("a missing registration leaves the flag unset (retried next start)", async () => {
@@ -259,10 +316,26 @@ await test("lang: en and pl have the same keys, new warning present, no old titl
   const en = JSON.parse(read("lang/en.json")), pl = JSON.parse(read("lang/pl.json"));
   assert.deepEqual(Object.keys(en).sort(), Object.keys(pl).sort());
   assert.ok(en["AIIMG.Rename.BothActive"] && pl["AIIMG.Rename.BothActive"]);
+  assert.ok(en["AIIMG.Rename.StaleServer"] && pl["AIIMG.Rename.StaleServer"]);
+  assert.ok(!/za \{count\} wersji/.test(pl["AIIMG.Test.ConfirmBody"]), "PL: no 'za 1 wersji'");
   for (const [k, v] of [...Object.entries(en), ...Object.entries(pl)]) {
     if (k === "AIIMG.Rename.BothActive") continue;
     assert.ok(!v.includes("AI Image Gen"), k);
   }
+});
+
+await test("module.mjs: running under the old id is not mistaken for 'the old module is active'", async () => {
+  const code = read("scripts/module.mjs");
+  const stale = code.match(/export const runningUnderOldId = \(\) => (.+);/)?.[1];
+  const oldActive = code.match(/const oldModuleActive = \(\) => (.+);/)?.[1];
+  assert.ok(stale && oldActive?.includes("!runningUnderOldId()"), "guards present");
+  const make = (mods) => new Function("game", "MODULE_ID", "OLD_MODULE_ID",
+    `const runningUnderOldId = () => ${stale}; const oldModuleActive = () => ${oldActive}; return { stale: runningUnderOldId(), both: oldModuleActive() };`
+  )({ modules: new Map(Object.entries(mods)) }, NEW, OLD);
+  assert.deepEqual(make({ [OLD]: { active: true } }), { stale: true, both: false });                         // stale server: this code IS "ai-image-gen"
+  assert.deepEqual(make({ [NEW]: { active: true }, [OLD]: { active: true } }), { stale: false, both: true }); // a real old copy as well
+  assert.deepEqual(make({ [NEW]: { active: true } }), { stale: false, both: false });
+  assert.ok(/if \(runningUnderOldId\(\)\) \{[\s\S]*?Rename\.StaleServer/.test(code), "ready shows the stale-server warning");
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", some FAILED" : ""}`);

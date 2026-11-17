@@ -3,7 +3,8 @@
 import assert from "node:assert/strict";
 import {
   enhanceDescription, buildRequest, buildUserMessage, parseResponse, cleanText, kindForStatus,
-  ANTHROPIC_URL, ANTHROPIC_VERSION, DEFAULT_MODEL, DEFAULT_EFFORT, MAX_INPUT_CHARS, SYSTEM_PROMPT
+  ANTHROPIC_URL, ANTHROPIC_VERSION, DEFAULT_MODEL, DEFAULT_EFFORT, MAX_INPUT_CHARS, SYSTEM_PROMPT,
+  timeoutFor, errorDetail, retryAfterSeconds
 } from "../scripts/enhance/anthropic.mjs";
 
 const FAKE_KEY = "test-key-not-real";
@@ -147,6 +148,188 @@ await test("the key never appears in the request body", async () => {
   const f = mockFetch(res(200, okBody("ok")));
   await enhanceDescription({ apiKey: FAKE_KEY, text: "a", fetchImpl: f });
   assert.ok(!f.calls[0].init.body.includes(FAKE_KEY));
+});
+
+await test("timeout grows with effort (xhigh/max get more than 120 s)", async () => {
+  assert.equal(timeoutFor("low"), 120_000);
+  assert.equal(timeoutFor("medium"), 120_000);
+  assert.ok(timeoutFor("high") > 120_000);
+  assert.ok(timeoutFor("") >= timeoutFor("high"), "model default effort is not the shortest");
+  assert.ok(timeoutFor("xhigh") >= 300_000 && timeoutFor("max") >= timeoutFor("xhigh"));
+  assert.equal(timeoutFor("bogus"), timeoutFor(""));
+  // the default timeout really follows effort: a request that answers after 50 ms is not cut by a 30 ms override only
+  const slow = mockFetch(() => new Promise((r) => setTimeout(() => r(res(200, okBody("ok"))), 20)));
+  assert.equal((await enhanceDescription({ apiKey: FAKE_KEY, text: "a", effort: "max", fetchImpl: slow })).text, "ok");
+});
+
+await test("system prompt tells the model not to write the context name into the description (enhance-notes #5)", () => {
+  assert.match(SYSTEM_PROMPT, /do not write the document's name/i);
+});
+
+await test("HTML error pages are reduced to their title (no raw markup in the status line)", async () => {
+  const html = "<!DOCTYPE html><html><head><title>502 Bad Gateway</title><style>body{color:red}</style></head><body><h1>502</h1></body></html>";
+  assert.equal(errorDetail(html), "502 Bad Gateway");
+  assert.equal(errorDetail("<html><body>oops</body></html>"), "");
+  assert.equal(errorDetail('{"type":"error","error":{"type":"api_error","message":"boom"}}'), "boom");
+  assert.equal(errorDetail("plain text failure"), "plain text failure");
+  await assert.rejects(enhanceDescription({ apiKey: FAKE_KEY, text: "a", fetchImpl: mockFetch(res(502, html)) }),
+    (e) => { assert.equal(e.kind, "server"); assert.equal(e.detail, "502 Bad Gateway"); assert.ok(!/[<>]/.test(e.detail)); return true; });
+});
+
+await test("retry-after: seconds, HTTP date, rate-limit reset headers, unreadable (CORS) -> null", async () => {
+  const H = (o) => ({ get: (k) => o[k.toLowerCase()] ?? null });
+  const now = Date.parse("2026-11-17T12:00:00Z");
+  assert.equal(retryAfterSeconds(H({ "retry-after": "17" }), now), 17);
+  assert.equal(retryAfterSeconds(H({ "retry-after": "Tue, 17 Nov 2026 12:00:30 GMT" }), now), 30);
+  assert.equal(retryAfterSeconds(H({ "anthropic-ratelimit-requests-reset": "2026-11-17T12:00:09Z" }), now), 9);
+  assert.equal(retryAfterSeconds(H({}), now), null);
+  assert.equal(retryAfterSeconds({ get() { throw new Error("blocked"); } }, now), null);
+  assert.equal(retryAfterSeconds(undefined, now), null);
+  await assert.rejects(enhanceDescription({ apiKey: FAKE_KEY, text: "a", fetchImpl: mockFetch(res(429, "{}")) }),
+    (e) => { assert.equal(e.kind, "rate-limit"); assert.equal(e.retryAfter, null); return true; });
+});
+
+// ---------- różdżka w oknie: mini-DOM (bez przeglądarki) ----------
+class FakeEl {
+  constructor(tag = "div") { this.tagName = tag.toUpperCase(); this.children = []; this.parent = null; this.listeners = {}; this.attrs = {}; this.dataset = {}; this.hidden = false; this.disabled = false; this._value = ""; this.selectionStart = this.selectionEnd = 0;
+    const cls = new Set(); this.classList = { toggle: (c, on) => (on ? cls.add(c) : cls.delete(c)), contains: (c) => cls.has(c) }; }
+  get isConnected() { let n = this; while (n.parent) n = n.parent; return n === doc.body; }
+  get value() { return this._value; }
+  set value(v) { this._value = String(v); }
+  addEventListener(t, f) { (this.listeners[t] ??= []).push(f); }
+  removeEventListener() {}
+  dispatchEvent(ev) { if (!ev.target) Object.defineProperty(ev, "target", { value: this }); for (const f of this.listeners[ev.type] ?? []) f(ev); if (ev.bubbles && this.parent) this.parent.dispatchEvent(ev); return true; }
+  append(...c) { for (const x of c) if (typeof x === "object") { x.parent = this; this.children.push(x); } }
+  replaceChildren(...c) { for (const x of this.children) x.parent = null; this.children = []; this.append(...c); }
+  contains(n) { while (n) { if (n === this) return true; n = n.parent; } return false; }
+  closest(sel) { let n = this; while (n) { if (sel.startsWith("button") && n.tagName === "BUTTON" && n.dataset.enhance) return n; n = n.parent; } return null; }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  toggleAttribute(k, on) { if (on) this.attrs[k] = ""; else delete this.attrs[k]; }
+  focus() { doc.activeElement = this; }
+  select() { this.selectionStart = 0; this.selectionEnd = this._value.length; }
+  setSelectionRange(a, b) { this.selectionStart = a; this.selectionEnd = b; }
+  click() { this.dispatchEvent(new Event("click", { bubbles: true })); }
+}
+const doc = {
+  body: new FakeEl("body"), _active: null,
+  // jak w przeglądarce: usunięty z DOM element traci fokus (fokus wraca na body)
+  get activeElement() { return this._active?.isConnected ? this._active : this.body; },
+  set activeElement(v) { this._active = v; },
+  createElement: (t) => new FakeEl(t),
+  // jak w Chrome: wstawia do aktywnego, edytowalnego pola i wysyła input
+  execCommand(cmd, _ui, text) {
+    const el = doc.activeElement;
+    if (cmd !== "insertText" || !el || el.tagName !== "TEXTAREA" || "readonly" in el.attrs) return false;
+    el.value = el.value.slice(0, el.selectionStart) + text + el.value.slice(el.selectionEnd);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  }
+};
+doc.activeElement = doc.body;
+globalThis.document = doc;
+const SETTINGS = { "apiKey.anthropic": FAKE_KEY, "enhance.model": "", "enhance.effort": "low" };
+globalThis.game = {
+  settings: { get: (_ns, k) => SETTINGS[k] ?? "", sheet: { rendered: [], render(o) { this.rendered.push(o); return Promise.resolve(this); }, tabs: [], changeTab(t, g) { this.tabs.push([t, g]); } } },
+  i18n: { localize: (k) => k, format: (k, d) => `${k} ${JSON.stringify(d)}` },
+  user: { isGM: true }
+};
+class F { constructor(o = {}) { Object.assign(this, o); } }
+globalThis.foundry ??= { utils: { escapeHTML: (s) => s }, data: { fields: { NumberField: F, StringField: F, ObjectField: F, BooleanField: F } } };
+const UI = await import("../scripts/enhance/ui.mjs");
+
+/** Pole + slot + linia statusu w „oknie”; fetch Anthropic podstawiony (odpowiedź na żądanie). */
+function mountField(text) {
+  const win = new FakeEl("section"); doc.body.append(win);
+  const textarea = new FakeEl("textarea"); textarea.value = text;
+  const slot = new FakeEl("div"); const statusEl = new FakeEl("p"); const other = new FakeEl("input");
+  win.append(textarea, slot, statusEl, other);
+  const store = UI.createEnhanceStore();
+  UI.mountEnhance(store, { textarea, slot, statusEl, getContext: () => ({ name: "Kid", type: "Superhero" }) });
+  const btn = (a) => slot.children.find((b) => b.dataset.enhance === a);
+  return { store, textarea, slot, statusEl, other, btn, win };
+}
+let release;
+const pending = () => { globalThis.fetch = async () => new Promise((r) => { release = (t) => r(res(200, okBody(t))); }); };
+const tick = () => new Promise((r) => setTimeout(r, 0));
+const typeInto = (el, v) => { el.value = v; el.dispatchEvent(new Event("input", { bubbles: true })); };
+
+await test("wand result does not steal focus from a field the user moved to (B1)", async () => {
+  const f = mountField("mag");
+  pending();
+  f.btn("run").focus(); f.btn("run").click(); await tick();
+  assert.ok(f.btn("cancel"), "busy");
+  f.other.focus();                       // user goes on typing elsewhere
+  release("Wysoki mag w granatowej szacie."); await tick(); await tick();
+  assert.equal(doc.activeElement, f.other, "focus stays where the user types");
+  assert.equal(f.textarea.value, "Wysoki mag w granatowej szacie.");
+  assert.ok(f.btn("undo"), "undo offered");
+  // the usual case (focus left on the wand/body) still inserts through execCommand with focus on the field
+  const g = mountField("rycerz");
+  pending(); g.btn("run").focus(); g.btn("run").click(); await tick();
+  release("Rycerz w zbroi."); await tick(); await tick();
+  assert.equal(doc.activeElement, g.textarea);
+  assert.equal(g.textarea.value, "Rycerz w zbroi.");
+});
+
+await test("undo disappears after manual edits and never overwrites them (B2 / adversary 5)", async () => {
+  const f = mountField("vampire countess");
+  pending(); f.btn("run").click(); await tick();
+  release("A pale vampire countess in a crimson gown."); await tick(); await tick();
+  assert.ok(f.btn("undo"));
+  typeInto(f.textarea, "my own rewrite");
+  assert.equal(f.btn("undo"), undefined, "no undo after a manual edit");
+  assert.equal(f.store.original, null);
+  // reverting by hand to the enhanced text does not bring the stale undo back
+  typeInto(f.textarea, "A pale vampire countess in a crimson gown.");
+  assert.equal(f.btn("undo"), undefined);
+});
+
+await test("undo after two enhancements returns the very first text; cancel keeps a still-valid undo", async () => {
+  const f = mountField("orc");
+  pending(); f.btn("run").click(); await tick(); release("A big orc."); await tick(); await tick();
+  pending(); f.btn("run").click(); await tick(); release("A big green orc with tusks."); await tick(); await tick();
+  pending(); f.btn("run").click(); await tick();
+  f.btn("cancel").click(); await tick();
+  assert.ok(f.btn("undo"), "field still holds the enhanced text: undo stays");
+  f.btn("undo").click();
+  assert.equal(f.textarea.value, "orc");
+  assert.equal(f.btn("undo"), undefined);
+});
+
+await test("external cancel (generate / test run) does not move focus; settings link opens this module's tab (B4)", async () => {
+  const f = mountField("smok");
+  pending(); f.btn("run").click(); await tick();
+  f.other.focus();
+  UI.cancelEnhance(f.store);
+  assert.equal(doc.activeElement, f.other);
+  assert.equal(f.btn("run")?.disabled, false);
+  SETTINGS["apiKey.anthropic"] = "";
+  f.btn("run").click(); await tick();
+  const link = f.statusEl.children.find((c) => c.tagName === "BUTTON");
+  assert.ok(link, "open-settings link shown for a missing key");
+  link.click(); await tick();
+  assert.deepEqual(game.settings.sheet.tabs.at(-1), ["moinens-ai-gen", "categories"]);
+  SETTINGS["apiKey.anthropic"] = FAKE_KEY;
+});
+
+await test("a disabled wand (test running) does not start a request (B5)", async () => {
+  const f = mountField("golem");
+  let calls = 0; globalThis.fetch = async () => { calls++; return res(200, okBody("x")); };
+  UI.mountEnhance(f.store, { textarea: f.textarea, slot: f.slot, statusEl: f.statusEl, disabled: true });
+  assert.equal(f.btn("run").disabled, true);
+  f.textarea.dispatchEvent(Object.assign(new Event("keydown"), { key: "Enter", ctrlKey: true, preventDefault() {} }));
+  await tick();
+  assert.equal(calls, 0);
+});
+
+await test("config-app: the paid test cancels an in-flight wand and disables it while running (adversary 4)", async () => {
+  const fs = await import("node:fs");
+  const code = fs.readFileSync(new URL("../scripts/config-app.mjs", import.meta.url), "utf8");
+  const run = code.slice(code.indexOf("async runTest()"), code.indexOf("this.#readTest();", code.indexOf("async runTest()")));
+  assert.match(run, /cancelEnhance\(this\.#enhanceTest\)/);
+  assert.match(code, /disabled: this\.test\.running \|\| this\.test\.confirming/);
+  const gd = fs.readFileSync(new URL("../scripts/generate-dialog.mjs", import.meta.url), "utf8");
+  assert.match(gd, /detectImageTypes\(\)\.find\(\(t\) => t\.key === key\)\?\.label/, "generate dialog sends the type label like the drawer (B6)");
 });
 
 clearInterval(keepAlive);

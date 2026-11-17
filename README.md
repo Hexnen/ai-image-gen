@@ -81,8 +81,16 @@ folder to carry the id, so the folder is `Data/modules/moinens-ai-gen`.
   copies its own API keys (OpenAI, Gemini, OpenRouter, Anthropic) from `localStorage` to `localStorage` (they never leave
   that browser), plus the generate-dialog preferences and the test-drawer samples. The first GM in a world copies the
   world settings: limits, optimization switch, Claude model/effort, usage counters, image-type configuration, schema and
-  every batch slot. A value is copied only while the new setting still holds its default. Re-enabling the old module
-  brings back the old state. Code: `scripts/migrate-id.mjs`, tests: `node dev/test-migrate-id.mjs`.
+  every batch slot. A value is copied only while the new setting has never been stored in the new namespace, so a later
+  re-run never overwrites newer values and never brings back a batch that was already collected and removed.
+  Code: `scripts/migrate-id.mjs`, tests: `node dev/test-migrate-id.mjs`.
+- **Going back to the old module is not a clean undo.** Re-enabling `ai-image-gen` brings back its old *settings*, but it
+  does not know what Moinens AI Gen did in the meantime. Batches that were still running at the copy are still "pending"
+  there: the old module would collect them a second time (the document image replaced again, duplicate files, usage and
+  log counted twice) as soon as it starts; nothing guards against that. Switch back only if no batch was running when
+  Moinens AI Gen first started (its batch window lists the copied ones), or check those documents' images afterwards.
+- **Server started before the rename:** if the running Foundry server still knows the package as `ai-image-gen`, the
+  module stays idle and tells the GM to restart Foundry (it does not ask to disable "the old module", which would be itself).
 - **Images stay where they are.** The data folder is still `Data/ai-image-gen/` (`DATA_ROOT` in `scripts/constants.mjs`),
   so existing actor/item images, the call log, references, test samples and batch candidates keep working.
 - **Hooks keep their names** (`aiImageGen.ready`, `aiImageGen.batchUpdate`, `aiImageGen.logUpdate`).

@@ -1,6 +1,8 @@
 /* One-time copy of this module's settings from its OLD id ("ai-image-gen", the module was called AI Image Gen) to the
    current id ("moinens-ai-gen"). Pattern taken from invincible-plus-ultra/scripts/migrate-id.mjs. Old values are only READ
-   (never deleted or changed), so re-enabling the old module restores the old state.
+   (never deleted or changed), so re-enabling the old module brings back the old SETTINGS. It does not know what this module
+   did in the meantime: batches that were still running at the copy would be collected a second time by the old module
+   (README "Rename from ai-image-gen" says what to do before going back).
    Storage formats:
    - client scope: window.localStorage "<namespace>.<key>", value = JSON.stringify(value). The API keys never leave the
      GM's browser: localStorage -> localStorage on the same client. Every GM browser migrates itself once (client flag).
@@ -8,8 +10,12 @@
      (Setting.value is a JSONField). GM only, once per world (world flag).
    - raw localStorage keys that are not settings ("<namespace>.dialogPrefs", "<namespace>.test.<typeKey>"): copied as
      strings when the new key is absent.
-   A setting is copied only when the new key still holds its default and the old value differs from it, so a re-run never
-   clobbers newer values. A flag stays unset while some key is not registered yet (the run is then repeated next start).
+   A setting is copied only when the new key was NEVER stored in the new namespace (no Setting document / no localStorage
+   entry) and the old value differs from the default. A value that is back at its default is therefore not the same as
+   "not copied yet": a batch slot freed after collecting (written as {}) is never refilled with the old record, so a
+   re-run (partial copy retried next start, or the manual re-copy) cannot resurrect a batch and collect it twice. A batch
+   record whose id already sits in another slot of the new namespace is skipped as well.
+   A flag stays unset while some key is not registered yet (the run is then repeated next start).
    The caller (module.mjs) runs this BEFORE runMigrations(), so an old world on schema 1 is upgraded in the new namespace,
    and does not run it at all while the old module is still active (its values would keep changing after the copy). */
 import { MODULE_ID, OLD_MODULE_ID, PROVIDER_IDS, MIGRATED_CLIENT, MIGRATED_WORLD } from "./constants.mjs";
@@ -77,7 +83,22 @@ export function parseStored(raw) {
 
 const storage = () => globalThis.window?.localStorage ?? globalThis.localStorage;
 const readClient = (key) => parseStored(storage()?.getItem(`${OLD_MODULE_ID}.${key}`));
-const readWorld = (key) => game.settings.storage?.get("world")?.getSetting?.(`${OLD_MODULE_ID}.${key}`, null)?.value;
+const worldDoc = (ns, key) => game.settings.storage?.get("world")?.getSetting?.(`${ns}.${key}`, null);
+const readWorld = (key) => worldDoc(OLD_MODULE_ID, key)?.value;
+/** Has this key ever been written in the NEW namespace? (client: localStorage entry; world: Setting document) */
+export function storedInNew(key, scope) {
+  if (scope === "world") return !!worldDoc(MODULE_ID, key);
+  return (storage()?.getItem(`${MODULE_ID}.${key}`) ?? null) !== null;
+}
+const isSlot = (key) => /^batch\.\d+$/.test(key);
+/** Ids of batch records already held in the new namespace (any slot). */
+function newBatchIds() {
+  const ids = new Set();
+  for (let i = 0; i < SLOTS; i++) {
+    try { const r = game.settings.get(MODULE_ID, slotKey(i)); if (r?.id) ids.add(r.id); } catch { /* not registered */ }
+  }
+  return ids;
+}
 
 /** Copy the raw (non-setting) localStorage entries; returns the copied keys (without namespace). */
 export function copyRawLocalStorage(ls = storage()) {
@@ -113,6 +134,7 @@ async function run() {
   if (!game.user?.isGM) return out;   // only GMs use this module; players have nothing to copy
   let complete = true;
   const pending = [];
+  let batchIds = null;
   const copy = (key, read, bucket) => {
     try {
       const cfg = game.settings.settings.get(`${MODULE_ID}.${key}`);
@@ -120,7 +142,13 @@ async function run() {
       const old = coerce(cfg, read(key));
       const def = defaultOf(cfg);
       if (old === undefined || sameValue(old, def)) return;
+      if (storedInNew(key, cfg.scope === "world" ? "world" : "client")) return;   // written here before: never overwrite
       if (!sameValue(game.settings.get(MODULE_ID, key), def)) return;
+      if (isSlot(key)) {
+        batchIds ??= newBatchIds();
+        if (!old.id || batchIds.has(old.id)) return;   // the same batch is already tracked here
+        batchIds.add(old.id);
+      }
       pending.push(game.settings.set(MODULE_ID, key, old).then(() => bucket.push(key))
         .catch((e) => { complete = false; console.warn(`${LOG} migrate ${key} failed`, e); }));
     } catch (e) { complete = false; console.warn(`${LOG} migrate ${key} failed`, e); }

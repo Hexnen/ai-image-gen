@@ -8,7 +8,7 @@ import { sourceTag } from "./cost-learning.mjs";
 import { ImageConfigApp } from "./config-app.mjs";
 import { PickApp } from "./pick-app.mjs";
 import { saveRefFile } from "./save-image.mjs";
-import { resolveTypeKey } from "./image-types.mjs";
+import { resolveTypeKey, detectImageTypes } from "./image-types.mjs";
 import { getConfig, setConfig, isConfigured, clampCount, fitConfig } from "./config-store.mjs";
 import { supportsTransparent } from "./providers/index.mjs";
 import { createEnhanceStore, mountEnhance, resetEnhance, cancelEnhance } from "./enhance/ui.mjs";
@@ -209,7 +209,12 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       slot: el.querySelector("[data-role=enhance]"),
       statusEl: el.querySelector("[data-role=enhanceStatus]"),
       disabled: !!this.busy,
-      getContext: () => ({ name: this.document.name, type: resolveTypeKey(this.document) ?? this.document.documentName })
+      // Ta sama etykieta typu co w szufladzie testu („Superhero”), nie wewnętrzny klucz („invincible.Actor.superhero”).
+      getContext: () => {
+        const key = resolveTypeKey(this.document);
+        const label = key ? detectImageTypes().find((t) => t.key === key)?.label : null;
+        return { name: this.document.name, type: label || this.document.documentName };
+      }
     });
     el.querySelector("details.aiimg-prompt")?.addEventListener("toggle", (ev) => {
       this.promptOpen = ev.target.open;

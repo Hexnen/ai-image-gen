@@ -101,6 +101,7 @@
   "AIIMG.Thinking.high": "High",
   "AIIMG.Thinking.default": "default",
   "AIIMG.Controls.Log": "Moinens AI Gen call log",
+  "AIIMG.Rename.StaleServer": "Moinens AI Gen is loaded under its old id ai-image-gen: the Foundry server was started before the module was renamed. Check that the folder is Data/modules/moinens-ai-gen, restart Foundry and enable \"Moinens AI Gen\" in this world. Until then the module does nothing (your settings and keys are kept).",
   "AIIMG.Rename.BothActive": "Moinens AI Gen: the old module \"AI Image Gen\" (ai-image-gen) is still enabled. Disable it and reload: Moinens AI Gen stays idle until then and copies its settings and API keys on the first start without it.",
   "AIIMG.Log.Title": "Moinens AI Gen call log",
   "AIIMG.Log.All": "All",
