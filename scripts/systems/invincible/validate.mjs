@@ -488,8 +488,8 @@ export function perOpCost(basePlain, ops, catalog, rank, before) {
 
 /* ================================================================== model-facing tools */
 const TOOL_DESC = {
-  check_proposal: "Dry-run a proposal (same input and rules as submit_proposal) without making it the pending proposal: returns errors with hints, warnings, the budget before/after and each op's cost. Use it to explore (\"what does this cost?\").",
-  submit_proposal: "Submit the proposal for the GM. It is validated (references, the system's rules on the sheet as it would be after the change, a dry run of the write); errors come back with hints and the budget so you can fix and resubmit. On ok:true the GM sees a preview and decides; end your turn then. mode \"ops\" for an existing sheet (each op has its own opId; everything not named stays), mode \"replace\" only for a blank actor or an explicit rebuild. Nothing is written until the GM clicks Apply.\n" + PROPOSAL_GUIDE
+  check_proposal: "Dry-run a proposal (same input and rules as submit_proposal) without making it the pending proposal: returns errors with hints, warnings, the budget before/after and each op's cost. Not needed before a submit (submit_proposal returns the same errors). Use it only to compare variants or to price a change you may not propose (\"what would Flight at Major cost?\").",
+  submit_proposal: "Submit the proposal for the GM; send it directly, without a check_proposal first. It is validated (references, the system's rules on the sheet as it would be after the change, a dry run of the write); errors come back with hints and the budget so you can fix and resubmit. On ok:true the GM sees a preview and decides; end your turn then. mode \"ops\" for an existing sheet (each op has its own opId; everything not named stays), mode \"replace\" only for a blank actor or an explicit rebuild. Nothing is written until the GM clicks Apply.\n" + PROPOSAL_GUIDE
 };
 export function proposalToolDefs() {
   return TOOL_NAMES.map((name) => ({ name, description: TOOL_DESC[name], input_schema: PROPOSAL_SCHEMA, strict: true }));

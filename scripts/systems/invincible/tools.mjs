@@ -23,7 +23,7 @@ export function readToolDefs() {
   return [
     {
       name: "get_entries",
-      description: "Full details of catalogue entries by ref (at most 8 refs per call): the rules text of the item as the book gives it, levels (split-level powers: one ref per level), automations (numbers only), effects, what a drawback needs, and a slot/cost note. Archetype and occupation refs return their book section; npc/sampleHero refs return the actor's attributes and items. Read an entry before you pick it unless you already read it in this conversation.",
+      description: "Full details of catalogue entries by ref (at most 8 refs per call): the rules text of the item as the book gives it, levels (split-level powers: one ref per level), automations (numbers only), effects, what a drawback needs, and a slot/cost note. Archetype and occupation refs return their book section (occupation: Resources and its talent list; archetype: suggested attributes, powers and hero talents); npc/sampleHero refs return the actor's attributes and items. Read an entry before you pick it unless you already read it in this conversation.",
       input_schema: {
         type: "object",
         additionalProperties: false,
@@ -49,7 +49,7 @@ export function readToolDefs() {
     },
     {
       name: "read_rules",
-      description: "Read one whitelisted page of the core rulebook as plain text, in parts of up to 6,000 characters (part 1 first; the result says how many parts there are). Use it for rules the digest only summarises: archetypes and occupations in full, growth, gear, weapons, vehicles, NPCs, minions.",
+      description: "Read one whitelisted page of the core rulebook as plain text, in parts of up to 6,000 characters (part 1 first; the result says how many parts there are). Costly, and the rules digest already covers hero creation: call it only when the GM asks a rules question or the digest does not cover the case (growth, gear, weapons, vehicles, NPCs, minions). Never for one occupation or archetype: get_entries with its ref is shorter.",
       input_schema: {
         type: "object",
         additionalProperties: false,
@@ -63,7 +63,7 @@ export function readToolDefs() {
     },
     {
       name: "search_catalog",
-      description: "Search the installed catalogue by name and summary (case- and accent-insensitive). Returns refs to use in get_entries and proposals. forPower narrows boosts and limits to one power (power name or ref); with an empty query it lists all of that power's boosts and limits.",
+      description: "Search the installed catalogue by name and summary (case- and accent-insensitive). The catalogue index in the system prompt already lists every entry with its ref and summary: pick from it directly and search only when it is not enough. Returns refs to use in get_entries and proposals. forPower narrows boosts and limits to one power (power name or ref); with an empty query it lists all of that power's boosts and limits (an empty list means the power has none).",
       input_schema: {
         type: "object",
         additionalProperties: false,
