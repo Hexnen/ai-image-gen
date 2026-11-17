@@ -43,6 +43,8 @@ Data: 2026-11-17.
 - `test-build-ops` 34 (+2: zwięzły wynik apply z `needsConfirm`/`confirm`, `ops.outcome`, budżet, verbose, wynik bez walidatora; `ranks()` = tabela wendorowana + nazwy zgodne ze skrótem).
 - `test-catalog-invincible` +1 (PA1: brak boostów / nieznana moc / filtr słów / ref mocy).
 - Pozostałe `dev/test-*.mjs` zielone poza `test-build-snapshot` (2 porażki w kodzie W2-3 w toku: kolejność talentów i linia talentu; nie moje pliki).
+- Na żywo (tor 20, folder roboczy po commicie e8630b9, aktor ZZ-AIGEN usunięty, świat przywrócony): `api.build.ranks()` = 4 rangi z liczbami; `setOptions` zwraca opcje (`null` usuwa `profile`), nagłówek arkusza `rank=street(drawer)`; `search_catalog` z mocą bez boostów (notatka „no boosts or limits”) i z nieznaną nazwą (notatka „No power ...”); `pack.apply` dodanie talentu + Resources: zwięzły wynik ~600 znaków z `runId`, `ops[].outcome`, budżetem; usunięcie bez `confirmed` -> `needsConfirm` + `confirm`, nic nie zapisane; z `confirmed: true` zapisane; `verbose` ~6-9 KB z `plan.projected`; weryfikacja przez `pack.snapshot(...).text`.
+- NIE sprawdzone na żywo: `markProposal` i znacznik w prawdziwej turze (wymaga przekaźnika próby na sucho; tylko testy node).
 
 ## W2-1, W2-2, W2-5: moc dzielona, ścieżki błędów replace, czytelny budżet (D-A, D-B, D-F, D-K, D-Q)
 
