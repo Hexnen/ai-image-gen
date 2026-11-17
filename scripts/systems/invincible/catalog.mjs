@@ -85,6 +85,12 @@ export function htmlToText(html) {
   s = s.replace(/@\w+\[[^\]]*\]\{([^}]*)\}/g, "$1").replace(/@\w+\[([^\]]*)\]/g, "$1");
   // W3-13: inline roll markers ([[D3]], [[/r 1d6]], [[/r 1d6]]{label}) -> their label or formula
   s = s.replace(/\[\[(?:\/\w+\s+)?([^\]]*?)\]\](?:\{([^}]*)\})?/g, (m, f, l) => (l ?? f).trim());
+  // W4-B-5: one table row = one line "a | b | c": tags inside a cell (<p>, <br>, lists, emphasis) become spaces, so a cell never
+  // spreads over several lines (dry run 4: read_rules "vehicles" came out one cell per line, every "|" on its own line)
+  s = s.replace(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi, (m, row) => {
+    const cells = [...row.matchAll(/<t([dh])\b[^>]*>([\s\S]*?)<\/t\1>/gi)].map((c) => c[2].replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim());
+    return cells.length ? `\n${cells.join(" | ")}\n` : m;
+  });
   s = s.replace(/<h[1-6]\b[^>]*>/gi, "\n## ").replace(/<\/h[1-6]>/gi, "\n");
   s = s.replace(/<li\b[^>]*>/gi, "\n- ").replace(/<\/(li|ul|ol)>/gi, "\n");
   s = s.replace(/<\/t[dh]>\s*<t[dh]\b[^>]*>/gi, " | ").replace(/<\/?tr\b[^>]*>/gi, "\n");
@@ -106,6 +112,45 @@ export function summaryOf(text, words = SUMMARY_WORDS) {
   const first = (m ? m[1] : t);
   const w = first.split(" ");
   return w.length > words ? `${w.slice(0, words).join(" ").replace(/[,;:.]+$/, "")}…` : first;
+}
+
+/* ---- W4-B-1: talents and drawbacks carry their mechanical core in the index (dry run 4: a drawback summary cut before its rule
+   made the model state "no mechanical effect"). The rule sentence is compressed (articles, boilerplate the `needs` column already
+   says), never cut inside its last few words. */
+export const RULE_WORDS = 18;       // words of the rule sentence ...
+export const RULE_SLACK = 4;        // ... plus up to this many more rather than cutting just before the end
+const MECH_WORDS = /\d|\b(?:damage|armou?r|rolls?|dice|health|resolve|stress|karma|resources|reputation|doubled?|halv\w*|re-?rolls?|increase\w*|decrease\w*|push\w*|cannot|quick action|full action|lose access|no powers)\b/i;
+const MECH_ATTR = /\b(?:FIGHTING|AGILITY|STRENGTH|REASON|INTUITION|PRESENCE)\b/;
+/** does this sentence state a game mechanic (a number, a game term, an attribute in capitals)? */
+export const isMechanic = (s) => MECH_WORDS.test(s) || MECH_ATTR.test(s);
+/** rules sentence -> shorter text with the same rule: drops articles, "(choose one ...)" / "defined when you select this X" (the
+    index `needs` column says it), "You get +2" -> "+2", "N points of stress" -> "N stress", "You can" -> "Can" */
+export function compressRule(s) {
+  return String(s ?? "")
+    .replace(/\s*\(choose one[^)]*\)/gi, "")
+    .replace(/,?\s*defined\b[^.,;]{0,30}?\bwhen you select this \w+/gi, "")   // "defined [optional short qualifier] when you select this X"
+    .replace(/\b(?:the|a|an)\s+/gi, "")
+    .replace(/\bYou (?:get|gain) (?=[+–−-]\d)/g, "")
+    .replace(/\b(\d+) points? of stress\b/g, "$1 stress")
+    .replace(/\bYou can\b/g, "Can")
+    .replace(/\s+([,.;:])/g, "$1").replace(/\s+/g, " ").trim();
+}
+const capWords = (s, n, slack) => {
+  const w = s.split(" ");
+  return w.length > n + slack ? `${w.slice(0, n).join(" ").replace(/[,;:.–-]+$/, "")}…` : s;
+};
+/**
+ * Index summary of a talent / drawback: the first sentence when it states a mechanic, else the first of the next three sentences
+ * that does (the name and the needs column say what the item is), else the first sentence; compressed, at most RULE_WORDS (+
+ * RULE_SLACK) words. Quotes / pipes as in summaryOf.
+ */
+export function ruleSummary(text) {
+  const t = oneLine(text).replace(/^#+\s*/, "").replace(/\|/g, "/");
+  if (!t) return "";
+  const sents = t.split(/(?<=[.!?])\s+(?=[A-Z"(+–−-])/).map(compressRule).filter(Boolean);
+  const s0 = sents[0] ?? "";
+  const pick = isMechanic(s0) ? s0 : sents.slice(1, 4).find(isMechanic) ?? s0;
+  return capWords(pick, RULE_WORDS, RULE_SLACK);
 }
 
 /** Cut text at `cap` chars with an explicit marker (spec 6: "(truncated, N chars)"). */
@@ -463,7 +508,7 @@ export async function buildCatalog(source, { feedRules = true } = {}) {
   }
   for (const e of entries) {
     e.ref = `${KIND_INFO[e.kind].short}:${e.id}`;
-    if (e.summaryText == null) e.summaryText = summaryOf(htmlToText(e.html));
+    if (e.summaryText == null) e.summaryText = e.kind === "talent" || e.kind === "drawback" ? ruleSummary(htmlToText(e.html)) : summaryOf(htmlToText(e.html));
     counts[e.kind] = (counts[e.kind] ?? 0) + 1;
   }
   const missingRequired = REQUIRED_PACKS.filter((p) => missing.includes(p));
@@ -523,7 +568,7 @@ const clean = (s) => oneLine(s).replace(/\|/g, "/");
 export function indexText(cat) {
   const out = [];
   out.push("<catalog>");
-  out.push("Installed Invincible content (invincible-core). Use refs exactly as written; get_entries(refs) gives the full rules text. Columns per section header; '-' = none; fx = the item's effects on the sheet (attribute or field change).");
+  out.push("Installed Invincible content (invincible-core). Use refs exactly as written; get_entries(refs) gives the full rules text. Columns per section header; '-' = none; fx = the item's effects on the sheet (attribute or field change); fx text = no sheet effect (rule in the summary/text); (disabled) = off until switched on in play.");
   const sec = (kind, header, line) => {
     const list = cat.byKind(kind);
     if (!list.length) return;
@@ -540,7 +585,9 @@ export function indexText(cat) {
   sec("limit", "ref|name|summary, grouped under @power", (e) => `${e.ref}|${clean(e.name)}|${e.summaryText || "-"}`);
   sec("powerSource", "ref|name|summary", (e) => `${e.ref}|${clean(e.name)}|${e.summaryText || "-"}`);
   // W3-13: fx = the item's own effects in short (finding 4: a drawback's stat penalty was invisible in the index)
-  const fx = (e) => fxSummary(e.effects) || "-";
+  // W4-B-2: "text" = effects data read and none changes the sheet (the rule lives in the text); "-" = no effects data (adapter
+  // without documents)
+  const fx = (e) => fxSummary(e.effects) || (Array.isArray(e.effects) ? "text" : "-");
   sec("talent", "ref|name|fx|summary", (e) => `${e.ref}|${clean(e.name)}|${fx(e)}|${e.summaryText || "-"}`);
   sec("drawback", "ref|name|needs a choice (source/defined/-)|fx|summary", (e) => `${e.ref}|${clean(e.name)}|${e.needs || "-"}|${fx(e)}|${e.summaryText || "-"}`);
   const gearLine = (e) => {
@@ -628,6 +675,30 @@ function actorDetails(data) {
   return { type: data?.type, attributes: attrs, ...(sys.resources != null ? { resources: sys.resources } : {}), ...(sys.reputation != null ? { reputation: sys.reputation } : {}), texts, items, ...(bio ? { text: cut(bio, 1500) } : {}) };
 }
 
+export const LEVEL_TEXT_CAP = 500;   // W4-B-3: one level's own lines in get_entries perLevel
+/** split power -> { basic: { fx? }, major: { fx?, text? }, ... }: `fx` = fxSummary of that level document's effects, `text` = the
+    level document's lines that the Basic document does not have (cut at LEVEL_TEXT_CAP). A level whose document cannot be read
+    is left out. */
+export async function levelFacts(e, basicData, source) {
+  const baseLines = new Set(htmlToText(basicData?.system?.description ?? e.html).split("\n"));
+  const out = {};
+  for (const w of LEVEL_WORDS) {
+    const id = e.levelDocs?.[w];
+    if (!id) continue;
+    const d = id === e.id ? basicData : await source.document(e.pack, id);
+    if (!d) continue;
+    const o = {};
+    const fx = fxSummary(effectsOf(d.effects));
+    if (fx) o.fx = fx;
+    if (id !== e.id) {
+      const own = htmlToText(d.system?.description ?? "").split("\n").filter((l) => l && !baseLines.has(l));
+      if (own.length) o.text = cut(own.join("\n"), LEVEL_TEXT_CAP);
+    }
+    out[w] = o;
+  }
+  return out;
+}
+
 /**
  * Full details for up to MAX_REFS refs. `extras.archetype(name)` (optional) adds plus-ultra's structured archetype data (else
  * archetypeFacts). Occupations carry resources + talents (names). No slot note (W2-4).
@@ -667,7 +738,12 @@ export async function getEntries(cat, source, refs, { extras = {} } = {}) {
       o.rulesText = cut(htmlToText(data.system?.description ?? e.html), RULES_TEXT_CAP);
       if (e.kind === "power") {
         // W2-4: the level -> ref map only for split powers (one document per level); others: the highest level
-        if (e.split) { o.split = true; o.levels = Object.fromEntries(LEVEL_WORDS.filter((w) => e.levelDocs[w]).map((w) => [w, `powers:${e.levelDocs[w]}`])); }
+        if (e.split) {
+          o.split = true; o.levels = Object.fromEntries(LEVEL_WORDS.filter((w) => e.levelDocs[w]).map((w) => [w, `powers:${e.levelDocs[w]}`]));
+          // W4-B-3: what each level gives (dry run 4: only the Basic text was visible). Per level: its effects in short and the
+          // lines of its own text that the Basic text (rulesText) does not have; nothing when a level adds nothing.
+          o.perLevel = await levelFacts(e, data, source);
+        }
         else o.maxLevel = levelWord(e.maxLevel);
         const lv = cat.levelOf(ref);
         if (lv) o.level = lv;

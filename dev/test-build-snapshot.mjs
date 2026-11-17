@@ -517,6 +517,67 @@ await test("W4-A-1: VALID line lists an empty team under info (solo hero), other
   assert.ok(!/warns=[^ ]*team\.empty/.test(line) && /info=[^ ]*team\.empty/.test(line), line);
 });
 
+/* ---------------------------------------------------------------- wave 4 group B */
+await test("W4-B-4: LIMITED line when a power with a limit (or its boost) changes a sheet number; none without a limit or when off", async () => {
+  const { limitedLines, preparedField } = await import("../scripts/systems/invincible/snapshot.mjs");
+  const a = typicalHero();
+  const bolt = a.items.find((i) => i.name === "Spark Bolt");   // carries the limit "Needs Charging" in the fixture
+  const nid = idGen(4242);
+  const fx = effect(nid(), "Bolt punch", [["system.derived.slugfest.damage", 3]]);
+  const items = a.items.map((i) => (i === bolt ? { ...i, effects: [fx], _source: { ...i._source, effects: [fx] } } : i));
+  const s = snap(rebuild(a, { items }));
+  const line = s.body.split("\n").find((l) => l.startsWith("LIMITED"));
+  assert.equal(line, `LIMITED slugfestDamage "Spark Bolt" +3 limits="Needs Charging" (the sheet counts it always; the limit's text may restrict it)`);
+  assert.match(s.body, /^PREPARED .*slugfestDamage \d+/m, "the number itself stays as the system prepares it");
+  assert.equal(snap(a).body.includes("LIMITED"), false, "no effect on the limited power: no line");
+  // without the limit: no line; a disabled effect: no line
+  assert.equal(snap(rebuild(a, { items: items.filter((i) => i.name !== "Needs Charging") })).body.includes("LIMITED"), false);
+  const off = effect(nid(), "Bolt punch", [["system.derived.slugfest.damage", 3]], { disabled: true });
+  assert.equal(snap(rebuild(a, { items: a.items.map((i) => (i === bolt ? { ...i, effects: [off], _source: { ...i._source, effects: [off] } } : i)) })).body.includes("LIMITED"), false);
+  assert.equal(preparedField("system.derived.health.bonus"), "healthMax"); assert.equal(preparedField("system.attributes.agility.value"), "agility");
+  assert.equal(preparedField("bonus.armorProtection"), "bonus.armorProtection");
+  // the line has its own key, folds through a diff, and a boost of the limited power counts too
+  assert.equal(lineKey(line), "LIMITED slugfestDamage");
+  const up = formatUpdate(snap(a).lines, s);
+  assert.match(up, /^\+ LIMITED slugfestDamage /m);
+  assert.ok(sameLines(applyUpdate(snap(a).lines, up), s.lines));
+  const boostRow = { id: "b1", type: "boost", name: "Mock Boost", powerId: "p1", effects: [{ disabled: false, transfer: true, changes: [{ key: "bonus.grapple", mode: "add", value: "2" }] }] };
+  assert.deepEqual(limitedLines([{ id: "p1", type: "power", name: "P", effects: [] }, boostRow, { id: "l1", type: "limit", name: "L", powerId: "p1" }]),
+    [`LIMITED bonus.grapple "Mock Boost" +2 limits="L" (the sheet counts it always; the limit's text may restrict it)`]);
+});
+
+await test("W4-B-6: '~' lines carry what changed inside them; removed one-key lines say what they held; fold unchanged", async () => {
+  const { lineDelta, lineFields } = await import("../scripts/systems/invincible/snapshot.mjs");
+  const a = typicalHero(), s0 = snap(a);
+  const lean = a.items.find((i) => i.name === "Lean Times");
+  const s1 = snap(rebuild(a, { items: a.items.filter((i) => i !== lean) }));
+  const up = formatUpdate(s0.lines, s1);
+  const rows = up.split("\n");
+  const at = (re) => rows.findIndex((l) => re.test(l));
+  const p = at(/^~ PREPARED /);
+  assert.ok(p > 0, up); assert.match(rows[p + 1], /^ {2}\(changed: .*resources 2 -> -/, rows[p + 1]);
+  const b = at(/^~ BONUS /);
+  assert.ok(b > 0, up); assert.match(rows[b + 1], /^ {2}\(changed: resources Lean Times -1 -> -\)$/);
+  assert.match(up, new RegExp(`^- I ${lean.id} "Lean Times"$`, "m"), "removed item named with '-'");
+  assert.ok(sameLines(applyUpdate(s0.lines, up), s1.lines), "indented delta lines do not change the fold");
+  // nextSheetBlock keeps folding to the fresh picture
+  const n0 = nextSheetBlock(null, s0), n1 = nextSheetBlock(n0.held, s1);
+  assert.equal(n1.kind, "update"); assert.ok(sameLines(n1.held.lines, s1.lines));
+  // field rules: pairs, k=v, quoted name, bare flags, long values
+  assert.equal(lineDelta("ATTR fighting 6 agility 7", "ATTR fighting 7 agility 7"), "changed: fighting 6 -> 7");
+  assert.equal(lineDelta(`I x1 gear "Rope" ref=gears:a cost=1`, `I x1 gear "Rope Two" ref=gears:a edited cost=2`), `changed: name "Rope" -> "Rope Two", cost 1 -> 2, +edited`);
+  assert.equal(lineDelta(`VALID baseline ok=false errors=attr.over(1) budget=3`, `VALID baseline ok=true budget=3`), "changed: ok false -> true, errors -attr.over(1)");
+  assert.equal(lineDelta(`VALID baseline ok=false errors=a.b,c.d(Name),e.f info=x.y`, `VALID baseline ok=false errors=a.b,e.f,g.h info=x.y,z.w`), "changed: errors -c.d(Name) +g.h, info +z.w");
+  assert.equal(lineDelta(`I x1 talent "T" custom desc="${"a".repeat(80)}"`, `I x1 talent "T" custom desc="${"b".repeat(80)}"`), "changed: desc changed");
+  assert.equal(lineDelta("EMPTY drive flaw", "EMPTY flaw"), "changed: -drive");
+  assert.deepEqual([...lineFields("PREPARED healthMax 9 slugfest 3 overrides=resources=4").kv], [["healthMax", "9"], ["slugfest", "3"], ["overrides", "resources=4"]]);
+  // a one-key line that disappears says what it held
+  const k0 = new Map([["BONUS", "BONUS resources: Mock -1"], ["ATTR", "ATTR fighting 1"]]);
+  const gone = formatUpdate(k0, { lines: new Map([["ATTR", "ATTR fighting 1"]]), fingerprint: "f" });
+  assert.match(gone, /^- BONUS \(was: resources: Mock -1\)$/m);
+  assert.ok(sameLines(applyUpdate(k0, gone), new Map([["ATTR", "ATTR fighting 1"]])));
+});
+
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);
 console.log("\nMeasured fixture sizes (local estimator, spec 9.2 [E]; confirm with count_tokens in T8):");
 for (const [k, v] of Object.entries(sizes)) console.log(`  ${k}: ${v.items} items, ${v.lines} lines, ${v.chars} chars, ~${v.tokensEst} tokens, cut level ${v.cutLevel}`);

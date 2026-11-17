@@ -7,6 +7,7 @@
 //   STORED health 7 resolve 9 reputation 2 resources 3 karma 0                       stored current values
 //   PREPARED healthMax 9 resolveMax 9 slugfest 3 ... overrides=resources=4          what effects/derivation make of it
 //   BONUS health: Durable +2; attack: Martial Arts +1                               system.bonuses (prepared)
+//   LIMITED slugfestDamage "Strike" +3 limits="Windup Strike" (...)                 a power's bonus while the power has limits (W4-B-4)
 //   TEXT <field> "..."                                                               one line per non-empty text field
 //   EMPTY drive flaw ...                                                             text fields that are blank
 //   I <itemId> <type> "<name>" lvl= src=<id> role=hero|occupation|extra pow=<id> ref=<pack:id>|custom edited cost= ... auto=[...] script fx=... desc="..."
@@ -17,10 +18,11 @@
 //   NOTE ...                                                                          cut notices (size cap)
 //   VALID <kind> ok=false errors=... warns=... budget=34 spent=31 slots=3/4 cap=10 drawbacks=1/2
 //   </sheet>
-// Line keys: ACTOR, ATTR, STORED, PREPARED, BONUS, EMPTY, NOTE, VALID (first word); TEXT/I/FX/FLAG/UNSAVED + second word.
+// Line keys: ACTOR, ATTR, STORED, PREPARED, BONUS, EMPTY, NOTE, VALID (first word); TEXT/I/FX/FLAG/UNSAVED/LIMITED + second word.
 //
 // Update block (5.4): `<sheet_update doc=... fp=<new> base=<old>>` with `+ <line>` added, `~ <line>` changed (the full new
-// line), `- <key> "<name>"` removed. `<sheet_unchanged/>` when nothing changed.
+// line, then an indented `  (changed: field old -> new, ...)` line, W4-B-6), `- <key> "<name>"` removed (a one-key line:
+// `- <KEY> (was: ...)`). `<sheet_unchanged/>` when nothing changed.
 
 import { LEVEL_WORDS, readActor, readItemDocument, getCatalogLookup, readLiveForm } from "./reader.mjs";
 
@@ -36,7 +38,7 @@ export const LIMITS = Object.freeze({
   diffTokens: 1500,     // ... AND <= 1500 tokens, else a fresh full block
   maxDiffs: 8           // a fresh full block after 8 diffs
 });
-const KEY2 = new Set(["TEXT", "I", "FX", "FLAG", "UNSAVED"]);
+const KEY2 = new Set(["TEXT", "I", "FX", "FLAG", "UNSAVED", "LIMITED"]);
 export const SUPERSEDES = "all earlier sheet blocks";
 
 /* ------------------------------------------------------------------ token estimate (local, no API) */
@@ -168,6 +170,7 @@ function buildLines(model, level = 0) {
       for (const b of model.bonuses) { if (!by.has(b.key)) by.set(b.key, []); by.get(b.key).push(`${b.from} ${signed(b.value)}`); }
       L.push(`BONUS ${[...by].map(([k, l]) => `${k}: ${l.join(", ")}`).join("; ")}`);
     }
+    L.push(...limitedLines(model.items));
     const empty = [];
     for (const [k, t] of Object.entries(model.texts ?? {})) {
       if (!t) { empty.push(k); continue; }
@@ -192,6 +195,42 @@ function buildLines(model, level = 0) {
   if (level > 0) L.push(`NOTE cut level ${level}; read_document gives the full text`);
   return L;
 }
+/* ---- W4-B-4: a number on the sheet that includes a bonus of a power with a limit (dry run 4: slugfestDamage 9 shown while the
+   +3 of Strike needs Windup Strike's preparation). The sheet's effects apply always; the line names the power, its bonus and its
+   limits so the model reads the limit before it states the number. No rule is guessed: only effects and links on the sheet. */
+const PREP_FIELD = [
+  [/^derived\.slugfest\.damage$/, "slugfestDamage"], [/^derived\.slugfest\.(?:max|bonus|value)$/, "slugfest"],
+  [/^derived\.health\.(?:max|bonus)$/, "healthMax"], [/^derived\.resolve\.(?:max|bonus)$/, "resolveMax"]
+];
+/** effect change key -> the PREPARED / ATTR field it changes ("system.derived.slugfest.damage" -> "slugfestDamage"), else the key */
+export function preparedField(key) {
+  const k = fxKey(key);
+  for (const [re, f] of PREP_FIELD) if (re.test(k)) return f;
+  return /^attributes\.(\w+)\.value$/.exec(k)?.[1] ?? k;
+}
+/** items -> ['LIMITED <field> "<power or boost>" <value> limits="A","B" (...)'], one line per field, fields sorted */
+export function limitedLines(items) {
+  const list = items ?? [];
+  const limits = new Map();
+  for (const l of list) if (l.type === "limit" && l.powerId) { if (!limits.has(l.powerId)) limits.set(l.powerId, []); limits.get(l.powerId).push(l.name); }
+  if (!limits.size) return [];
+  const byField = new Map();
+  for (const it of list) {
+    const pid = it.type === "power" ? it.id : it.type === "boost" ? it.powerId : null;
+    const lims = pid ? limits.get(pid) : null;
+    if (!lims?.length) continue;
+    for (const e of it.effects ?? []) {
+      if (e.disabled || e.transfer === false) continue;
+      for (const c of e.changes ?? []) {
+        const f = preparedField(c.key);
+        if (!byField.has(f)) byField.set(f, []);
+        byField.get(f).push(`${quote(it.name)} ${(MODE_SIGN[c.mode] ?? MODE_SIGN.custom)(c.value)} limits=${[...lims].sort().map(quote).join(",")}`);
+      }
+    }
+  }
+  return [...byField.keys()].sort().map((f) => `LIMITED ${f} ${byField.get(f).join("; ")} (the sheet counts it always; the limit's text may restrict it)`);
+}
+
 function pushUnsaved(L, unsaved) {
   for (const u of unsaved ?? []) {
     const f = (x) => quote(cut(typeof x === "object" && x !== null ? JSON.stringify(x) : String(x ?? ""), LIMITS.unsavedChars));
@@ -272,13 +311,73 @@ const removedLabel = (key, oldLine) => {
   const m = String(oldLine ?? "").match(/^I \S+ \S+ ("(?:[^"\\]|\\.)*")/) ?? String(oldLine ?? "").match(/^FX \S+ ("(?:[^"\\]|\\.)*")/);
   return m ? `${key} ${m[1]}` : key;
 };
+/* ---- W4-B-6: what changed inside a "~" line (dry run 4: "resources 2" vanished from PREPARED and "Hard Times -1" from BONUS
+   with nothing saying so). Under each "~ <new line>" an indented "  (changed: ...)" line lists the fields whose value differs:
+   "field old -> new" ("-" = absent), "+flag" / "-flag" for bare words; long values (> DELTA_VALUE chars) only "field changed".
+   applyUpdate ignores indented lines, so the folded picture stays the same. */
+export const DELTA_VALUE = 60;
+export const DELTA_CHARS = 240;
+const PAIR_LINES = new Set(["ATTR", "STORED", "PREPARED"]);
+const LIST_KEYS = new Set(["errors", "warns", "info"]);
+/** quote-aware split on spaces */
+const tokens = (s) => String(s ?? "").match(/(?:[^\s"]+|"(?:[^"\\]|\\.)*")+/g) ?? [];
+/** line -> { kv: Map(field -> value), flags: Set } (fields as the line shows them; the line's key words are skipped) */
+export function lineFields(line) {
+  const kv = new Map(), flags = new Set();
+  const key = lineKey(line), first = key.split(" ")[0];
+  const rest = line.slice(key.length).trim();
+  if (first === "TEXT") { kv.set("text", rest); return { kv, flags }; }
+  if (first === "BONUS") {
+    for (const g of rest.split("; ")) { const i = g.indexOf(": "); if (i > 0) kv.set(g.slice(0, i), g.slice(i + 2)); else if (g) flags.add(g); }
+    return { kv, flags };
+  }
+  if (first === "LIMITED") { kv.set("bonus", rest); return { kv, flags }; }
+  const t = tokens(rest);
+  for (let i = 0; i < t.length; i++) {
+    const tok = t[i], eq = tok.indexOf("=");
+    if (eq > 0 && !tok.startsWith("\"")) kv.set(tok.slice(0, eq), tok.slice(eq + 1));
+    else if (tok.startsWith("\"")) kv.set("name", tok);
+    else if (PAIR_LINES.has(first) && i + 1 < t.length && !t[i + 1].includes("=")) { kv.set(tok, t[i + 1]); i++; }
+    else flags.add(tok);
+  }
+  return { kv, flags };
+}
+/** old line, new line -> "changed: a 1 -> 2, b 3 -> -, +flag" | "" */
+export function lineDelta(oldLine, newLine) {
+  const a = lineFields(oldLine), b = lineFields(newLine);
+  const parts = [];
+  const show = (v) => (v === undefined ? "-" : v);
+  for (const k of [...new Set([...a.kv.keys(), ...b.kv.keys()])]) {
+    const x = a.kv.get(k), y = b.kv.get(k);
+    if (x === y) continue;
+    if (LIST_KEYS.has(k)) {   // VALID errors / warns / info: which codes went, which came
+      const xs = x ? x.split(",") : [], ys = y ? y.split(",") : [];
+      parts.push(`${k} ${[...xs.filter((c) => !ys.includes(c)).map((c) => `-${c}`), ...ys.filter((c) => !xs.includes(c)).map((c) => `+${c}`)].join(" ")}`);
+      continue;
+    }
+    parts.push((x?.length ?? 0) > DELTA_VALUE || (y?.length ?? 0) > DELTA_VALUE ? `${k} changed` : `${k} ${show(x)} -> ${show(y)}`);
+  }
+  for (const f of a.flags) if (!b.flags.has(f)) parts.push(`-${f}`);
+  for (const f of b.flags) if (!a.flags.has(f)) parts.push(`+${f}`);
+  if (!parts.length) return "";
+  const s = `changed: ${parts.join(", ")}`;
+  return s.length > DELTA_CHARS ? `${s.slice(0, DELTA_CHARS - 1).replace(/[,\s]+$/, "")}…` : s;
+}
+/** "- <key>" label: items and actor effects with their name; a whole one-key line (PREPARED, BONUS, ...) with what it said */
+const removedText = (key, oldLine) => {
+  const label = removedLabel(key, oldLine);
+  if (label !== key || KEY2.has(key.split(" ")[0]) || !oldLine) return label;
+  const was = String(oldLine).slice(key.length).trim();
+  return was ? `${key} (was: ${was.length > 120 ? `${was.slice(0, 119)}…` : was})` : key;
+};
 /** -> "<sheet_update ...>...</sheet_update>" text (or "<sheet_unchanged/>") */
 export function formatUpdate(oldLines, fresh, { doc, base } = {}) {
   const o = toLines(oldLines);
   const d = diffLines(o, fresh.lines);
   if (!d.count) return "<sheet_unchanged/>";
   const body = [
-    ...d.changed.map((l) => `~ ${l}`), ...d.added.map((l) => `+ ${l}`), ...d.removed.map((k) => `- ${removedLabel(k, o.get(k))}`)
+    ...d.changed.flatMap((l) => { const x = lineDelta(o.get(lineKey(l)) ?? "", l); return x ? [`~ ${l}`, `  (${x})`] : [`~ ${l}`]; }),
+    ...d.added.map((l) => `+ ${l}`), ...d.removed.map((k) => `- ${removedText(k, o.get(k))}`)
   ];
   return `${header("sheet_update", doc ?? "", fresh.fingerprint, base ? ` base=${base}` : "")}\n${body.join("\n")}\n</sheet_update>`;
 }

@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import {
   buildCatalog, indexText, search, getEntries, htmlToText, summaryOf, cut, h2Sections, refToUuid, KINDS, bookMaxLevel, hash,
-  effectsOf, fxSummary, fxLabel
+  effectsOf, fxSummary, fxLabel, ruleSummary, compressRule, isMechanic
 } from "../scripts/systems/invincible/catalog.mjs";
 import { rulesDigest, readRules, RULE_TOPICS, TOPIC_KEYS, splitParts } from "../scripts/systems/invincible/rules-digest.mjs";
 import { readToolDefs, makeReadTools, readDocument, toolResultText } from "../scripts/systems/invincible/tools.mjs";
@@ -396,7 +396,7 @@ await test("W3-13: fx column (talent, drawback), grouping, flags, placeholders; 
   const a = indexText(cat);
   const line = (n) => a.split("\n").find((l) => l.includes(`|${n}|`));
   assert.equal(line("Plain Trouble"), `drawbacks:${id("drwPlain")}|Plain Trouble|-|bonus.reason-3, 5 others -1|Plain placeholder.`);
-  assert.equal(line("Frail Thing"), `drawbacks:${id("drwFrail")}|Frail Thing|source|health+1 (disabled); bonus.intuiton-1 (not transferred)|Tie it to a power source (choose one) placeholder.`);
+  assert.equal(line("Frail Thing"), `drawbacks:${id("drwFrail")}|Frail Thing|source|health+1 (disabled); bonus.intuiton-1 (not transferred)|Tie it to power source placeholder.`, "W4-B-1: '(choose one)' dropped (the needs column says it)");
   assert.match(line("Quick Placeholder"), new RegExp(`^talents:${id("talQuick")}\\|Quick Placeholder\\|bonus\\.\\[attribute\\]\\+2\\|`));
   assert.match(a, /^# talent \(1\): ref\|name\|fx\|summary$/m);
   assert.match(a, /^# drawback \(2\): ref\|name\|needs a choice \(source\/defined\/-\)\|fx\|summary$/m);
@@ -416,6 +416,67 @@ await test("W3-13: fx column (talent, drawback), grouping, flags, placeholders; 
   delete s2.documents;
   const c2 = await buildCatalog(s2, { feedRules: false });
   assert.match(indexText(c2), new RegExp(`\\|Plain Trouble\\|-\\|-\\|`));
+});
+
+/* ---------------------------------------------------------------- wave 4 group B (invented texts) */
+await test("W4-B-1: ruleSummary picks the rule sentence, compresses it, never cuts its last few words", () => {
+  // flavour first, rule second: the rule is the summary
+  assert.equal(ruleSummary("Mock grit: a soft spot for something, defined when you select this drawback. A blow from it deals double damage and ignores the Armor value."),
+    "blow from it deals double damage and ignores Armor value.");
+  // rule in the first sentence: kept (articles out, "You get +2" -> "+2", "points of stress" -> "stress")
+  assert.equal(ruleSummary("You get +2 dice on AGILITY rolls while ducking a mock blow. Fluff."), "+2 dice on AGILITY rolls while ducking mock blow.");
+  assert.equal(ruleSummary("You can spend 1 point of stress on a mock trick."), "Can spend 1 stress on mock trick.");
+  // no rule anywhere: the first sentence
+  assert.equal(ruleSummary("You are wanted by a mock group. They chase you around."), "You are wanted by mock group.");
+  // capital attribute names count, prose words in lower case do not
+  assert.equal(isMechanic("a strong presence in the story"), false); assert.equal(isMechanic("roll PRESENCE"), true);
+  // 18 words + up to 4 more are kept whole; longer is cut with "…"
+  const w = (n) => Array.from({ length: n }, (_, i) => `w${i}`).join(" ");
+  assert.equal(ruleSummary(`${w(21)} 3.`), `${w(21)} 3.`);
+  assert.equal(ruleSummary(`${w(30)} 3.`), `${w(18)}…`);
+  assert.ok(!ruleSummary("x | y 2").includes("|"));
+  assert.equal(compressRule("A mock (choose one, any kind) source, defined together by the group when you select this drawback."), "mock source.");
+});
+await test("W4-B-1/2: index talent/drawback lines carry the rule; fx 'text' = effects read, none on the sheet; '-' = no data", async () => {
+  const { source: s, packs } = fixture();
+  packs.drawbacks.docs.push({ _id: id("drwWeak"), name: "Mock Weakness", type: "drawback", system: { description: P("Mock grit: a soft spot, defined when you select this drawback. A blow from it deals double damage.") }, effects: [] });
+  const c = await buildCatalog(s, { feedRules: false });
+  const a = indexText(c);
+  assert.equal(a.split("\n").find((l) => l.includes("|Mock Weakness|")), `drawbacks:${id("drwWeak")}|Mock Weakness|defined|text|blow from it deals double damage.`);
+  assert.match(a, /fx text = no sheet effect/);
+  assert.match(a, /\(disabled\) = off until switched on in play/);
+  // other kinds keep the 12-word first sentence
+  assert.equal(c.findByName("power", "Glide Step").summaryText, "Alpha placeholder sentence about moving.");
+  const { source: s2 } = fixture(); delete s2.documents;
+  const c2 = await buildCatalog(s2, { feedRules: false });
+  assert.match(indexText(c2), /\|Quick Placeholder\|-\|/, "no effects data: '-' as before");
+});
+await test("W4-B-3: get_entries perLevel for split powers only: each level's fx and its own lines; sizes small", async () => {
+  const { source: s, packs } = fixture();
+  const lvl = (k, v) => [{ name: "Lvl", changes: [{ key: "system.derived.slugfest.damage", type: "add", value: v }] }];
+  const docs = packs.powers.docs;
+  docs.find((d) => d._id === id("pwrZapB")).effects = lvl("b", "1");
+  Object.assign(docs.find((d) => d._id === id("pwrZapM")), { effects: lvl("m", "2"), system: { level: "major", description: P("Zap placeholder basic text &amp; more.") + P("Major mock extra line.") } });
+  Object.assign(docs.find((d) => d._id === id("pwrZapX")), { effects: lvl("x", "3"), system: { level: "massive", description: P("Zap placeholder basic text &amp; more.") } });
+  const c = await buildCatalog(s, { feedRules: false });
+  const before = JSON.stringify((await getEntries(cat, source, [`powers:${id("pwrZapB")}`])).entries[0]).length;
+  const r = await getEntries(c, s, [`powers:${id("pwrZapM")}`, `powers:${id("pwrGlide")}`]);
+  const [zap, glide] = r.entries;
+  assert.deepEqual(zap.perLevel, { basic: { fx: "slugfest.damage+1" }, major: { fx: "slugfest.damage+2", text: "Major mock extra line." }, massive: { fx: "slugfest.damage+3" } });
+  assert.equal(zap.level, "major"); assert.ok(zap.levels.major);
+  assert.equal(glide.perLevel, undefined, "not split: no perLevel");
+  const after = JSON.stringify(zap).length;
+  assert.ok(after - before < 400, `perLevel adds ${after - before} chars`);
+  // a level text longer than the cap is cut with the marker
+  docs.find((d) => d._id === id("pwrZapX")).system.description = P("Long mock line. ".repeat(80));
+  const r2 = await getEntries(c, s, [`powers:${id("pwrZapB")}`]);
+  assert.match(r2.entries[0].perLevel.massive.text, /\(truncated, \d+ chars\)$/);
+});
+await test("W4-B-5: table rows render one per line even when cells hold <p>/<br>", () => {
+  const html = "<p>Intro.</p><table><thead><tr><th><p>Name</p></th><th><p>Kind</p></th><th>Cost</th></tr></thead><tbody><tr><td><p>Mock Cart</p></td><td><p>Ground</p><p>slow</p></td><td><p>1</p></td></tr><tr><td><p>Mock Kite</p></td><td>Air<br>fast</td><td></td></tr></tbody></table><p>After.</p>";
+  const t = htmlToText(html);
+  assert.equal(t, "Intro.\nName | Kind | Cost\nMock Cart | Ground slow | 1\nMock Kite | Air fast |\nAfter.");
+  assert.ok(!t.split("\n").some((l) => l.trim() === "|"), "no line that is only a separator");
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);

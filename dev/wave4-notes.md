@@ -63,3 +63,54 @@ Pliki: `scripts/systems/invincible/validate.mjs`, `proposal.mjs`, `writer.mjs`, 
 
 ### Niezweryfikowane
 - Bez testu na żywo (tor nie brany). Na prawdziwych danych niesprawdzone: kształt efektu Signature Item w paczce v14 (zakładam `bonus.[attribute]` w `system.changes`, jak w W3-9 na torze 8) i czy system liczy `bonus.reason` po zapisie; zachowanie modelu z nowymi komunikatami (runda 5); replace z gear w szufladzie T7 (podgląd usunięć gearu).
+
+## W4-B: informacje o wpisach katalogu i karcie (próba na sucho 4, grupa B)
+
+Pliki: `scripts/systems/invincible/catalog.mjs` (streszczenia talentów/wad, kolumna `fx`, linia wstępu indeksu, `perLevel` w get_entries, tabele w `htmlToText`), `snapshot.mjs` (linia `LIMITED`, opis zmian pod `~`, `- KLUCZ (was: ...)`), testy `dev/test-catalog-invincible.mjs` (+4), `dev/test-build-snapshot.mjs` (+2). `reader.mjs`, `tools.mjs`, `scripts/build/sheet-sync.mjs` bez zmian (Invincible używa `nextSheetBlock` pakietu, harness.mjs:368; `sheet-sync.mjs` zostaje dla pakietów bez niego). Teksty prefiksu nietknięte (lista niżej). Wendor bez zmian (`sync.mjs --check` OK).
+
+### Weryfikacja w kodzie (przed zmianą)
+- 1 potwierdzone: streszczenie = pierwsze zdanie, max 12 słów (`catalog.mjs` `summaryOf`, `SUMMARY_WORDS`), dla każdego rodzaju. Na torze 8: 37/57 talentów i 12/15 wad ucięte „…”; u większości wad pierwsze zdanie to opis bez reguły, reguła w zdaniu 2-3 (Vulnerable: reguła w drugim zdaniu). `fx` „-” znaczył zarówno „brak efektów”, jak i „brak danych” (`indexText`).
+- 2 potwierdzone: get_entries dla mocy dzielonej dawał `rulesText` tylko dokumentu Basic i mapę refów `levels` (`getEntries`). Na torze 8 są 4 moce dzielone; dokumenty poziomów różnią się efektami (np. `slugfest.damage+1..+4`, `bonus.armorProtection+2..+5`) i u 3 z 4 także własnymi liniami tekstu; u jednej tekst wszystkich poziomów jest identyczny (różnica tylko w efekcie).
+- 3 potwierdzone: `slugfestDamage` w PREPARED to `system.derived.slugfest.damage` po efektach (`reader.mjs readPrepared`); efekt mocy (`derived.slugfest.damage+3`) działa zawsze, linia nie mówi o limicie podpiętym do tej mocy (`pow=` w linii limitu był jedynym śladem).
+- 4 potwierdzone: `~` niósł pełną nową linię bez starej wartości (`snapshot.mjs formatUpdate`); usunięte linie miały już `-` (przedmioty i efekty z nazwą, inne sam klucz).
+- 5 talenty: `(disabled)` to ten sam znacznik co przy wadach (`fxSummary`), spójne. Ale dane pokazują, że `disabled` to efekty sytuacyjne włączane w grze (Size Alteration powiększ/pomniejsz, Sniper, Hard Hitter, Bigger They Are, Martial Arts), a nie martwe: reguła talentu działa z tekstu. Skrót mówi „(disabled) = no effect” (rules-digest.mjs:54), co myli (W4-B-T1). Pojazdy: szum był z NASZEGO renderowania: każda komórka tabeli w `<p>` (wszystkie 250 komórek strony vehicles, wszystkie tabele 12 stron), `</p>` dawało nową linię, więc `a\n|\nb`.
+
+### Co zmienione
+- W4-B-1 Indeks, talenty i wady: `ruleSummary` = pierwsze zdanie, gdy podaje mechanikę (liczba, termin gry, atrybut WIELKIMI literami), inaczej pierwsze z następnych trzech, które ją podaje (nazwa i kolumna `needs` mówią, czym przedmiot jest), inaczej pierwsze zdanie; kompresja `compressRule` (bez przedimków, bez „(choose one…)” i „defined when you select this X”, „You get +2” -> „+2”, „N points of stress” -> „N stress”, „You can” -> „Can”); 18 słów + do 4 więcej zamiast cięcia tuż przed końcem. Inne rodzaje bez zmian (`summaryOf`, 12 słów).
+- W4-B-2 Kolumna `fx`: `text` = dane efektów wczytane i żaden nie zmienia karty (reguła tylko w tekście/streszczeniu); `-` = brak danych (adapter bez `documents`). Linia wstępu: „fx text = no sheet effect (rule in the summary/text); (disabled) = off until switched on in play”.
+- W4-B-3 get_entries, tylko moce dzielone: pole `perLevel` `{ basic: {fx}, major: {fx, text}, ... }`: `fx` = skrót efektów dokumentu poziomu, `text` = linie tekstu poziomu, których nie ma w Basic (cięte na 500 znakach ze znacznikiem); `levels` (refy) bez zmian.
+- W4-B-4 Karta: linia `LIMITED <pole> "<moc|boost>" <wartość> limits="<limit>",... (the sheet counts it always; the limit's text may restrict it)` dla każdego aktywnego, przenoszonego efektu mocy (albo jej boostu), do której jest podpięty limit; pole jak w PREPARED (`slugfestDamage`, `slugfest`, `healthMax`, `resolveMax`, atrybut) albo klucz efektu. Nic nie zgadywane: tylko efekty i linki z karty; liczba w PREPARED bez zmian. Klucz linii `LIMITED <pole>` (KEY2).
+- W4-B-5 `htmlToText`: wiersz tabeli = jedna linia `a | b | c`, znaczniki w komórce (`<p>`, `<br>`, listy) jako spacje. Dotyczy read_rules, rulesText, sekcji archetypów/zawodów (indeks poza talentami/wadami bajt w bajt ten sam, sprawdzone hashami sekcji).
+- W4-B-6 `sheet_update`: pod każdą `~ <nowa linia>` wcięta linia `  (changed: pole stara -> nowa, ...)`: pary (ATTR/STORED/PREPARED), `k=v`, nazwa w cudzysłowie (`name`), słowa bez wartości jako `+słowo`/`-słowo`, listy VALID (`errors`/`warns`/`info`) jako `-kod +kod`, wartości > 60 znaków tylko `pole changed`, cała linia max 240 znaków. Usunięta linia jednokluczowa: `- BONUS (was: ...)` (max 120 znaków). `applyUpdate` pomija wcięte linie, więc złożony obraz = świeży snapshot (test + na żywo).
+
+### Pomiary (tor 8, kopia świata invincible; tylko liczby; tokeny = znaki/3,5, chyba że napisano inaczej)
+- Indeks (system[2]): 48 198 -> 49 681 znaków (+1 483, ~+424 tok; budżet +1,5k). Talenty 6 153 -> 7 129 (+976), wady 1 809 -> 2 218 (+409), linia wstępu +98. Pozostałe 9 sekcji identyczne (hash sekcji przed = z indeksu w req dry4-bat, po = tor). Streszczenia z „…”: talenty 37 -> 10, wady 12 -> 3. `fx`: talenty 38 `text` / 19 efektów (5 disabled), wady 9 `text` / 6 efektów (4 disabled); 0 `-`. Indeks stabilny między budowami. Budowa katalogu 462 ms (zimne paczki).
+- get_entries mocy dzielonych (znaki JSON wpisu, przed -> po): 920 -> 1 071, 517 -> 1 045, 1 580 -> 2 675, 755 -> 1 114; 0 uciętych; inne wpisy bez zmian.
+- read_rules vehicles: linie 498 -> 76, linie samego `|` 204 -> 0, znaki tekstu 6 855 -> 6 853, część 1 JSON 5 719 -> 5 312; estymator karty (`snapshot.mjs estimateTokens`, liczy nowe linie) część 1: 1 809 -> 1 402, cała strona po zmianie 1 813. 22/22 tematy bez linii samego `|`. Zawody 22/22 Resources + 3 talenty (sekcja indeksu identyczna).
+- Karta na żywo (aktor ZZ-AIGEN, usunięty; świat przywrócony): Strike Massive + Windup Strike -> 1 linia `LIMITED slugfestDamage` (~125 znaków). Bohater 21 linii (~863 tok est.), usunięcie Hard Times: `sheet_update` 699 -> 915 znaków (252 -> 336 tok est.) z 3 liniami zmian (PREPARED resources, BONUS resources, VALID errors/info/budget/drawbacks); złożenie = świeży snapshot.
+
+### Wybory (zachowanie tymczasowe)
+| # | Pytanie | Wybór |
+|---|---------|-------|
+| W4-B-a | Streszczenie talentu/wady | Zdanie z regułą (pierwsze albo jedno z trzech następnych), skompresowane, 18+4 słowa. Alternatywa: oba zdania (opis 6 słów + reguła) = ~+1,7k, ponad budżet. |
+| W4-B-b | `fx` bez efektów | `text` (dane są, efektów brak) vs `-` (brak danych). |
+| W4-B-c | Znacznik `(disabled)` | Bez zmiany słowa (skrót go cytuje); wstęp indeksu mówi „off until switched on in play”. Zmiana sensu w skrócie: W4-B-T1. |
+| W4-B-d | Poziomy mocy dzielonej | Nowe pole `perLevel` obok `levels` (kształt `levels` bez zmian); Basic tylko `fx`; tekst = linie spoza Basic, 500 znaków. |
+| W4-B-e | Premia za limitem | Osobna linia `LIMITED` (nie dopisek w PREPARED: diff i liczba zostają czytelne); każdy limit mocy, bez oceny, czy dany limit warunkuje premię (to mówi tekst limitu). |
+| W4-B-f | Opis zmian w `~` | Wcięta linia `(changed: ...)` pod linią (parser ją pomija); długie wartości bez treści; krótki TEXT pokazuje stare -> nowe. |
+
+### Texts for W4-T (nie zmienione tutaj)
+- W4-B-T1 `rules-digest.mjs:54` (wady, „(disabled), (not transferred) = no effect”): sens: „fx = sheet effects; text = none on the sheet, the rule is in the summary; (disabled) = a situational effect, off until switched on in play (the rule still applies as written); (not transferred) = never on the hero”; to samo dla talentów (dry4-dd 7). `dev/test-prompt-texts.mjs:238` sprawdza stare zdanie.
+- W4-B-T2 `tools.mjs:26` (opis get_entries): „split powers: levels (one ref per level) and perLevel (each level's effects and the text it adds to Basic)”.
+- W4-B-T3 `harness-prompt.mjs:15` (blok sheet_update): pod linią „~” stoi „(changed: field old -> new)” (opis, nie linia do złożenia); „- KEY (was: ...)” = cała linia znikła. Oraz linia karty `LIMITED`: premia mocy z limitem, karta liczy ją zawsze; przed podaniem liczby przeczytać limit (dry4-am 10).
+- W4-B-T4 skrót (dry4-dd 9-10): streszczenie wady/talentu podaje regułę; `fx text` nie znaczy „bez mechaniki”.
+
+### Testy
+- `test-catalog-invincible` 25 (+4: `ruleSummary`/`compressRule`/`isMechanic`; linie indeksu z regułą, `fx text` vs `-`, wstęp; `perLevel` (fx, własne linie, cięcie, tylko dzielone, przyrost < 400 znaków na fiksturze); tabele z `<p>`/`<br>` w komórkach. Zmieniona 1 asercja W3-13: „(choose one)” znika ze streszczenia wady).
+- `test-build-snapshot` 35 (+2: `LIMITED` (jest / bez limitu / efekt wyłączony / boost / klucz / diff i złożenie); `~` z `(changed: ...)` (PREPARED/BONUS po usunięciu wady, pary, k=v, nazwa, flagi, listy VALID, długie wartości, EMPTY), `- BONUS (was: ...)`, złożenie i `nextSheetBlock`).
+- Wszystkie `dev/test-*.mjs` zielone w żywym folderze; `sync.mjs --check` OK.
+
+### Niezweryfikowane
+- Zachowanie prawdziwego modelu z nowymi streszczeniami, `perLevel`, `LIMITED` i liniami zmian (runda 5); prawdziwe tokeny (`count_tokens`, T8): estymator znaki/3,5 nie widzi zysku z tabel.
+- Czy każdy limit z `LIMITED` rzeczywiście warunkuje premię: linia mówi tylko, że limit jest podpięty (celowo).
+- Szuflada T7 nie pokazuje linii `(changed: ...)` (to tylko tekst dla modelu); `scripts/build/sheet-sync.mjs` (inne pakiety) bez opisu zmian.
