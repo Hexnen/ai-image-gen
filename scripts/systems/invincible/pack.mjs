@@ -20,9 +20,10 @@ import { snapshot as sheetSnapshot, diffSnapshots, nextSheetBlock } from "./snap
 import { writerGroup } from "./writer-group.mjs";
 import { validateGroup } from "./validate.mjs";
 import { RANKS, RANK_ORDER, DEFAULT_RANK, levelCap } from "./vendor/chargen/rules.mjs";
+import { RANK_NAMES } from "./rules-digest.mjs";
 
-/** Book names of the ranks (same words as the rank table of rules-digest.mjs; dev/test-build-ops.mjs checks they agree). */
-export const RANK_NAMES = Object.freeze({ teen: "Teen Upstart", street: "Street Protector", global: "Global Guardian", cosmic: "Cosmic Champion" });
+/** Book names of the ranks: one copy, in rules-digest.mjs (the digest's rank table); W2-8. */
+export { RANK_NAMES };
 
 /**
  * ranks() -> [{ key, name, points, cap, powers, reputation, upgrades, maxLevel, isDefault }] in book order (teen .. cosmic).

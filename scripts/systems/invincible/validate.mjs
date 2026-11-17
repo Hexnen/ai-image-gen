@@ -623,7 +623,8 @@ function opBlame(ops, proj) {
   };
 }
 
-/** W2-5: what `before` means (the dry run read 40 points on an empty Global sheet as an error) */
+/** W2-5: what `before` means (the dry run read 40 points on an empty Global sheet as an error). W2-8: GM side only (pack.validate,
+    drawer preview); the model reads the same legend in the rules digest, so toolResult drops it. */
 export const BUDGET_NOTE = "points = attribute points available; every unused rank slot adds 2 (an empty sheet starts high, each slot then costs 2). perOp points/slots = that op's change; spentAfter = attribute sum after it.";
 /**
  * per-op cost (spec 7.5.4, P1-C): cumulative projections, each op's delta of budget points, slots and spent points, plus a
@@ -696,7 +697,7 @@ export function costLabel(c, info, ctx) {
 /* ================================================================== model-facing tools */
 const TOOL_DESC = {
   check_proposal: "Dry-run a proposal (same input and rules as submit_proposal) without making it the pending proposal: returns errors with hints, warnings, the budget before/after and each op's cost. Not needed before a submit (submit_proposal returns the same errors). Use it only to compare variants or to price a change you may not propose (\"what would Flight at Major cost?\").",
-  submit_proposal: "Submit the proposal for the GM; send it directly, without a check_proposal first. It is validated (references, the system's rules on the sheet as it would be after the change, a dry run of the write); errors come back with hints and the budget so you can fix and resubmit. On ok:true the GM sees a preview and decides; end your turn then. mode \"ops\" for an existing sheet (each op has its own opId; everything not named stays), mode \"replace\" only for a blank actor or an explicit rebuild. Nothing is written until the GM clicks Apply.\n" + PROPOSAL_GUIDE
+  submit_proposal: "Submit the proposal for the GM; send it directly, without a check_proposal first. It is validated (references, the system's rules on the sheet as it would be after the change, a dry run of the write); errors come back with hints and the budget so you can fix and resubmit. On ok:true the GM sees a preview and decides: write one short sentence and stop.\n" + PROPOSAL_GUIDE
 };
 export function proposalToolDefs() {
   return TOOL_NAMES.map((name) => ({ name, description: TOOL_DESC[name], input_schema: PROPOSAL_SCHEMA, strict: true }));
@@ -714,7 +715,8 @@ export function toolResult(name, r, doc) {
   out.warnings = model(r.warnings);
   if (r.info.length) out.info = model(r.info);
   if (r.autoFixed.length) out.autoFixed = r.autoFixed;
-  out.budget = r.budget;
+  // W2-8: the budget legend lives in the rules digest (cached prefix); the per-result `note` stays GM-side only
+  if (r.budget && typeof r.budget === "object" && "note" in r.budget) { const { note, ...b } = r.budget; out.budget = b; } else out.budget = r.budget;
   if (!r.ok) out.layer = r.layer;
   if (r.ok && name === "check_proposal") out.summary = r.summary ?? "";
   return out;

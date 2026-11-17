@@ -826,7 +826,9 @@ await test("W2-7 prefix stability with proposal markers: tools + system bytes id
   const bytes = fetchImpl.calls.map((c) => prefixBytes({ body: c.body }));
   assert.ok(bytes.every((b) => b === bytes[0]), "prefix bytes identical for every request");
   for (const c of fetchImpl.calls) {
-    assert.ok(!JSON.stringify(c.body.system).includes("<proposal"), "no marker in system[]");
+    // W2-8: system[0] describes the marker with placeholders (id="..." status="..."); a REAL marker never goes there
+    const real = /<proposal id=\\"(?!\.\.\.\\")/;
+    assert.ok(!real.test(JSON.stringify(c.body.system)), "no marker in system[]");
     assert.ok(!JSON.stringify(c.body.tools).includes("<proposal"), "no marker in tools");
   }
   const last = fetchImpl.calls.at(-1).body.messages;
