@@ -851,7 +851,9 @@ await test("P1-F/P1-G: writer group passes rank + profile to the replace convers
   const b = blank();
   const r2 = await g.apply(b, prop, {});
   assert.equal(r2.ok, false);
-  assert.ok(r2.validation.warnings.some((w) => w.code === "rank.defaulted"));
+  assert.ok(r2.warnings.some((w) => w.code === "rank.defaulted"), "concise result (W2-7) carries the validation's warnings");
+  const r2v = await g.apply(blank(), prop, { verbose: true });
+  assert.ok(r2v.validation.warnings.some((w) => w.code === "rank.defaulted"));
   // no rank but a proposal that fits Global: written, with the rank.defaulted warning in the result
   const PG = { ...P, attributes: { fighting: 7, agility: 7, strength: 4, reason: 4, intuition: 6, presence: 5 }, powers: [...P.powers, { ref: refOf("power", "Mind Static"), source: "s" }] };
   const c = blank();
@@ -859,6 +861,80 @@ await test("P1-F/P1-G: writer group passes rank + profile to the replace convers
   assert.equal(r3.ok, true, `${r3.message} ${JSON.stringify(r3.errors)}`);
   assert.ok(r3.warnings.some((w) => w.code === "rank.defaulted"));
   assert.equal(c._source.system.reputation, 2);
+});
+
+await test("W2-7: pack apply returns a concise result (run id, per-op outcome, budget, warnings); { verbose: true } = full plan", async () => {
+  const { writerGroup, conciseApplyResult } = await import("../scripts/systems/invincible/writer-group.mjs");
+  const T5v = await import("../scripts/systems/invincible/validate.mjs");
+  const { makeLookup } = await import("./fixtures/invincible-sheets.mjs");
+  let n = 0;
+  const mk = (validate) => writerGroup(() => ({ validate }), {
+    getCatalog: async () => cat, fetchData, isGM: () => true, userId: () => "gm1", userName: () => "Gamemaster", liveForm: () => null,
+    randomID: () => `ric${String(++n).padStart(13, "0")}`, now: () => clock, sleep: async () => {}, lockSettle: 0, log: { warn() {}, error() {} }
+  });
+  const g = mk((doc, p, o) => T5v.validateProposal(doc, p, { catalog: cat, lookup: makeLookup(), itemCheck: () => null, ...o }));
+  const a = hero();
+  const street = byName(a, "Silent Flight");
+  const prop = { target: "this", mode: "ops", rationale: "x", ops: [
+    { op: "addItem", opId: "d1", ref: refOf("drawback", "Haunted"), note: "by the pier" },
+    { op: "removeItem", opId: "r1", itemId: street.id }
+  ] };
+  // removal without confirmed: refused, the result names what confirmed:true would allow
+  const nc = await g.apply(a, prop, { rank: "global", profile: "in-play" });
+  assert.equal(nc.ok, false); assert.equal(nc.needsConfirm, true, JSON.stringify(nc));
+  assert.deepEqual(nc.confirm, [{ opId: "r1", action: "remove", name: "Silent Flight" }]);
+  assert.ok(nc.ops.every((o) => o.outcome === "not written"));
+  assert.ok(a.items.has(street.id), "nothing written");
+  const r = await g.apply(a, prop, { rank: "global", profile: "in-play", confirmed: true });
+  assert.equal(r.ok, true, `${r.message} ${JSON.stringify(r.errors)}`);
+  assert.match(r.runId, /^ric/);
+  assert.ok(!("plan" in r) && !("projected" in r) && !("validation" in r), "no plan / projection");
+  const d1 = r.ops.find((o) => o.opId === "d1"), r1 = r.ops.find((o) => o.opId === "r1");
+  assert.equal(d1.action, "add"); assert.equal(d1.outcome, "written"); assert.equal(d1.itemId, r.idMap.d1); assert.ok(a.items.has(d1.itemId));
+  assert.equal(r1.action, "remove"); assert.equal(r1.itemId, street.id); assert.equal(r1.outcome, "written");
+  assert.ok(r.budget?.before && r.budget?.after, JSON.stringify(r.budget));
+  assert.ok(Number.isFinite(r.budget.before.points) && Number.isFinite(r.budget.after.points));
+  assert.ok(!("perOp" in r.budget));
+  assert.ok(Array.isArray(r.warnings) && r.warnings.every((w) => typeof w.message === "string"));
+  assert.deepEqual(r.deleted, [street.id]);
+  // verbose: the writer's full result (plan with projected)
+  const b = hero();
+  const rv = await g.apply(b, { ...prop, ops: [prop.ops[0]] }, { rank: "global", profile: "in-play", verbose: true });
+  assert.equal(rv.ok, true); assert.ok(rv.plan?.projected?.items?.length > 0);
+  const short = JSON.stringify(conciseApplyResult(rv)).length, full = JSON.stringify(rv).length;
+  assert.ok(short * 5 < full, `concise ${short} vs full ${full}`);
+  // failures keep their flags; a non-object passes through
+  assert.equal(conciseApplyResult(null), null);
+  const f = conciseApplyResult({ ok: false, runId: null, plan: null, errors: [{ code: "sheet.unsaved", message: "m", extra: 1 }], warnings: [], created: [], updated: [], deleted: [], idMap: {}, message: "m", unsaved: [{ path: "name" }] });
+  assert.deepEqual(f.errors, [{ code: "sheet.unsaved", message: "m" }]); assert.deepEqual(f.unsaved, [{ path: "name" }]); assert.deepEqual(f.ops, []); assert.equal(f.budget, null);
+  // without a validator: no budget, still concise
+  const g0 = mk(null);
+  const c = hero();
+  const r0 = await g0.apply(c, { ops: [{ opId: "t", kind: "addItem", ref: refOf("talent", "Tough Skin") }] });
+  assert.equal(r0.ok, true); assert.equal(r0.budget, null); assert.equal(r0.ops[0].outcome, "written");
+});
+
+await test("W2-7: pack.ranks() = the vendored rank table with book names (same names as the rules digest); api.build.ranks()", async () => {
+  const { ranks, RANK_NAMES } = await import("../scripts/systems/invincible/pack.mjs");
+  const rules = await import("../scripts/systems/invincible/vendor/chargen/rules.mjs");
+  const { rulesDigest } = await import("../scripts/systems/invincible/rules-digest.mjs");
+  const rs = ranks();
+  assert.deepEqual(rs.map((r) => r.key), rules.RANK_ORDER);
+  for (const r of rs) {
+    const v = rules.RANKS[r.key];
+    assert.deepEqual([r.points, r.cap, r.powers, r.reputation, r.upgrades], [v.points, v.cap, v.powers, v.reputation, v.upgrades]);
+    assert.equal(r.maxLevel, rules.levelCap(r.key));
+    assert.equal(r.isDefault, r.key === rules.DEFAULT_RANK);
+    assert.equal(r.name, RANK_NAMES[r.key]);
+  }
+  const digest = String(await rulesDigest());
+  for (const r of rs) assert.ok(digest.includes(`${r.key}|${r.name}|${r.points}|${r.cap}|${r.powers}|${r.reputation}|`), `digest row for ${r.key}`);
+  rs[0].points = 999;
+  assert.notEqual(ranks()[0].points, 999, "fresh objects each call");
+  // builder-api wiring: api.build.ranks() asks the active pack
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../scripts/build/builder-api.mjs", import.meta.url), "utf8");
+  assert.match(src, /ranks: \(\) => \{ try \{ const p = api\.build\?\.registry\?\.getPack\?\.\(\); return typeof p\?\.ranks === "function" \? p\.ranks\(\) : \[\]; \}/);
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", some FAILED" : ""}`);

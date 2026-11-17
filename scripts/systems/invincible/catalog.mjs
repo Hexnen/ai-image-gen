@@ -435,10 +435,11 @@ export function indexText(cat) {
 export function search(cat, { query = "", kinds = null, forPower = null, limit = 10 } = {}) {
   const lim = Math.max(1, Math.min(MAX_RESULTS, Number.isInteger(limit) ? limit : 10));
   const ks = Array.isArray(kinds) && kinds.length ? new Set(kinds) : null;
-  let powerName = null;
+  let powerName = null, powerFound = null;
   if (forPower) {
     const p = cat.get(forPower) ?? cat.findByName("power", forPower);
-    powerName = p?.kind === "power" ? p.name : String(forPower);
+    powerFound = p?.kind === "power";   // PA1: tools.mjs tells "no boosts or limits" from "unknown power"
+    powerName = powerFound ? p.name : String(forPower);
   }
   const q = fold(query);
   const toks = q ? [...new Set(q.split(" ").filter((t) => t.length > 1 || /\d/.test(t)))] : [];
@@ -463,7 +464,7 @@ export function search(cat, { query = "", kinds = null, forPower = null, limit =
     scored.push({ e, s });
   }
   scored.sort((a, b) => b.s - a.s || byKindThenName(a.e, b.e));
-  return { total: scored.length, results: scored.slice(0, lim).map(({ e }) => briefOf(e)) };
+  return { total: scored.length, results: scored.slice(0, lim).map(({ e }) => briefOf(e)), ...(forPower ? { powerFound } : {}) };
 }
 
 /** search result shape: { ref, kind, name, type?, levels?, power?, summary, needs?, gear? } */

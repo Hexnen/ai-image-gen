@@ -127,6 +127,7 @@ pack = {
   undo(doc, runId): Promise<Result>, undoStatus(doc): { available, runId, age, drift },
 };
 ```
+**[CHANGED 2026-11-17, W2-7]** Invincible pack additions for the drawer (T7): `pack.ranks()` -> `[{ key, name, points, cap, powers, reputation, upgrades, maxLevel, isDefault }]` (vendored rank table; also `api.build.ranks()`); `apply(doc, proposal, { rank, profile, confirmed, expect, only, verbose })` returns a CONCISE Result `{ ok, runId, message, ops:[{ opId, action, type, name, itemId, outcome }], budget:{ before, after }, warnings, errors, created, updated, deleted, idMap, needsConfirm?, confirm?, stale?, unsaved?, busy?, rolledBack? }`; `{ verbose: true }` returns the writer's full Result with `plan` (incl. `projected`) for the diff view. Session (harness): `await setOptions(o)` resolves with the effective options; `await markProposal(id, "pending"|"applied"|"discarded", { runId? })` sets the proposal state the model sees as `<proposal id="..." status="..."/>` before the GM's next text (messages only, never system[]). `nextSheetBlock(held, snap)` is documented in `pack.mjs`.
 `Plan` / `Result` use the same field names as plus-ultra's chargen apply (fields, creates, deletes, keeps, counts, destructive, errors, warnings) [V: `apply.mjs` header], so the drawer's diff view renders any pack the same way.
 
 ### 3.3 Dependency handling (binding owner rule, 2026-11-17)

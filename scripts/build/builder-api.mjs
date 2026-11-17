@@ -3,6 +3,10 @@
 // image generation. The drawer (T7) uses:
 //   const s = await game.modules.get("moinens-ai-gen").api.build.openSession(actor);
 //   s.on("*", (data, type) => ...); await s.send("Build me Spider-Man"); s.stop(); s.transcript(); s.prewarm();
+//   await s.setOptions({ rank, profile }) -> the effective options; api.build.ranks() -> rank keys/names/numbers;
+//   await s.markProposal(id, "applied"|"discarded"|"pending") -> proposal state the model sees next turn (W2-7, P1-H);
+//   pack = api.build.registry.getPack(): pack.apply(doc, input, { rank, profile, confirmed }) -> concise result
+//   ({ verbose: true } adds plan/projected), pack.snapshot(doc, { rank, profile }) -> { text, ... }.
 // Order with registry.mjs is free: both merge into api.build; the pack is looked up at each call.
 
 import { MODULE_ID } from "../constants.mjs";
@@ -61,6 +65,8 @@ export function attachBuilder(api, { game = globalThis.game } = {}) {
     getSession: (doc) => harness.getSession(doc),
     listArchive: (doc) => store.listArchive(`${game.world?.id ?? "world"}:${doc?.uuid ?? doc}`),
     transcriptOf,
+    // rank keys / names / numbers for the drawer's rank selector (T7): the active pack's ranks(), [] when it has none
+    ranks: () => { try { const p = api.build?.registry?.getPack?.(); return typeof p?.ranks === "function" ? p.ranks() : []; } catch { return []; } },
     dry: dry ? Object.freeze({ ...dry.config }) : null
   });
   if (dry) globalThis.ui?.notifications?.warn?.("Moinens AI Gen: builder DRY RUN (lane test mode, no Anthropic calls)", { permanent: true });

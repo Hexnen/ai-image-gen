@@ -251,6 +251,22 @@ await test("runner: search/get_entries/read_rules inputs validated, results JSON
   assert.equal(await tools.run("submit_proposal", {}, ctx), null, "not a read tool");
   assert.doesNotThrow(() => JSON.parse(toolResultText(s)));
 });
+await test("PA1 (W2-7): empty forPower result says 'no boosts or limits' vs 'unknown power'; non-empty has no note", async () => {
+  const none = await tools.run("search_catalog", { forPower: "Écho Sense" }, ctx);
+  assert.equal(none.ok, true); assert.equal(none.total, 0);
+  assert.equal(none.note, "This power has no boosts or limits.");
+  const byRef = await tools.run("search_catalog", { forPower: `powers:${id("pwrEcho")}` }, ctx);
+  assert.equal(byRef.note, "This power has no boosts or limits.", "a power ref works the same");
+  const unknown = await tools.run("search_catalog", { forPower: "No Such Power" }, ctx);
+  assert.equal(unknown.total, 0); assert.match(unknown.note, /^No power with the name or ref "No Such Power"/);
+  const filtered = await tools.run("search_catalog", { forPower: "Zap Wall", query: "zzzz" }, ctx);
+  assert.equal(filtered.total, 0); assert.match(filtered.note, /match the words or kinds/);
+  const some = await tools.run("search_catalog", { forPower: "Zap Wall" }, ctx);
+  assert.ok(some.total > 0); assert.ok(!("note" in some));
+  assert.equal(search(cat, { query: "", forPower: "Nope" }).powerFound, false);
+  assert.equal(search(cat, { query: "", forPower: "Écho Sense" }).powerFound, true);
+  assert.ok(!("powerFound" in search(cat, { query: "zap" })), "no field without forPower");
+});
 await test("read_document: this needs itemIds; deep fields; no script body; result capped", async () => {
   assert.equal((await readDocument({ target: "this" }, ctx)).error.code, "doc.self");
   const r = await readDocument({ target: "this", itemIds: [id("itmA"), "missingId"], fields: ["description", "automations", "effects", "system"] }, ctx);

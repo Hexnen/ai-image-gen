@@ -195,7 +195,16 @@ export function makeReadTools({ getCatalog, source, extras = {}, snapshot = null
         if (!query.trim() && !kinds.length && !forPower) return bad("search.empty", "Empty search.", "Give words, kinds or forPower.");
         const limit = Number.isInteger(input.limit) ? Math.max(1, Math.min(MAX_RESULTS, input.limit)) : 10;
         const r = search(cat, { query, kinds: kinds.length ? kinds : null, forPower, limit });
-        return { ok: true, total: r.total, shown: r.results.length, results: r.results };
+        const res = { ok: true, total: r.total, shown: r.results.length, results: r.results };
+        // PA1: an empty forPower result says WHY (the power has none vs no such power)
+        if (forPower && !r.total) {
+          res.note = r.powerFound === false
+            ? `No power with the name or ref "${forPower.slice(0, 80)}": use a power ref or name from the catalogue index.`
+            : query.trim() || kinds.length
+              ? "No boosts or limits of this power match the words or kinds; search with forPower alone to list all of them."
+              : "This power has no boosts or limits.";
+        }
+        return res;
       }
       case "get_entries": {
         const refs = strArr(input.refs);

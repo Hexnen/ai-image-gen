@@ -56,3 +56,10 @@
 - Nowe ostrzeżenia creation: `occupation.unknown`, `resources.occupation`, `talent.occ.list`, `reputation.rank`; `rank.defaulted`, gdy nikt nie wybrał rangi; `rank.differs` bez `suggest`. Writer przekazuje `rank`/`profile` do konwersji (rank wymagany dla bohatera, udokumentowany).
 - Spec 7.5 pkt 4 (koszt talentów) poprawiony. Nie zrobione: D-2, P1-H, P2/P3.
 - Testy: validate 38, snapshot 28, catalog 18, ops 32, reszta zielona, vendor `--check` OK. Na żywo tor 20: 22/22 zawody, refy 85 bohaterów, notatka przez writer, `rank.defaulted`. Wybory F1-F10, weryfikacja, niesprawdzone: `dev/fixes2-notes.md`.
+
+## 2026-11-17 W2-7: API dla szuflady T7 + dokumentacja (analiza próby na sucho 2)
+- `pack.ranks()` / `api.build.ranks()`: klucze, nazwy i liczby rang z wendorowanego `rules.mjs`. `await session.setOptions(o)` zwraca opcje w mocy (`null` usuwa klucz).
+- `pack.apply` zwraca zwięzły wynik (run id, `ops[].outcome`, budżet przed/po, ostrzeżenia, `needsConfirm` + `confirm`); `{ verbose: true }` = pełny plan z `projected`. Writer bez zmian zachowania (tylko pole `budget`).
+- `session.markProposal(id, status, { runId })`: znacznik `<proposal id status/>` przed tekstem MG w następnej wiadomości (tylko messages; prefiks bez zmian, test). PA1: `search_catalog` z pustym `forPower` ma `note` (brak boostów vs nieznana moc).
+- RUNBOOK krok 6a: przepis Apply/Discard/Undo zastępcy, weryfikacja przez `pack.snapshot(...).text`. Opis `nextSheetBlock(held, snap)` w `pack.mjs`; spec 3.2 uzupełniona (sekcja API).
+- Teksty prefiksu do W2-8 i wybory W7-1..W7-6: `dev/wave2-notes.md` (sekcja W2-7).

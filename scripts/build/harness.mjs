@@ -2,7 +2,8 @@
 // limits, call log, store, clock, fetch) comes in through `deps`, so node tests drive it with a scripted fake model.
 //
 // One Session per document (key `${worldId}:${docUuid}`). Session.send(text) runs ONE GM turn to completion:
-//   user message = [tool_results for tool_uses left unanswered by an earlier stopped turn] + sheet block (5.4) + GM text
+//   user message = [tool_results for tool_uses left unanswered by an earlier stopped turn] + sheet block (5.4)
+//                  + [proposal state marker `<proposal id="..." status="pending|applied|discarded"/>`, P1-H] + GM text
 //   loop: caps -> estimate + per-message cost cap -> module limits reservation -> request (cached prefix + full history)
 //         -> stream -> book real cost (limits + call log) -> append the assistant message EXACTLY as returned
 //         -> tool_use: run every tool through the active pack's runTool (parallel), append ONE user message of results
@@ -72,6 +73,21 @@ export function toolResultContent(res) {
   return cut(s, MAX_TOOL_RESULT_CHARS);
 }
 
+/** Proposal states the drawer sets with session.markProposal (P1-H). */
+export const PROPOSAL_STATUSES = Object.freeze(["pending", "applied", "discarded"]);
+/** Proposal states kept per conversation (oldest dropped). */
+export const MAX_PROPOSAL_STATES = 20;
+const safeId = (s) => String(s ?? "").replace(/[^A-Za-z0-9_.:-]/g, "").slice(0, 64) || "?";
+
+/** `<proposal id="..." status="..."/>` lines for the states the model has not seen yet (null when none). */
+export function proposalMarker(states) {
+  const due = (states ?? []).filter((x) => x && x.status !== x.reported);
+  if (!due.length) return null;
+  return due.map((x) => `<proposal id="${safeId(x.id)}" status="${PROPOSAL_STATUSES.includes(x.status) ? x.status : "pending"}"/>`).join("\n");
+}
+const PROPOSAL_MARK = /^\s*(?:<proposal\s+id="[^"]*"\s+status="[^"]*"\s*\/>\s*)+$/i;   // a whole marker block, never GM text
+const PROPOSAL_LINE = /<proposal\s+id="([^"]*)"\s+status="([^"]*)"\s*\/>/gi;
+
 /** Submit tools (`submit_*`) feed the consecutive / identical invalid caps and set the pending proposal. */
 export const isSubmitTool = (name) => /^submit_/.test(String(name ?? ""));
 
@@ -98,7 +114,7 @@ function newRecord({ key, worldId, doc, pack, settings, now }) {
     messages: [], timeline: [], turns: [],
     usage: { ...anthropic.emptyUsage(), usd: 0, requests: 0 },
     lastPromptTokens: 0, prefixFp: null, sheet: null, snapshotFingerprint: null,
-    pendingProposal: null, lastRunId: null, options: {}
+    pendingProposal: null, lastRunId: null, options: {}, proposalStates: []
   };
 }
 
@@ -198,10 +214,55 @@ export class Session {
     }
   }
 
-  /** UI-set options passed to the pack's snapshot / tools (rank, validation profile ...). Not history. */
-  setOptions(o = {}) { this.record.options = { ...(this.record.options ?? {}), ...plain(o) }; return this.#persist(); }
-  /** Discard (GM) or apply done: clear the pending proposal. */
+  /** The UI-set options in effect (a copy). */
+  get options() { return plain(this.record.options ?? {}); }
+  /**
+   * UI-set options passed to the pack's snapshot / tools (rank, validation profile ...). Not history. Merged into the
+   * current options; a key set to null (or undefined) is removed (back to the pack's default). Persists, then resolves
+   * with the effective options: `await s.setOptions({ rank: "street" })` -> { rank: "street", profile: ... }.
+   */
+  async setOptions(o = {}) {
+    const next = { ...(this.record.options ?? {}) };
+    for (const [k, v] of Object.entries(o ?? {})) {
+      if (v === null || v === undefined) delete next[k];
+      else next[k] = plain(v);
+    }
+    this.record.options = next;
+    await this.#persist();
+    return plain(next);
+  }
+  /** Discard (GM) or apply done: clear the pending proposal. Prefer markProposal(id, status), which also tells the model. */
   clearPendingProposal() { this.record.pendingProposal = null; return this.#persist(); }
+
+  /** Proposal states known to this conversation: [{ id, status, reported, at, turn }] oldest first (copies). */
+  get proposals() { return plain(this.record.proposalStates ?? []); }
+  /**
+   * Proposal state set by the drawer (T7) or a stand-in: "applied" after a successful Apply, "discarded" on Discard,
+   * "pending" again (e.g. after an Undo of that proposal). The model sees it as a marker
+   * `<proposal id="..." status="..."/>` placed before the GM's text of the NEXT GM message (in messages only, never in
+   * system[]: the cached prefix stays byte-identical). The first GM message after a submit always carries the marker;
+   * later ones only when the status changed since the model last saw it.
+   * applied / discarded of the pending proposal also clear it (no separate clearPendingProposal needed).
+   * opts.runId (with "applied") also stores the writer's run id for Undo (setLastRun).
+   * -> { ok: true, id, status } | { ok: false, reason: "status" | "unknown" }
+   */
+  async markProposal(id, status, { runId } = {}) {
+    if (!PROPOSAL_STATUSES.includes(status)) return { ok: false, reason: "status" };
+    const pid = String(id ?? "");
+    const list = (this.record.proposalStates ??= []);
+    let e = list.find((x) => x.id === pid);
+    if (!e && this.record.pendingProposal?.proposalId === pid) {
+      e = { id: pid, status: "pending", reported: null, at: this.#h.now(), turn: this.record.pendingProposal.turn ?? null };
+      list.push(e);
+    }
+    if (!e) return { ok: false, reason: "unknown" };
+    e.status = status;
+    if (status !== "pending" && this.record.pendingProposal?.proposalId === pid) this.record.pendingProposal = null;
+    if (status === "applied" && runId) this.record.lastRunId = String(runId);
+    this.record.timeline.push({ at: this.#h.now(), msgIndex: this.record.messages.length, type: "proposal-status", proposalId: pid, status });
+    await this.#persist();
+    return { ok: true, id: pid, status };
+  }
   /** The writer's run id after an Apply (for Undo in the drawer). */
   setLastRun(runId) { this.record.lastRunId = runId ?? null; return this.#persist(); }
 
@@ -434,9 +495,14 @@ export class Session {
       const sheet = await this.#sheetBlock(pack);
       turn.sheet = sheet.kind;
       this.emit("sheet", { kind: sheet.kind, tokensEst: sheet.tokensEst ?? 0 });
-      content.push(...h.tr.userTurn({ sheet: sheet.text, text: msg }).content);
+      const gmBlocks = h.tr.userTurn({ sheet: sheet.text, text: msg }).content;
+      // proposal state (P1-H): its own text block right before the GM's words (after the sheet block), messages only
+      const marker = proposalMarker(this.record.proposalStates);
+      if (marker) gmBlocks.splice(gmBlocks.length - 1, 0, { type: "text", text: marker });
+      content.push(...gmBlocks);
       this.record.timeline.push({ at: h.now(), msgIndex: this.record.messages.length, type: "gm", text: msg });
       const idx = await this.#append({ role: "user", content });
+      if (marker) for (const x of this.record.proposalStates ?? []) x.reported = x.status;
       this.emit("user-message", { index: idx });
 
       let consecutiveInvalid = 0, identical = 0, lastSig = null;
@@ -516,6 +582,14 @@ export class Session {
             };
             this.record.pendingProposal = pendingProposal;
             turn.proposalId = pendingProposal.proposalId;
+            // proposal state for the marker of the next GM message (reported null: the next message always says "pending")
+            const states = (this.record.proposalStates ??= []);
+            const old = states.findIndex((p) => p.id === pendingProposal.proposalId);
+            if (old >= 0) states.splice(old, 1);
+            // an older proposal still pending is superseded by this one: the model knows, no marker for it
+            for (const p of states) if (p.status === "pending") p.reported = "pending";
+            states.push({ id: pendingProposal.proposalId, status: "pending", reported: null, at: h.now(), turn: turn.turn });
+            if (states.length > MAX_PROPOSAL_STATES) states.splice(0, states.length - MAX_PROPOSAL_STATES);
             this.record.timeline.push({ at: h.now(), msgIndex: this.record.messages.length, type: "proposal", proposalId: pendingProposal.proposalId });
             this.emit("proposal", { pending: plain(pendingProposal) });
           } else {
@@ -631,6 +705,7 @@ export function transcriptOf(record) {
           const s = String(b.text ?? "");
           const sm = /^\s*<(sheet_unchanged|sheet_update|sheet)\b/i.exec(s);
           if (sm) items.push({ role: "sheet", kind: sm[1] === "sheet" ? "full" : sm[1] === "sheet_update" ? "update" : "unchanged" });
+          else if (PROPOSAL_MARK.test(s)) { for (const pm of s.matchAll(PROPOSAL_LINE)) items.push({ role: "proposal-marker", proposalId: pm[1], status: pm[2] }); }
           else items.push({ role: "gm", text: s });
         }
       } else if (m.role === "assistant") {

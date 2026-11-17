@@ -28,7 +28,8 @@
 //   plus-ultra's chargen rank flag, else as Global, and the result carries the warning `rank.defaulted` (P1-G). `profile` =
 //   "creation" (default) | "in-play"; `confirmed` (not `confirm`) = true for removals / level swaps.)
 //   warnings, created:[id], updated:[id], deleted:[id], idMap:{ opId: itemId }, message, busy?, stale?, needsConfirm?, unsaved?,
-//   rolledBack? }. GM only; refuses while the open sheet holds unsaved input; re-plans and re-validates on the CURRENT document;
+//   rolledBack?, budget? (the validator's, when validation ran) }. This is the writer's FULL result; the pack's apply
+//   (writer-group.mjs) returns a concise one unless { verbose: true }. GM only; refuses while the open sheet holds unsaved input; re-plans and re-validates on the CURRENT document;
 //   refuses the WHOLE write when an item it touches changed since the preview (expect); destructive plans need confirmed:true;
 //   a failure in any phase rolls back what this run wrote.
 // UNDO: undo(doc, runId?, { opIds?, confirmDrift }) whole run or per item (groups: undo.mjs selectEntries); undoStatus(doc) sync.
@@ -837,6 +838,8 @@ export function createWriter(deps = {}) {
       const deselect = Array.isArray(only) ? p.ops.map((o) => o.opId).filter((id) => !only.includes(id)).concat(p.dropped.map((d) => d.opId)) : (opts.deselect ?? undefined);
       try { v = await D.validate(doc, proposal, { profile, rank: opts.rank, deselect, skipPlan: true, only, allowVitals }); }
       catch (e) { v = { ok: false, errors: [msg("validate.failed", String(e?.message ?? e))] }; }
+      // the validator's budget (before / after the ops) rides on every later result (W2-7: the concise apply result shows it)
+      if (v?.budget) base.budget = v.budget;
       if (v && v.ok === false) return { ...base, validation: v, errors: v.errors ?? [], message: v.errors?.[0]?.message ?? "validation failed" };
       // P1-G: an apply without `rank` (and no plus-ultra flag) was validated as Global: the caller sees that in the result
       for (const w of v?.warnings ?? []) if (w?.code === "rank.defaulted") p.warnings.push(msg(w.code, w.message ?? "No rank given: validated as the default rank."));

@@ -22,7 +22,7 @@ Paths used below:
   - Base every answer ONLY on what the request contains: the system blocks, the tool definitions, the messages (with the `<sheet>` block) and the tool results.
   - Do not read the module source, the vendored rules, the rulebook files or the world data to "know" answers. The real model cannot do that.
   - Use the tools the request offers, the way the system prompt says.
-  - Never skip validation. Never write to the actor yourself (no `actor.update` from the page). Never hand-edit tool results.
+  - Never skip validation. Never write to the actor yourself (no `actor.update` from the page). The one exception is the GM's Apply in step 6a, which goes through `pack.apply`. Never hand-edit tool results.
 - **Answer shape.**
   - Only `text` and `tool_use` blocks. No thinking blocks.
   - Tool inputs must fit the tool's `input_schema`. The driver checks the schema like the API does.
@@ -107,7 +107,8 @@ window.__dry.turn = s.send("<the GM's message, e.g. Złóż mi Spider-Mana>").th
 ```
 
 - Do not `await` the `send`. It finishes only after you answered every request.
-- Optional settings that change what the model sees: `s.setOptions({ rank, profile })`.
+- Optional settings that change what the model sees: `await s.setOptions({ rank, profile })`. It resolves with the options now in effect, for example `{ rank: "street", profile: "creation" }`. `null` removes a key, so the sheet shows `(default)` again.
+- Rank keys: `game.modules.get("moinens-ai-gen").api.build.ranks()` lists `{ key, name, points, cap, powers, reputation, ... }`. The keys are `teen`, `street`, `global` and `cosmic`. Use the key, not the name.
 
 ## 6. The loop: read, answer, repeat
 
@@ -150,6 +151,46 @@ Simulating API failures (only when a test asks for it):
 - `{ "error": { "type": "overloaded_error", "message": "x" } }`: the transport retries, so the same turn sends a new request.
 - `{ "error": { "type": "invalid_request_error", "message": "x" } }`: a hard error.
 - `"stop_reason": "refusal"` or `"max_tokens"` on a normal answer exercises those paths.
+
+## 6a. Apply or discard a proposal (you stand in for the drawer)
+
+There is no drawer yet (T7). When the test says the GM applies the proposal, do the GM's click from the page. This is the only write to the actor you may do, and only on a proposal the model submitted.
+
+```js
+const api = game.modules.get("moinens-ai-gen").api.build;
+const a = game.actors.get(window.__dry.actorId);
+const s = await api.openSession(a);
+const pack = api.registry.getPack();
+const p = s.pendingProposal;                       // null: nothing to apply
+const opts = { rank: "street", profile: "creation" };   // the drawer's values: the same as setOptions, the rank KEY from api.build.ranks()
+let r = await pack.apply(a, p.input, opts);
+if (r.needsConfirm) {                              // removals and level swaps need confirmed:true (field name `confirmed`, not `confirm`)
+  // r.confirm lists them: [{ opId, action: "remove"|"swap", name }]. Confirm only if the test's GM would.
+  r = await pack.apply(a, p.input, { ...opts, confirmed: true });
+}
+if (r.ok) await s.markProposal(p.proposalId, "applied", { runId: r.runId });   // also clears the pending proposal
+r;
+```
+
+- `profile`: `"creation"` for a build, `"in-play"` for edits of a finished hero.
+- Always pass `rank` for a superhero. Without it the hero is checked as Global, and the result carries the warning `rank.defaulted`.
+- The result is short: `{ ok, runId, message, ops: [{ opId, action, type, name, itemId, outcome }], budget: { before, after }, warnings, errors, created, updated, deleted, idMap }`.
+  - `outcome` is `written`, `unchanged`, `dropped` or `not written`.
+  - On a refusal you also get `needsConfirm` / `confirm`, `stale`, `unsaved`, `busy` or `rolledBack`.
+  - `pack.apply(a, p.input, { ...opts, verbose: true })` gives the full plan with the projected actor (about 25 KB). Use it only to debug.
+- If the GM rejects the proposal: `await s.markProposal(p.proposalId, "discarded")`.
+- The model sees the state in the GM's NEXT message, as `<proposal id="..." status="applied"/>` right before the GM's text. A state the model has already seen is not repeated.
+- `s.clearPendingProposal()` still works, but it does not tell the model anything. Use `markProposal` instead.
+
+Check what was written. Read the sheet the way the model will see it:
+
+```js
+(await pack.snapshot(a, { rank: "street", profile: "creation" })).text
+```
+
+- Check the VALID line, the attributes and the items there. Do not use `actor.update` to fix anything.
+- Undo, if the test needs it: `await pack.undo(a, r.runId)`, then `await s.markProposal(p.proposalId, "pending")`.
+  - Use `pack.undoStatus(a)` first to see the run and any drift.
 
 ## 7. Results, accounting, transcripts
 

@@ -9,6 +9,7 @@
 //   sheet    snapshot / diffSnapshots            T12 (reader.mjs, snapshot.mjs)
 //   writer   plan / apply / undo / undoStatus    T6 (apply.mjs, pu-bridge.mjs)
 //   selfTest (optional)                         T6 (pu-bridge: plus-ultra API self-test, spec 3.3 version guard)
+//   ranks (drawer helper)                       W2-7: rank keys, names, numbers from the vendored rules
 //
 // invincible-plus-ultra is an OPTIONAL extra (spec 3.4 option c): never a requirement. It is reported in check().optional;
 // the pack works without it (T6 decides per feature through pu-bridge.mjs using puStatus()).
@@ -18,6 +19,24 @@ import { promptGroup } from "./prompt.mjs";
 import { snapshot as sheetSnapshot, diffSnapshots, nextSheetBlock } from "./snapshot.mjs";
 import { writerGroup } from "./writer-group.mjs";
 import { validateGroup } from "./validate.mjs";
+import { RANKS, RANK_ORDER, DEFAULT_RANK, levelCap } from "./vendor/chargen/rules.mjs";
+
+/** Book names of the ranks (same words as the rank table of rules-digest.mjs; dev/test-build-ops.mjs checks they agree). */
+export const RANK_NAMES = Object.freeze({ teen: "Teen Upstart", street: "Street Protector", global: "Global Guardian", cosmic: "Cosmic Champion" });
+
+/**
+ * ranks() -> [{ key, name, points, cap, powers, reputation, upgrades, maxLevel, isDefault }] in book order (teen .. cosmic).
+ * For the drawer's rank selector (T7) and stand-ins: `key` is what pack.snapshot / validate / apply take as `rank`.
+ * Numbers come from the vendored plus-ultra rules (vendor/chargen/rules.mjs, read-only): points = attribute points,
+ * cap = per-attribute cap, powers = starting power slots, reputation = starting reputation, upgrades = starting base
+ * upgrades, maxLevel = highest starting power level index (1 Major, 2 Massive). Fresh plain objects on every call.
+ */
+export function ranks() {
+  return RANK_ORDER.map((k) => {
+    const r = RANKS[k];
+    return { key: k, name: RANK_NAMES[k] ?? k, points: r.points, cap: r.cap, powers: r.powers, reputation: r.reputation, upgrades: r.upgrades, maxLevel: levelCap(k), isDefault: k === DEFAULT_RANK };
+  });
+}
 
 export const SYSTEM_ID = "invincible";
 export const MIN_SYSTEM_VERSION = "2.1.0";
@@ -80,7 +99,9 @@ const pack = {
   label: "Invincible",
   init({ game } = {}) { gameRef = game ?? null; },
   check,
-  supports
+  supports,
+  // drawer (T7) rank selector; see ranks() above. Also on api.build.ranks() (builder-api.mjs).
+  ranks
 };
 
 // prompt group (T4): catalogue index, rules digest, read tools (prompt.mjs)
@@ -91,7 +112,14 @@ Object.assign(pack, promptGroup(() => pack, { get game() { return g(); } }));
 Object.assign(pack, {
   snapshot: (doc, opts = {}) => sheetSnapshot(doc, { game: g(), ...opts }),
   diffSnapshots,
-  // optional: the pack's own 5.4 decision (harness.mjs prefers it over the generic sheet-sync.mjs rule)
+  // optional: the pack's own 5.4 decision (harness.mjs prefers it over the generic sheet-sync.mjs rule).
+  // nextSheetBlock(held, snap) -> { kind: "full"|"update"|"unchanged", text, held, reason }
+  //   held: what the conversation holds from the previous message, i.e. the `held` this function returned last time
+  //         ({ lines: Map<key,line>, fullLineCount, diffs, fingerprint, doc }), or null on the first message / after a
+  //         switch from the core rule. The harness stores it (Maps encoded to JSON by sheet-sync.mjs encodeHeld/decodeHeld).
+  //   snap: the result of pack.snapshot(doc, { liveForm: true, ...session options }) for the current sheet (it needs
+  //         snap.lines / snap.text / snap.fingerprint as returned by snapshot.mjs serializeSheet).
+  //   Pure, synchronous, never throws for a valid snap; the drawer does not call it (the harness does, once per GM message).
   nextSheetBlock: (held, snap) => nextSheetBlock(held, snap)
 });
 

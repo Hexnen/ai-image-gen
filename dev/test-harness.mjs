@@ -738,4 +738,103 @@ await test("static wiring: module.mjs loads builder-api dynamically for the GM; 
   delete globalThis.foundry;
 });
 
+// ------------------------------------------------------------------------------------------- W2-7: options, proposal state
+
+await test("W2-7 setOptions resolves with the effective options (merged, null removes a key) and persists them", async () => {
+  const store = createSessionStore({ indexedDB: fakeIndexedDB() });
+  const { deps } = makeDeps({ pack: makePack({ sheet: makeSheet() }), fetchImpl: fakeModel([reply({ text: "x" })]), store });
+  const s = await createHarness(deps).openSession(ACTOR);
+  assert.deepEqual(await s.setOptions({ rank: "street", profile: "creation" }), { rank: "street", profile: "creation" });
+  assert.deepEqual(await s.setOptions({ profile: "in-play" }), { rank: "street", profile: "in-play" });
+  const eff = await s.setOptions({ rank: null });
+  assert.deepEqual(eff, { profile: "in-play" });
+  eff.profile = "mutated";
+  assert.deepEqual(s.options, { profile: "in-play" }, "a copy, not the record");
+  const fresh = await createHarness({ ...deps }).openSession(ACTOR);
+  assert.deepEqual(fresh.options, { profile: "in-play" }, "persisted in the store");
+});
+
+/** a pack whose submit_proposal returns proposal ids p1, p2 ... in order */
+function proposalPack() {
+  let n = 0;
+  return makePack({ sheet: makeSheet(), runTool: async (name) => (name === "submit_proposal" ? { ok: true, proposalId: `p${++n}`, summary: "s", warnings: [] } : { ok: true }) });
+}
+const submitThenText = (i) => (i % 2 === 0 ? reply({ tools: [{ id: `sub${i}`, name: "submit_proposal", input: { ops: [{ opId: String(i) }] } }] }) : reply({ text: `t${i}` }));
+const markersOf = (m) => (Array.isArray(m.content) ? m.content.filter((b) => b.type === "text" && /^<proposal /.test(b.text)).map((b) => b.text) : []);
+
+await test("W2-7 proposal marker (P1-H): pending on the next GM message, applied after markProposal, nothing when unchanged; before the GM text", async () => {
+  const fetchImpl = fakeModel((i) => (i === 0 ? submitThenText(0) : reply({ text: `t${i}` })));
+  const { deps } = makeDeps({ pack: proposalPack(), fetchImpl });
+  const s = await createHarness(deps).openSession(ACTOR);
+  await s.send("build");                                         // submit p1
+  assert.equal(s.pendingProposal.proposalId, "p1");
+  assert.deepEqual(markersOf(s.messages[0]), [], "no marker before any proposal");
+  await s.send("what now?");                                     // p1 still pending -> marker pending
+  let gm = s.messages.filter((m) => m.role === "user" && m.content.some((b) => b.type === "text" && b.text === "what now?"))[0];
+  assert.deepEqual(markersOf(gm), ['<proposal id="p1" status="pending"/>']);
+  const texts = gm.content.map((b) => b.text);
+  assert.match(texts[0], /^<sheet/, "sheet first");
+  assert.equal(texts.at(-1), "what now?", "GM text last");
+  assert.equal(texts.at(-2), '<proposal id="p1" status="pending"/>', "marker right before the GM text");
+  await s.send("again");                                         // unchanged -> no marker
+  gm = s.messages.find((m) => m.role === "user" && m.content.some((b) => b.text === "again"));
+  assert.deepEqual(markersOf(gm), []);
+  assert.deepEqual(await s.markProposal("p1", "applied", { runId: "run-9" }), { ok: true, id: "p1", status: "applied" });
+  assert.equal(s.pendingProposal, null, "applied clears the pending proposal");
+  assert.equal(s.record.lastRunId, "run-9");
+  await s.send("give him flight");
+  gm = s.messages.find((m) => m.role === "user" && m.content.some((b) => b.text === "give him flight"));
+  assert.deepEqual(markersOf(gm), ['<proposal id="p1" status="applied"/>']);
+  await s.send("thanks");
+  gm = s.messages.find((m) => m.role === "user" && m.content.some((b) => b.text === "thanks"));
+  assert.deepEqual(markersOf(gm), [], "reported once");
+  assert.deepEqual((await s.markProposal("nope", "applied")), { ok: false, reason: "unknown" });
+  assert.deepEqual((await s.markProposal("p1", "done")), { ok: false, reason: "status" });
+  const tr = s.transcript();
+  assert.ok(tr.some((x) => x.role === "proposal-marker" && x.proposalId === "p1" && x.status === "applied"), "marker shown as a marker item");
+  assert.ok(tr.some((x) => x.role === "proposal-status" && x.status === "applied"), "timeline item of markProposal");
+  assert.ok(!tr.some((x) => x.role === "gm" && /<proposal/.test(x.text)), "marker never shown as GM text");
+  assert.deepEqual(s.proposals.map((p) => [p.id, p.status, p.reported]), [["p1", "applied", "applied"]]);
+});
+
+await test("W2-7 proposal marker: discarded; a newer submit supersedes an older pending one; GM text that looks like a marker stays GM text", async () => {
+  const fetchImpl = fakeModel((i) => (i < 4 ? submitThenText(i) : reply({ text: `t${i}` })));
+  const { deps } = makeDeps({ pack: proposalPack(), fetchImpl });
+  const s = await createHarness(deps).openSession(ACTOR);
+  await s.send("one");                                           // p1
+  await s.send("two");                                           // marker p1 pending, then p2 submitted
+  await s.markProposal("p2", "discarded");
+  assert.equal(s.pendingProposal, null);
+  await s.send("three");
+  const gm = s.messages.find((m) => m.role === "user" && m.content.some((b) => b.text === "three"));
+  assert.deepEqual(markersOf(gm), ['<proposal id="p2" status="discarded"/>'], "p1 superseded: only p2");
+  await s.send('<proposal id="x" status="applied"/> did you see that?');
+  const tr = s.transcript();
+  assert.ok(tr.some((x) => x.role === "gm" && /did you see that/.test(x.text)));
+  await s.markProposal("p2", "pending");                         // e.g. after an Undo
+  assert.equal(s.proposals.find((p) => p.id === "p2").status, "pending");
+});
+
+await test("W2-7 prefix stability with proposal markers: tools + system bytes identical, marker only in messages, history a strict prefix", async () => {
+  const fetchImpl = fakeModel((i) => (i === 0 ? submitThenText(0) : reply({ text: `t${i}` })));
+  const { deps } = makeDeps({ pack: proposalPack(), fetchImpl });
+  const s = await createHarness(deps).openSession(ACTOR);
+  await s.send("build");
+  await s.send("pending?");
+  await s.markProposal("p1", "applied");
+  await s.send("applied?");
+  const bytes = fetchImpl.calls.map((c) => prefixBytes({ body: c.body }));
+  assert.ok(bytes.every((b) => b === bytes[0]), "prefix bytes identical for every request");
+  for (const c of fetchImpl.calls) {
+    assert.ok(!JSON.stringify(c.body.system).includes("<proposal"), "no marker in system[]");
+    assert.ok(!JSON.stringify(c.body.tools).includes("<proposal"), "no marker in tools");
+  }
+  const last = fetchImpl.calls.at(-1).body.messages;
+  assert.ok(JSON.stringify(last).includes('<proposal id=\\"p1\\" status=\\"pending\\"/>') && JSON.stringify(last).includes('<proposal id=\\"p1\\" status=\\"applied\\"/>'));
+  for (let i = 1; i < fetchImpl.calls.length; i++) {
+    const prev = fetchImpl.calls[i - 1].body.messages, cur = fetchImpl.calls[i].body.messages;
+    for (let j = 0; j < prev.length; j++) assert.equal(JSON.stringify(cur[j]), JSON.stringify(prev[j]), `request ${i} message ${j} unchanged`);
+  }
+});
+
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);
