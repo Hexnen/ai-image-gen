@@ -164,10 +164,13 @@ await test("get_entries: plain rules text, cap marker, split levels, automations
   const [zap, echo, far, arch, hero] = r.entries;
   assert.deepEqual(zap.levels, { basic: `powers:${id("pwrZapB")}`, major: `powers:${id("pwrZapM")}`, massive: `powers:${id("pwrZapX")}` });
   assert.equal(zap.rulesText, "Zap placeholder basic text & more.");
-  assert.deepEqual(zap.automations, [{ type: "rollAttack", name: "Zap", bonus: 1, damage: 2, range: "0-2", script: true }]);
+  assert.deepEqual(zap.automations, ["Zap"], "W2-4: names only"); assert.equal(zap.script, true, "a script only as a flag");
+  assert.equal(zap.split, true); assert.equal(zap.maxLevel, undefined);
   assert.match(echo.rulesText, /\(truncated, \d+ chars\)$/); assert.ok(echo.rulesText.length < 2600);
   assert.deepEqual(echo.effects, [{ name: "Echo fx", changes: [{ key: "system.derived.health.bonus", type: "add", value: 1 }] }]);
-  assert.equal(far.script, true); assert.equal(far.power, "Glide Step"); assert.match(far.slotNote, /1 power slot/);
+  assert.equal(far.script, true); assert.equal(far.power, "Glide Step"); assert.equal(far.slotNote, undefined, "W2-4: no slot note");
+  assert.equal(echo.levels, undefined, "W2-4: levels only for split powers"); assert.equal(echo.maxLevel, "basic");
+  for (const e of r.entries) assert.ok(!("slotNote" in e) && !("splitLevels" in e), e.ref);
   assert.match(arch.rulesText, /Archetype one placeholder/); assert.ok(!arch.rulesText.includes("Other Mock"), "section ends at the next h2");
   assert.equal(hero.attributes.agility, 5); assert.deepEqual(hero.items, [{ type: "power", name: "Zap Wall", level: "basic" }]);
   assert.ok(!JSON.stringify(r).includes("SECRET-SCRIPT-BODY"));
@@ -344,7 +347,38 @@ await test("P1-F: occupationFacts reads Resources and the occupation talent list
   const c2 = await buildCatalog(src2, { feedRules: false });
   const occ = c2.byKind("occupation")[0];
   assert.equal(occ.resources, 4); assert.deepEqual(occ.talents, ["Quick Placeholder", "Other Knack", "Third Knack"]);
-  assert.ok(!indexText(c2).includes("Other Knack"));
+  // W2-4: the occupation line carries Resources and the talents (they used to need a get_entries per build)
+  const line = indexText(c2).split("\n").find((l) => l.startsWith("occupation:mock-job|"));
+  assert.equal(line, "occupation:mock-job|Mock Job|4|Quick Placeholder, Other Knack, Third Knack|Occupation placeholder text.");
+  assert.match(indexText(c2), /^# occupation \(1\): ref\|name\|resources\|occupation talents\|summary/m);
+  const g = await getEntries(c2, src2, ["occupation:mock-job"]);
+  assert.equal(g.entries[0].resources, 4); assert.deepEqual(g.entries[0].talents, ["Quick Placeholder", "Other Knack", "Third Knack"]);
+  // missing facts: '-' columns, null / [] fields
+  const line0 = indexText(cat).split("\n").find((l) => l.startsWith("occupation:mock-job|"));
+  assert.equal(line0, "occupation:mock-job|Mock Job|-|-|Occupation placeholder text.");
+});
+
+await test("W2-4: archetypeFacts (no plus-ultra): role, attributes, powers with level, refs and boosts; get_entries uses it", async () => {
+  const { archetypeFacts } = await import("../scripts/systems/invincible/catalog.mjs");
+  const html = "<p>Placeholder intro.</p><p>Role: Striker</p><p><strong>Suggested Attributes:</strong> FIGHTING 5, AGILITY 4, STRENGTH 3, REASON 6, INTUITION 7, PRESENCE 3</p>"
+    + `<p>Suggested Powers: Major @UUID[Compendium.invincible-core.powers.Item.${id("pwrGlide")}]{Glide Step} (with @UUID[Compendium.invincible-core.boosts.Item.${id("bstFar")}]{Far Reach} boost), `
+    + `@UUID[Compendium.invincible-core.powers.${id("pwrZapM")}]{Zap Wall} (aimed, focused), @UUID[Compendium.invincible-core.powers.Item.zzzzzzzzzzzzzzzz]{Ghost Power}</p>`;
+  const a = archetypeFacts(html, cat);
+  assert.equal(a.role, "Striker");
+  assert.deepEqual(a.attrs, { fighting: 5, agility: 4, strength: 3, reason: 6, intuition: 7, presence: 3 });
+  assert.deepEqual(a.powers[0], { name: "Glide Step", level: "major", ref: `powers:${id("pwrGlide")}`, boosts: [{ name: "Far Reach (Glide)", ref: `boosts:${id("bstFar")}` }] });
+  assert.deepEqual(a.powers[1], { name: "Zap Wall", level: "major", ref: `powers:${id("pwrZapB")}`, boosts: [], note: "aimed, focused" }, "a split level doc resolves to the power + its level");
+  assert.deepEqual(a.powers[2], { name: "Ghost Power", level: "basic", ref: null, boosts: [] });
+  assert.deepEqual(archetypeFacts("<p>nothing</p>", cat), { role: "", attrs: {}, powers: [] });
+  // through get_entries without the plus-ultra extra
+  const f = fixture();
+  const src2 = { ...f.source, page: async (j, pid, name) => (name === "Archetypes" ? { name, journal: "2: Your Superhero", html: `<h2>Mock Striker</h2>${html}` } : f.source.page(j, pid, name)) };
+  const c2 = await buildCatalog(src2, { feedRules: false });
+  const r = await getEntries(c2, src2, ["archetype:mock-striker"]);
+  assert.equal(r.entries[0].structured.role, "Striker"); assert.equal(r.entries[0].structured.powers.length, 3);
+  // the plus-ultra extra still wins when it answers; our reading when it returns nothing
+  const r2 = await getEntries(c2, src2, ["archetype:mock-striker"], { extras: { archetype: async () => null } });
+  assert.equal(r2.entries[0].structured.powers[0].ref, `powers:${id("pwrGlide")}`);
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);

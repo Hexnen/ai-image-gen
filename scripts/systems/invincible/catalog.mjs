@@ -175,6 +175,47 @@ export function occupationFacts(text) {
   return { resources: Number.isFinite(res) ? res : null, talents };
 }
 
+/**
+ * Archetype section (the stored HTML of one h2 section, enricher links intact) -> { role, attrs, powers } in the shape of
+ * plus-ultra's getArchetype (W2-4: the fallback when plus-ultra is not there). Same reading as plus-ultra catalog.mjs
+ * parseArchetypes: paragraphs starting "Role", "Suggested Attributes" (ATTRIBUTE N pairs) and "Suggested Powers" (comma list
+ * outside brackets; each item has a powers link, "Major"/"Massive" before or in its label, boost links inside, a bracketed note
+ * that is not about a boost). Refs come from the catalogue (`cat`), level documents of split powers resolve to their power.
+ * -> { role, attrs:{fighting..}, powers:[{ name, level, ref, boosts:[{ name, ref }], note? }] } (empty parts when absent)
+ */
+export function archetypeFacts(html, cat = null) {
+  const paras = String(html ?? "").split(/<\/p>|<p\b[^>]*>|<br\s*\/?>/i)
+    .map((p) => decodeEntities(p.replace(/<[^>]*>/g, " ")).replace(/­/g, "").replace(/\s+/g, " ").trim()).filter(Boolean);
+  const find = (label) => paras.find((p) => p.toLowerCase().startsWith(label.toLowerCase()));
+  const role = (find("Role") ?? "").replace(/^Role\s*:\s*/i, "").replace(/@\w+\[[^\]]*\]\{([^}]*)\}/g, "$1").trim();
+  const attrs = {};
+  for (const m of (find("Suggested Attributes") ?? "").matchAll(/(FIGHTING|AGILITY|STRENGTH|REASON|INTUITION|PRESENCE)\s*:?\s*(\d+)/gi)) attrs[m[1].toLowerCase()] = Number(m[2]);
+  const text = (find("Suggested Powers") ?? "").replace(/^Suggested Powers\s*:\s*/i, "");
+  const toks = [];
+  let depth = 0, cur = "";
+  for (const ch of text) {
+    if (ch === "(" || ch === "[" || ch === "{") depth++; else if (ch === ")" || ch === "]" || ch === "}") depth = Math.max(0, depth - 1);
+    if (ch === "," && depth === 0) { toks.push(cur); cur = ""; } else cur += ch;
+  }
+  if (cur.trim()) toks.push(cur);
+  const idOf = (uuid) => String(uuid).split(".").pop();
+  const powers = [];
+  for (const tok of toks) {
+    const link = /@UUID\[Compendium\.invincible-core\.powers\.(?:Item\.)?([^\]]+)\]\{([^}]+)\}/.exec(tok);
+    if (!link) continue;
+    const e = cat?.get?.(`powers:${idOf(link[1])}`) ?? cat?.findByName?.("power", link[2].replace(/^(major|massive)\s+/i, "").trim()) ?? null;
+    const around = `${link[2]} ${tok.slice(0, link.index)}`;
+    const level = cat?.levelOf?.(`powers:${idOf(link[1])}`) ?? (/\bmassive\b/i.test(around) ? "massive" : /\bmajor\b/i.test(around) ? "major" : "basic");
+    const boosts = [...tok.matchAll(/@UUID\[Compendium\.invincible-core\.boosts\.(?:Item\.)?([^\]]+)\]\{([^}]+)\}/g)].map((b) => {
+      const be = cat?.get?.(`boosts:${idOf(b[1])}`);
+      return { name: be?.name ?? b[2].trim(), ref: be?.ref ?? null };
+    });
+    const note = /\}\s*\(([^)]*)\)/.exec(tok)?.[1]?.replace(/@\w+\[[^\]]*\]\{([^}]*)\}/g, "$1").trim();
+    powers.push({ name: e?.name ?? link[2].replace(/^(major|massive)\s+/i, "").trim(), level, ref: e?.ref ?? null, boosts, ...(note && !/boost/i.test(note) ? { note } : {}) });
+  }
+  return { role, attrs, powers };
+}
+
 /** Book page -> [{ name, html }] one per <h2> section (content up to the next h2). Pure (regex on the stored HTML). */
 export function h2Sections(html) {
   const s = String(html ?? "");
@@ -423,7 +464,9 @@ export function indexText(cat) {
   sec("gear", "ref|name|group|cost|flags|attack|summary", gearLine);
   sec("vehicleWeapon", "ref|name|group|cost|flags|attack|summary", gearLine);
   sec("archetype", "ref|name|role|summary (book section; get_entries for the full text)", (e) => `${e.ref}|${clean(e.name)}|${clean(e.type) || "-"}|${e.summaryText || "-"}`);
-  sec("occupation", "ref|name|summary (book section)", (e) => `${e.ref}|${clean(e.name)}|${e.summaryText || "-"}`);
+  // W2-4: Resources and the occupation talents on the line (the facts a build needs; saves a get_entries per build)
+  sec("occupation", "ref|name|resources|occupation talents|summary (book section)",
+    (e) => `${e.ref}|${clean(e.name)}|${Number.isInteger(e.resources) ? e.resources : "-"}|${(e.talents ?? []).map(clean).join(", ") || "-"}|${e.summaryText || "-"}`);
   sec("npcProfile", "ref|name|group|powers (stock NPC actors)", (e) => `${e.ref}|${clean(e.name)}|${clean(e.type) || "-"}|${clean(e.summaryText) || "-"}`);
   sec("sampleHero", "ref|name|powers (finished sample heroes, a guide to conventions)", (e) => `${e.ref}|${clean(e.name)}|${clean(e.summaryText) || "-"}`);
   out.push("</catalog>");
@@ -480,20 +523,8 @@ export function briefOf(e) {
 }
 
 /* ------------------------------------------------------------------ entry details (get_entries) */
-const SLOT_NOTE = {
-  power: (e) => `Basic level = 1 power slot; each level above Basic is 1 more slot (this power goes up to ${levelWord(e.maxLevel)}). New heroes: up to Major, Massive only at Cosmic Champion, never Monstrous.`,
-  boost: (e) => `1 power slot; belongs to the power "${e.power}".`,
-  limit: (e) => `Belongs to the power "${e.power}"; it does not cost a slot itself but pays for one level or one boost of that power (which then costs no slot).`,
-  powerSource: () => "The first power source is free; each extra one costs 1 attribute point. Every power names one of the hero's sources.",
-  talent: () => "A hero starts with 2 free talents (hero talent + occupation talent); each extra talent costs 1 attribute point. Most talents only once.",
-  drawback: (e) => `Each drawback gives +1 attribute point; at most 2.${e.needs === "source" ? " Name the affected power source in the note." : e.needs === "defined" ? " Define the specifics in the note." : ""}`,
-  gear: (e) => `Costs ${e.gear?.cost ?? "?"} against the hero's Resources${e.gear?.restricted ? "; restricted" : ""}${e.gear?.singleUse ? "; single use" : ""}.`,
-  vehicleWeapon: (e) => `Vehicle weapon; cost ${e.gear?.cost ?? "?"}${e.gear?.restricted ? "; restricted" : ""}.`,
-  archetype: () => "Book suggestion, not a rule: attributes and powers here already fit a Global Guardian budget.",
-  occupation: () => "Sets the hero's Resources and offers the occupation talents.",
-  npcProfile: () => "Stock NPC: free-form creation, no point budget.",
-  sampleHero: () => "Finished sample hero, a guide to conventions (read-only)."
-};
+// W2-4: no per-entry slot/cost note any more (it repeated the rules digest in every entry: ~17 % of get_entries text in dry run 2).
+// What was entry-specific in it is a field: maxLevel / levels (power), power (boost/limit), needs (drawback), gear.
 
 function actorDetails(data) {
   const sys = data?.system ?? {};
@@ -510,7 +541,8 @@ function actorDetails(data) {
 }
 
 /**
- * Full details for up to MAX_REFS refs. `extras.archetype(name)` (optional) adds plus-ultra's structured archetype data.
+ * Full details for up to MAX_REFS refs. `extras.archetype(name)` (optional) adds plus-ultra's structured archetype data (else
+ * archetypeFacts). Occupations carry resources + talents (names). No slot note (W2-4).
  * -> { entries:[...], unknown:[ref] }
  */
 export async function getEntries(cat, source, refs, { extras = {} } = {}) {
@@ -531,6 +563,12 @@ export async function getEntries(cat, source, refs, { extras = {} } = {}) {
           if (a) o.structured = { role: a.role, attrs: a.attrs, powers: (a.powers ?? []).map((p) => ({ name: p.name, level: LEVEL_WORDS[p.level] ?? p.level, ref: cat.findByName("power", p.name)?.ref ?? null, boosts: (p.boosts ?? []).map((b) => ({ name: b.name, ref: cat.findByName("boost", b.name, { power: p.name })?.ref ?? null })), ...(p.note ? { note: p.note } : {}) })) };
         } catch { /* optional extra */ }
       }
+      // W2-4: without plus-ultra (or when it has no data) the same shape from our own reading of the section
+      if (e.kind === "archetype" && !o.structured) {
+        const a = archetypeFacts(e.html, cat);
+        if (a.role || a.powers.length || Object.keys(a.attrs).length) o.structured = { role: a.role || e.type || "", attrs: a.attrs, powers: a.powers };
+      }
+      if (e.kind === "occupation") { o.resources = Number.isInteger(e.resources) ? e.resources : null; o.talents = e.talents ?? []; }
     } else if (e.kind === "npcProfile" || e.kind === "sampleHero") {
       const data = await source.document(e.pack, e.id);
       if (!data) { unknown.push(ref); continue; }
@@ -540,21 +578,23 @@ export async function getEntries(cat, source, refs, { extras = {} } = {}) {
       if (!data) { unknown.push(ref); continue; }
       o.rulesText = cut(htmlToText(data.system?.description ?? e.html), RULES_TEXT_CAP);
       if (e.kind === "power") {
-        o.levels = e.split
-          ? Object.fromEntries(LEVEL_WORDS.filter((w) => e.levelDocs[w]).map((w) => [w, `powers:${e.levelDocs[w]}`]))
-          : Object.fromEntries(LEVEL_WORDS.slice(0, e.maxLevel + 1).map((w) => [w, e.ref]));
-        if (e.split) o.splitLevels = "one document per level: add the level's ref";
+        // W2-4: the level -> ref map only for split powers (one document per level); others: the highest level
+        if (e.split) { o.split = true; o.levels = Object.fromEntries(LEVEL_WORDS.filter((w) => e.levelDocs[w]).map((w) => [w, `powers:${e.levelDocs[w]}`])); }
+        else o.maxLevel = levelWord(e.maxLevel);
         const lv = cat.levelOf(ref);
         if (lv) o.level = lv;
       }
+      // W2-4: automations as names only (the copy carries them; numbers that matter are on gear.attack); a script only as a flag
       const autos = automationsOf(data.system);
-      if (autos.length) o.automations = autos;
+      if (autos.length) o.automations = autos.map((a) => a.name || a.type);
       const fx = effectsOf(data.effects);
       if (fx.length) o.effects = fx;
-      if (String(data.system?.extraConfiguration ?? "").trim()) o.script = true;
-      if (e.gear) o.gear = { cost: data.system?.cost ?? e.gear.cost, restricted: !!data.system?.restricted, singleUse: !!data.system?.singleUse };
+      if (String(data.system?.extraConfiguration ?? "").trim() || autos.some((a) => a.script)) o.script = true;
+      if (e.gear) {
+        const atk = autos.find((a) => a.damage || a.bonus || a.range);
+        o.gear = { cost: data.system?.cost ?? e.gear.cost, restricted: !!data.system?.restricted, singleUse: !!data.system?.singleUse, ...(atk ? { attack: { bonus: atk.bonus ?? 0, damage: atk.damage ?? 0, range: atk.range ?? null, ...(atk.bypassArmor ? { bypassArmor: true } : {}) } } : {}) };
+      }
     }
-    o.slotNote = SLOT_NOTE[e.kind]?.(e) ?? "";
     entries.push(o);
   }
   return { entries, unknown };
