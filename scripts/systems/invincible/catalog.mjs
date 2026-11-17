@@ -19,6 +19,7 @@
 // are sections of a book page: `archetype:<slug>`, `occupation:<slug>`. The harness maps refs to UUIDs with refToUuid().
 
 import { setPowerMaxLevels } from "./vendor/chargen/rules.mjs";
+import { norm, normBase } from "./names.mjs";
 
 export const CORE = "invincible-core";
 export const LEVEL_WORDS = ["basic", "major", "massive", "monstrous"];
@@ -40,6 +41,16 @@ export const KIND_INFO = Object.freeze({
 });
 export const KINDS = Object.freeze(Object.keys(KIND_INFO));
 const SHORT_TO_PACK = Object.freeze({ powers: "powers", boosts: "boosts", limits: "limits", sources: "power-sources", talents: "talents", drawbacks: "drawbacks", gears: "gears", npcs: "npcs-creatures", heroes: "heroes-villans" });
+/** long pack name -> ref prefix: a ref written with the pack's own name ("power-sources:<id>") is the same ref (P1-E) */
+const PACK_TO_SHORT = Object.freeze(Object.fromEntries(Object.entries(SHORT_TO_PACK).filter(([s, p]) => s !== p).map(([s, p]) => [p, s])));
+/** "power-sources:<id>" -> "sources:<id>"; anything else unchanged (trimmed) */
+export function shortRef(ref) {
+  const r = String(ref ?? "").trim();
+  const i = r.indexOf(":");
+  if (i < 0) return r;
+  const p = r.slice(0, i);
+  return PACK_TO_SHORT[p] ? `${PACK_TO_SHORT[p]}:${r.slice(i + 1)}` : r;
+}
 
 /** The two book pages that hold archetypes / occupations (one h2 section per entry) [V: chargen-spec 1, live 2026-11-17]. */
 export const BOOK = Object.freeze({
@@ -101,9 +112,9 @@ export function cut(text, cap) {
   return `${s.slice(0, cap).replace(/\s+\S*$/, "")} (truncated, ${s.length} chars)`;
 }
 
-/** Name normalisation identical in spirit to plus-ultra's catalog.norm + accent folding for search. */
-export const norm = (s) => String(s ?? "").replace(/­/g, "").toLowerCase().replace(/\s+/g, " ").trim();
-export const normBase = (s) => norm(String(s ?? "").replace(/\s*\([^)]*\)\s*$/, ""));
+/** Name normalisation identical in spirit to plus-ultra's catalog.norm + accent folding for search. normBase drops a balanced
+    trailing "(note)" (names.mjs, shared with the reader / validator / writer). */
+export { norm, normBase };
 export const fold = (s) => norm(s).normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[’']/g, "").replace(/[^a-z0-9]+/g, " ").trim();
 export const slug = (s) => fold(String(s ?? "").replace(/^the\s+/i, "")).replace(/ /g, "-");
 
@@ -133,6 +144,35 @@ export function needsChoice(html) {
   if (/power sources?\s*\(choose one/i.test(text) || /choose one of your power/i.test(text)) return "source";
   if (/defined\b[^.,;]{0,30}?\bwhen you select/i.test(text)) return "defined";   // "defined [optional short qualifier] when you select"
   return false;
+}
+
+/**
+ * Occupation section (plain text from htmlToText) -> { resources, talents } for the validator (P1-F): the "Resources: N" line and
+ * the numbered list after the "Occupation Talent" line ("1. A, 2. B, 3. C"; also one item per line). Same reading as plus-ultra's
+ * tables.mjs (paragraph starting "Resources" / "Occupation Talent"). Missing parts -> resources null / talents [].
+ */
+export function occupationFacts(text) {
+  const lines = String(text ?? "").split("\n").map((l) => l.trim());
+  const resLine = lines.find((l) => /^resources\b/i.test(l));
+  const res = resLine ? parseInt(resLine.replace(/^resources\b[^0-9-]*/i, ""), 10) : NaN;
+  const talents = [];
+  const at = lines.findIndex((l) => /^occupation talents?\b/i.test(l));
+  if (at >= 0) {
+    // the list follows on the same line after the colon ("...: 1. A, 2. B") or on the next line(s): one line "1. A, 2. B, 3. C",
+    // or one numbered item per line
+    const sameLine = lines[at].includes(":") ? lines[at].slice(lines[at].indexOf(":") + 1).trim() : "";
+    let body = [];
+    if (/^\d+\.\s*\S/.test(sameLine)) body = [sameLine];
+    else {
+      let i = at + 1;
+      if (i < lines.length && /^\d+\.\s*\S/.test(lines[i])) {
+        body.push(lines[i]);
+        if (!/[,;]\s*\d+\.\s/.test(lines[i])) for (i++; i < lines.length && /^\d+\.\s*\S/.test(lines[i]); i++) body.push(lines[i]);
+      } else for (; i < lines.length && /^-\s+\S/.test(lines[i]); i++) body.push(`1. ${lines[i].replace(/^-\s+/, "")}`);   // <ol>/<ul> items
+    }
+    for (const b of body) for (const part of b.split(/(?:^|[,;])\s*\d+\.\s*/)) { const t = part.replace(/[.,;]+$/, "").trim(); if (t) talents.push(t); }
+  }
+  return { resources: Number.isFinite(res) ? res : null, talents };
 }
 
 /** Book page -> [{ name, html }] one per <h2> section (content up to the next h2). Pure (regex on the stored HTML). */
@@ -290,7 +330,8 @@ export async function buildCatalog(source, { feedRules = true } = {}) {
       const name = s.name.replace(/^The\s+/i, "");
       const text = htmlToText(s.html);
       const role = /\bRole:\s*([A-Za-z]+)/.exec(text)?.[1];
-      entries.push({ kind, name, id: slug(name), pack: "core-book", html: s.html, ...(role ? { type: role } : {}) });
+      const occ = kind === "occupation" ? occupationFacts(text) : null;
+      entries.push({ kind, name, id: slug(name), pack: "core-book", html: s.html, ...(role ? { type: role } : {}), ...(occ ?? {}) });
     }
   }
   for (const e of entries) {
@@ -322,10 +363,10 @@ export function makeCatalog(entries, meta = {}) {
     byKind: (k) => kinds.get(k) ?? [],
     /** entry for a ref (a split power's level ref resolves to the power) */
     get(ref) {
-      const r = String(ref ?? "").trim();
+      const r = shortRef(ref);
       return byRef.get(r) ?? levelRef.get(r)?.power ?? null;
     },
-    levelOf: (ref) => levelRef.get(String(ref ?? "").trim())?.level ?? null,
+    levelOf: (ref) => levelRef.get(shortRef(ref))?.level ?? null,
     /** find by name within a kind (exact, then without a trailing "(...)") */
     findByName(kind, name, { power = null } = {}) {
       let list = kinds.get(kind) ?? [];

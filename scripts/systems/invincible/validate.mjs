@@ -21,10 +21,10 @@
 
 import * as rules from "./vendor/chargen/rules.mjs";
 import { chargenStateFromActor, readItem, getCatalogLookup } from "./reader.mjs";
-import { getCatalog } from "./catalog.mjs";
+import { getCatalog, slug } from "./catalog.mjs";
 import {
   PROPOSAL_SCHEMA, PROPOSAL_GUIDE, LEVEL_WORDS, normalize, project, replaceToOps, selectOps, expectFor, checkStale, toPlainActor, asDoc,
-  customItemData, levelExists, powerLevel, baseName, noteOf, norm, normBase, hash, stableJson, summarize, getPath, CUSTOM_TYPES
+  customItemData, levelExists, powerLevel, baseName, noteOf, norm, normBase, hash, stableJson, summarize, getPath, CUSTOM_TYPES, resolveRank
 } from "./proposal.mjs";
 
 export const PROFILES = Object.freeze(["creation", "in-play"]);
@@ -90,7 +90,9 @@ export const MESSAGES = Object.freeze({
   "talent.hero.missing": () => ({ message: "The hero talent is missing.", hint: "Add a talent (the first talent on the sheet is the hero talent)." }),
   "talent.duplicate": (p) => ({ message: `Talent "${p.name}" is taken more often than allowed.`, hint: "Most talents only once (Windfall any number, Durable/Determined up to 5)." }),
   "drawback.duplicate": (p) => ({ message: `Drawback "${p.name}" is taken twice.`, hint: "Each drawback once (Hard Times may repeat)." }),
-  "drawback.hardTimes": () => ({ message: "Hard Times lowers Resources (the pack effect applies -1).", hint: "Nothing to fix." }),
+  "drawback.hardTimes": (p) => (Number.isInteger(p.stored)
+    ? { message: `Hard Times: Resources stays stored at ${p.stored} (the occupation's value); the pack effect applies -1 per Hard Times, so the sheet shows ${p.effective} (the book text says -2 each: ${p.book}).`, hint: "Nothing to fix: write resources = the occupation's value, never the lowered number." }
+    : { message: "Hard Times lowers Resources (the pack effect applies -1).", hint: "Nothing to fix." }),
   "drawback.note.missing": (p) => ({ message: `Drawback "${p.name}" needs a choice (${p.kind === "source" ? "a power source" : "defined when taken"}) in its note.`, hint: "Add note: \"...\" (shown in brackets in the name)." }),
   "attr.invalid": (p) => ({ message: `Attribute ${A(p.attr)} is not a whole number.`, hint: "Attributes are integers." }),
   "attr.low": (p) => ({ message: `Attribute ${A(p.attr)} is below ${p.min}.`, hint: `Every attribute is at least ${p.min}.` }),
@@ -102,6 +104,12 @@ export const MESSAGES = Object.freeze({
   "talent.occ.missing": () => ({ message: "The occupation talent is missing.", hint: "Add a second talent (the occupation talent)." }),
   "resources.invalid": (p) => ({ message: `Resources ${p.resources} is invalid for a hero with an occupation.`, hint: "Set resources to the occupation's value (at least 1)." }),
   "npc.name.blank": () => ({ message: "The NPC relationship has no name.", hint: "Add \"NPC: Name (type)\" to texts.relationships." }),
+  // creation-profile checks of the life step (P1-F; warnings, owner decision D-4 provisional)
+  "occupation.unknown": (p) => ({ message: p.name ? `Occupation "${p.occupation}" is written as a ref or slug; the sheet stores the occupation's name ("${p.name}").` : `Occupation "${p.occupation}" is not in the catalogue; its Resources and occupation talent cannot be checked.`, hint: p.name ? `Set texts.occupation to "${p.name}".` : "Use an occupation name from the catalogue index (English, exactly as listed), or keep an own occupation if the GM wants one." }),
+  "resources.occupation": (p) => ({ message: `Resources ${p.resources} differ from the occupation's value (${p.occupation}: ${p.value}).`, hint: `Set resources to ${p.value}; talents and drawbacks change Resources through their effects, not the stored value.` }),
+  "talent.occ.list": (p) => ({ message: `The occupation talent "${p.name}" (the second talent) is not on the ${p.occupation} list (${p.list}).`, hint: "Order talents hero talent, occupation talent, extras; pick the occupation talent from that list." }),
+  "reputation.rank": (p) => ({ message: `Reputation ${p.reputation} differs from the ${p.rank} rank's starting value (${p.value}).`, hint: `Set reputation to ${p.value}.` }),
+  "reputation.defaulted": (p) => ({ message: `No reputation given: the ${p.rank} rank's value ${p.value} is written.`, hint: "Give reputation explicitly to choose another value." }),
   "personality.count": (p) => ({ message: `Personality needs exactly 2 different words (has ${p.count}).`, hint: "texts.personality: \"Word1, Word2\"." }),
   "drive.empty": () => ({ message: "Drive is empty.", hint: "Set texts.drive." }),
   "flaw.empty": () => ({ message: "Flaw is empty.", hint: "Set texts.flaw." }),
@@ -121,7 +129,9 @@ export const MESSAGES = Object.freeze({
   "stale.actor": (p) => ({ message: `Actor field ${p.path} changed since the preview.`, hint: "The sheet changed: re-read it and submit again." }),
   "plan.failed": (p) => ({ message: `The write plan failed: ${p.error}`, hint: "Usually a sheet change; check the <sheet> block and resubmit." }),
   // L4 / info
-  "rank.differs": (p) => ({ message: `The proposal's rank (${p.proposed}) differs from the drawer's rank (${p.rank}); validated as ${p.rank}.`, hint: "Ask the GM before changing rank." }),
+  "rank.differs": (p) => ({ message: `The proposal's rank (${p.proposed}) differs from the drawer's rank (${p.rank}); validated as ${p.rank}, so budget numbers and fixes here are for ${p.rank}.`, hint: "Ask the GM to set the rank in the drawer; do not rebalance for the other rank." }),
+  "rank.defaulted": (p) => ({ message: `No rank chosen (drawer or plus-ultra flag): validated as ${p.rank} (the default).`, hint: "If the GM wants another rank, ask them to set it in the drawer." }),
+  "note.cut": (p) => ({ message: `A note is longer than ${p.max} characters (${p.length}); it is cut to "${p.kept}".`, hint: `Keep notes short (at most ${p.max} characters).` }),
   "remove.handEdited": (p) => ({ message: `Removes ${p.custom ? "custom" : "hand-edited"} item "${p.name}".`, hint: "The GM sees it in the preview; say why in choiceNotes." }),
   "field.sensitive": (p) => ({ message: `Writes ${p.field}, which is only changed when the GM asked for it.`, hint: "Leave it out unless the GM asked." }),
   "grants.heuristic": (p) => ({ message: `Limit "${p.name}" will be read as paying for a ${p.read} (power level decides), not a ${p.asked}.`, hint: "A limit pays for a level when its power is above Basic, else for a boost." }),
@@ -149,11 +159,8 @@ export function describe(issue, ctx = {}) {
 const issue = (code, severity, path, params = {}) => ({ code, severity, path, params });
 const sig = (i) => `${i.code}|${norm(i.params?.name ?? i.params?.attr ?? i.path ?? "")}`;
 
-function rankFor(plain, opts) {
-  if (rules.isRank(opts.rank)) return opts.rank;
-  const f = getPath(plain, "flags.invincible-plus-ultra.chargen.rank");
-  return rules.isRank(f) ? f : rules.DEFAULT_RANK;
-}
+/** -> { rank, from: "drawer"|"flag"|"default" } (from "default" = nobody chose a rank: warning rank.defaulted, P1-G) */
+function rankFor(plain, opts) { return resolveRank(plain, opts.rank); }
 export function stateOf(plain, rank) { return chargenStateFromActor(asDoc(plain), { rank }); }
 export function budgetOf(state) {
   const r = rules.rankOf(state);
@@ -177,7 +184,47 @@ export function superheroIssues(plain, rank, catalog) {
   const state = stateOf(plain, rank);
   const v = rules.validate(state);
   const out = v.issues.filter((i) => i.code !== "drawback.note.missing").map((i) => issue(i.code, i.severity === "warn" ? "warn" : i.severity, i.path, i.params));
+  // D-3 (provisional): Hard Times stays the pack's -1; say which Resources value to store and what the sheet then shows
+  const ht = out.find((i) => i.code === "drawback.hardTimes");
+  if (ht) {
+    const n = state.drawbacks.filter((d) => norm(d?.name) === "hard times").length;
+    const stored = Number(state.resources) || 0;
+    ht.params = { ...ht.params, n, stored, effective: stored - n, book: stored - 2 * n };
+  }
   return { issues: [...out, ...catalogueIssues(plain, catalog)], state };
+}
+/**
+ * Life-step checks the vendored rules do not make (P1-F), creation profile only (in play, Reputation grows and the GM edits
+ * freely). Warnings (owner decision D-4, provisional): occupation from the catalogue (by name; a ref or slug is pointed at the
+ * name), stored Resources = the occupation's value, the occupation talent (2nd talent) from the occupation's list (base names,
+ * so "Knowledgeable (Physics)" matches "Knowledgeable"), stored Reputation = the rank's starting value. An occupation the
+ * catalogue does not know (own occupation, book page missing) skips the Resources and talent checks.
+ */
+export function creationIssues(plain, state, rank, catalog) {
+  const out = [];
+  const occs = catalog?.byKind?.("occupation") ?? [];
+  const occText = String(state?.occupation ?? "").trim();
+  if (occText && occs.length) {
+    let occ = occs.find((o) => norm(o.name) === norm(occText) || norm(o.name) === norm(occText.replace(/^the\s+/i, "")));
+    if (!occ) {
+      const alt = (catalog.get?.(occText)?.kind === "occupation" ? catalog.get(occText) : null) ?? occs.find((o) => o.id === slug(occText.replace(/^occupation:/i, "")));
+      out.push(issue("occupation.unknown", "warn", "occupation", { occupation: occText, ...(alt ? { name: alt.name } : {}) }));
+      occ = alt ?? null;
+    }
+    if (occ) {
+      if (Number.isInteger(occ.resources) && Number(state.resources) !== occ.resources) {
+        out.push(issue("resources.occupation", "warn", "resources", { resources: Number(state.resources) || 0, value: occ.resources, occupation: occ.name }));
+      }
+      const t = state.occTalent?.name;
+      if (t && occ.talents?.length && !occ.talents.some((x) => normBase(x) === normBase(t))) {
+        out.push(issue("talent.occ.list", "warn", "occTalent", { name: t, occupation: occ.name, list: occ.talents.join(", ") }));
+      }
+    }
+  }
+  const want = rules.RANKS[rank]?.reputation;
+  const have = Number(getPath(plain, "system.reputation") ?? 0) || 0;
+  if (Number.isInteger(want) && have !== want) out.push(issue("reputation.rank", "warn", "reputation", { reputation: have, value: want, rank }));
+  return out;
 }
 /** npc (spec 7.4): structure only, no budget */
 export function npcIssues(plain, rank, catalog) {
@@ -271,6 +318,7 @@ export async function validateProposal(doc, input, opts = {}) {
   const n = normalize(input, { requireRationale: !!opts.requireRationale });
   res.autoFixed = n.autoFixed;
   acc.errors.push(...n.errors);
+  acc.warnings.push(...(n.warnings ?? []));   // note.cut (P1-D)
   const P = n.proposal;
   const dk = docKind(doc, P?.target);
   if (P && !dk.kind) acc.errors.push({ code: "target.unsupported", path: "target", params: { what: `${dk.name ?? "document"} ${dk.type ?? ""}`.trim() } });
@@ -317,9 +365,15 @@ async function validateItem(doc, P, dk, catalog, opts, res, acc, finish) {
 
 async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finish) {
   const basePlain = toPlainActor(doc);
-  const rank = rankFor(basePlain, opts);
+  const { rank, from: rankFrom } = rankFor(basePlain, opts);
   const isHero = dk.type === "superhero";
-  const issuesOf = (plain) => (isHero ? superheroIssues(plain, rank, catalog) : npcIssues(plain, rank, catalog));
+  const issuesOf = (plain) => {
+    const r = isHero ? superheroIssues(plain, rank, catalog) : npcIssues(plain, rank, catalog);
+    if (isHero && profile === "creation") r.issues.push(...creationIssues(plain, r.state, rank, catalog));
+    return r;
+  };
+  // P1-G: nobody chose a rank (no drawer rank, no plus-ultra flag): say so instead of validating as Global silently
+  if (isHero && rankFrom === "default") acc.warnings.push({ code: "rank.defaulted", path: "rank", params: { rank } });
 
   // baseline (spec 7.5.3: the same pipeline on the unchanged actor)
   const base = project(null, [], { catalog, plain: basePlain });
@@ -334,11 +388,13 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
   // ops (replace -> ops)
   let ops = P.ops ?? [];
   if (P.mode === "replace") {
-    const conv = replaceToOps(null, P.proposal, { catalog, plain: basePlain });
+    const conv = replaceToOps(null, P.proposal, { catalog, plain: basePlain, rank, profile });
     acc.errors.push(...conv.errors);
     ops = conv.ops;
+    for (const d of conv.defaulted ?? []) acc.info.push({ code: "reputation.defaulted", path: d.path, params: { value: d.value, rank: d.rank } });
     if (P.proposal.rank && P.proposal.rank !== rank) acc.warnings.push({ code: "rank.differs", path: "proposal.rank", params: { proposed: P.proposal.rank, rank } });
   }
+  const rankDiffers = acc.warnings.some((w) => w.code === "rank.differs");
   // GM deselection (spec 7.5.6): deselect = unticked opIds, or only = the ticked ones (the writer's T6 option name)
   const deselect = Array.isArray(opts.only) ? ops.map((o) => o.opId).filter((id) => !opts.only.includes(id)) : opts.deselect;
   if (deselect?.length) {
@@ -365,7 +421,10 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
   const after = issuesOf(proj.actor);
   const projIssues = [...proj.errors.filter((e) => e.params?.preexisting).map((e) => ({ ...e, severity: "error" })), ...after.issues];
   const baseSigs = new Set(baseErrors.map(sig));
-  const baseWarnSigs = new Set(baseIssues.filter((i) => i.severity === "warn").map(sig));
+  // creation + replace = a (re)build: every warning of the result counts, also those the blank sheet already had (P1-F: e.g.
+  // npc.name.blank is on an empty actor from the start, so "new warnings only" hid its hint from the model)
+  const showAllWarnings = profile === "creation" && P.mode === "replace";
+  const baseWarnSigs = new Set(showAllWarnings ? [] : baseIssues.filter((i) => i.severity === "warn").map(sig));
   const blame = opBlame(ops, proj);
   for (const i of projIssues) {
     const e = { ...i, opId: i.opId ?? blame(i) };
@@ -390,8 +449,9 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
     if (profile === "in-play" && (afterB.points !== before.points || afterB.spent !== before.spent)) {
       acc.info.push({ code: "budget.delta", path: "attrs", params: { delta: (afterB.points - afterB.spent) - (before.points - before.spent), before: before.points, after: afterB.points, spentBefore: before.spent, spentAfter: afterB.spent } });
     }
-    // self-repair hint (spec 7.3): a reconciled attribute vector for attr.over / attr.unspent
-    for (const e of acc.errors) {
+    // self-repair hint (spec 7.3): a reconciled attribute vector for attr.over / attr.unspent. Not when the proposal names
+    // another rank (rank.differs, P1-G): the vector would balance the drawer's rank, i.e. the wrong one
+    for (const e of rankDiffers ? [] : acc.errors) {
       if (e.code !== "attr.over" && e.code !== "attr.unspent") continue;
       const r = rules.reconcileAttributes(after.state.attrs, afterB.points, afterB.cap);
       if (r.ok) e.suggest = { updateActor: { attributes: r.attrs } };
@@ -468,22 +528,59 @@ function opBlame(ops, proj) {
   return (i) => {
     const n = i.params?.name;
     if (n && byName.has(normBase(n))) return byName.get(normBase(n));
-    if (/^(attr|personality|drive|flaw|heroName|civilianName|occupation|resources)/.test(i.code) && actorOp) return actorOp;
+    if (/^(attr|personality|drive|flaw|heroName|civilianName|occupation|resources|reputation|npc\.name)/.test(i.code) && actorOp) return actorOp;
     return undefined;
   };
 }
 
-/** per-op cost: cumulative projections, each op's delta of budget points, slots and spent points */
+/**
+ * per-op cost (spec 7.5.4, P1-C): cumulative projections, each op's delta of budget points, slots and spent points, plus a
+ * readable `label`. Evaluation order: actor-field ops FIRST, then the rest in list order (the occupation decides which talent
+ * is free; evaluated last it made the occupation talent look paid and the actor op look +1). The deltas still add up to
+ * after - before; the result is in list order. Talent / source roles come from the FINAL sheet (talent order: hero,
+ * occupation, extras; first source free).
+ */
 export function perOpCost(basePlain, ops, catalog, rank, before) {
-  const out = [];
+  const order = [...ops.filter((o) => o.op === "updateActor"), ...ops.filter((o) => o.op !== "updateActor")];
+  const byOp = new Map();
   let prev = before;
-  for (let k = 0; k < ops.length; k++) {
-    const p = project(null, ops.slice(0, k + 1), { catalog, plain: basePlain });
+  for (let k = 0; k < order.length; k++) {
+    const p = project(null, order.slice(0, k + 1), { catalog, plain: basePlain });
     const b = budgetOf(stateOf(p.actor, rank));
-    out.push({ opId: ops[k].opId, points: b.points - prev.points, slots: b.slots - prev.slots, spent: b.spent - prev.spent });
+    byOp.set(order[k].opId, { opId: order[k].opId, points: b.points - prev.points, slots: b.slots - prev.slots, spent: b.spent - prev.spent, slotsAfter: b.slots, rankPowers: b.rankPowers });
     prev = b;
   }
-  return out;
+  const fin = project(null, ops, { catalog, plain: basePlain });
+  const st = stateOf(fin.actor, rank);
+  const ctx = {
+    talents: fin.actor.items.filter((x) => x.type === "talent").map((x) => x._id),
+    sources: fin.actor.items.filter((x) => x.type === "powerSource").map((x) => x._id),
+    occupation: !!st.occupation
+  };
+  return ops.map((op) => {
+    const { slotsAfter, rankPowers, ...c } = byOp.get(op.opId);
+    const label = costLabel({ ...c, slotsAfter, rankPowers }, fin.opInfo[op.opId], ctx);
+    return label ? { ...c, label } : c;
+  });
+}
+const signed = (n, unit) => `${n > 0 ? "+" : ""}${n} ${unit}${Math.abs(n) === 1 ? "" : "s"}`;
+/** -> "hero talent (free)", "occupation talent (free)", "extra talent -1 pt", "drawback +1 pt", "extra power source -1 pt",
+    "+1 slot (slots 3/4) -2 pts", "-1 slot (slots 2/4) +2 pts", "+1 pt" ... ; "" when the op costs nothing and has no role */
+export function costLabel(c, info, ctx) {
+  if (!c) return "";
+  const pts = c.points ? signed(c.points, "pt") : "";
+  const role = (name) => (c.points ? `${name} ${pts}` : `${name} (free)`);
+  if (info?.kind === "add" && info.type === "talent" && !c.slots) {
+    const i = ctx.talents.indexOf(info.itemId);
+    return role(i === 0 ? "hero talent" : i === 1 && ctx.occupation ? "occupation talent" : "extra talent");
+  }
+  if (info?.kind === "add" && info.type === "drawback" && !c.slots) return role("drawback");
+  if (info?.kind === "add" && info.type === "powerSource" && !c.slots) return role(ctx.sources.indexOf(info.itemId) === 0 ? "first power source" : "extra power source");
+  if (c.slots) {
+    const over = c.slotsAfter > c.rankPowers ? ", over the rank" : "";
+    return `${signed(c.slots, "slot")} (slots ${c.slotsAfter}/${c.rankPowers}${over})${pts ? ` ${pts}` : ""}`;
+  }
+  return pts;
 }
 
 /* ================================================================== model-facing tools */

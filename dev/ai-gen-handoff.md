@@ -48,3 +48,11 @@
 - Prefiks (znaki/3,5, indeks z próby bez zmian): 76 940 zn. / ~21 984 tok. -> 80 385 zn. / ~22 968 tok. (+984). Zmiana tekstów = jeden ponowny zapis cache 1 h.
 - Nie zrobione (kod, poza zakresem tekstów): notatka w wyniku `search_catalog` przy pustym `forPower` (PA1 w `dev/prompt-notes.md`).
 - Testy: `node dev/test-prompt-texts.mjs` (11: stabilność bajtów, flagi treści, legenda VALID vs `validLine`, rozmiar). Wybory D-3, D-6, PA1-PA3, rozmiary, niesprawdzone: `dev/prompt-notes.md`. Potrzebna powtórka próby na sucho.
+
+## 2026-11-17 P1-C/D/E/F/G: notatki, format ref, koszt per op, zawód/Resources/reputacja, ranga (analiza próby na sucho 1)
+- Nowy `scripts/systems/invincible/names.mjs` (nawias końcowy zrównoważony, `cleanNote`: bez nawiasów, cięcie na słowie przy 60); używany przez reader, catalog, proposal, validate, writer, replace.
+- Czytnik daje refy z krótkim prefiksem (`sources:`); `catalog.get` przyjmuje też długie nazwy paczek (`shortRef`). `occupationFacts` w katalogu: Resources + lista talentów zawodu.
+- `normalize` czyści notatki (autoFixed / `note.cut`); `replaceToOps` stawia op aktora pierwszy, uzupełnia reputację rangi w creation (`reputation.defaulted`); `budget.perOp` w kolejności op z `label`.
+- Nowe ostrzeżenia creation: `occupation.unknown`, `resources.occupation`, `talent.occ.list`, `reputation.rank`; `rank.defaulted`, gdy nikt nie wybrał rangi; `rank.differs` bez `suggest`. Writer przekazuje `rank`/`profile` do konwersji (rank wymagany dla bohatera, udokumentowany).
+- Spec 7.5 pkt 4 (koszt talentów) poprawiony. Nie zrobione: D-2, P1-H, P2/P3.
+- Testy: validate 38, snapshot 28, catalog 18, ops 32, reszta zielona, vendor `--check` OK. Na żywo tor 20: 22/22 zawody, refy 85 bohaterów, notatka przez writer, `rank.defaulted`. Wybory F1-F10, weryfikacja, niesprawdzone: `dev/fixes2-notes.md`.

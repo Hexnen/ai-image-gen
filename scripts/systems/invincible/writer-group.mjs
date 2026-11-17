@@ -26,7 +26,7 @@ export function writerGroup(getPack, deps = {}) {
   const pickToOps = async (doc, proposal, cat, opts) => {
     const conv = isStateShape(proposal) ? null : await loadConv();
     if (typeof conv === "function") {
-      try { const r = conv(doc, proposal, { catalog: cat }); return { ops: r.ops ?? [], errors: (r.errors ?? []).map((e) => ({ ...e, message: e.message ?? `${e.code} ${e.path ?? ""}`.trim() })), warnings: r.warnings ?? [] }; }
+      try { const r = conv(doc, proposal, { catalog: cat, rank: opts?.rank, profile: opts?.profile }); return { ops: r.ops ?? [], errors: (r.errors ?? []).map((e) => ({ ...e, message: e.message ?? `${e.code} ${e.path ?? ""}`.trim() })), warnings: r.warnings ?? [] }; }
       catch (e) { return { ops: [], errors: [{ code: "replace.failed", message: String(e?.message ?? e) }], warnings: [] }; }
     }
     return toOps(doc, proposal, cat, opts);

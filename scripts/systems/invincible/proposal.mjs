@@ -17,7 +17,8 @@
 // Items on the projected copy are plain `_source`-shaped objects ({ _id, name, type, system, effects, flags }); items added by
 // an op get the id `new:<opId>` (the writer creates real ids). Ops reference each other only through opIds.
 
-import { ATTRS } from "./vendor/chargen/rules.mjs";
+import { ATTRS, RANKS, isRank, DEFAULT_RANK } from "./vendor/chargen/rules.mjs";
+import { NOTE_MAX, norm, normBase, baseName, noteOf, withNote, cleanNote } from "./names.mjs";
 
 export const LEVEL_WORDS = Object.freeze(["basic", "major", "massive", "monstrous"]);
 export const OP_KINDS = Object.freeze(["addItem", "updateItem", "removeItem", "updateActor"]);
@@ -38,7 +39,7 @@ export const FORBIDDEN_ACTOR_PATH = /^(flags|img|prototypeToken|ownership|_id|_s
 export const NEW_PREFIX = "new:";
 export const TEXT_MAX = 2000;
 export const NAME_MAX = 120;
-export const NOTE_MAX = 60;
+export { NOTE_MAX };   // names.mjs (one value for validator and writer)
 export const OPS_MAX = 60;
 
 /* ================================================================== schema (static, cached prefix) */
@@ -98,11 +99,14 @@ export const PROPOSAL_GUIDE = [
 const own = (o, k) => !!o && Object.prototype.hasOwnProperty.call(o, k);
 const isObj = (x) => !!x && typeof x === "object" && !Array.isArray(x);
 export const clone = (x) => (x === undefined ? x : JSON.parse(JSON.stringify(x, (k, v) => (v instanceof Set ? [...v] : v))));
-export const norm = (s) => String(s ?? "").replace(/­/g, "").toLowerCase().replace(/\s+/g, " ").trim();
-export const normBase = (s) => norm(String(s ?? "").replace(/\s*\([^)]*\)\s*$/, ""));
-export const baseName = (s) => String(s ?? "").replace(/\s*\([^)]*\)\s*$/, "").trim();
-export const noteOf = (s) => String(s ?? "").match(/\(([^)]*)\)\s*$/)?.[1]?.trim() ?? "";
-export const withNote = (name, note) => (String(note ?? "").trim() ? `${baseName(name)} (${String(note).trim().slice(0, NOTE_MAX)})` : baseName(name));
+// name + note helpers: balanced trailing "(note)", notes without brackets, cut at a word boundary (names.mjs, P1-D)
+export { norm, normBase, baseName, noteOf, withNote };
+/** the rank validation uses: the drawer's rank > plus-ultra's flag > Global. -> { rank, from: "drawer"|"flag"|"default" } */
+export function resolveRank(plain, rank) {
+  if (isRank(rank)) return { rank, from: "drawer" };
+  const f = getPath(plain, "flags.invincible-plus-ultra.chargen.rank");
+  return isRank(f) ? { rank: f, from: "flag" } : { rank: DEFAULT_RANK, from: "default" };
+}
 const listOf = (coll) => (coll == null ? [] : Array.isArray(coll) ? coll : typeof coll.values === "function" ? [...coll.values()] : [...coll]);
 const srcOf = (doc) => doc?._source ?? (typeof doc?.toObject === "function" ? doc.toObject() : doc) ?? {};
 /** FNV-1a 32 bit -> base36 (fingerprints, not security) */
@@ -209,7 +213,21 @@ export function normalize(input, { requireRationale = false } = {}) {
   };
   (p.ops ?? []).forEach((op, i) => fixPers(op?.set?.texts, `ops[${i}].set.texts`));
   fixPers(p.proposal?.texts, "proposal.texts");
-  return { proposal: p, errors, autoFixed };
+  // notes (P1-D): brackets inside a note are replaced (autoFixed, deterministic: the item name is "Name (note)"); a note longer
+  // than NOTE_MAX is cut at a word boundary and reported as the warning note.cut (the writer cuts the same way)
+  const warnings = [];
+  const fixNote = (holder, key, path, opId) => {
+    if (!isObj(holder) || typeof holder[key] !== "string" || !holder[key]) return;
+    const c = cleanNote(holder[key]);
+    if (c.parens) autoFixed.push(`${path}: brackets in the note replaced: "${holder[key]}" -> "${c.full}"`);
+    if (c.cut) warnings.push({ code: "note.cut", path, ...(opId ? { opId } : {}), params: { max: NOTE_MAX, length: c.full.length, kept: c.note } });
+    holder[key] = c.note;
+  };
+  (p.ops ?? []).forEach((op, i) => { if (!isObj(op)) return; fixNote(op, "note", `ops[${i}].note`, op.opId); fixNote(op.set, "note", `ops[${i}].set.note`, op.opId); });
+  if (isObj(p.proposal)) {
+    for (const k of ["powers", "talents", "drawbacks"]) (Array.isArray(p.proposal[k]) ? p.proposal[k] : []).forEach((x, i) => fixNote(x, "note", `proposal.${k}[${i}].note`));
+  }
+  return { proposal: p, errors, autoFixed, warnings };
 }
 function needSet(op, path, errors) {
   if (!isObj(op.set) || !Object.keys(op.set).length) errors.push({ code: "input.shape", path: `${path}.set`, opId: op.opId, params: { expected: "a non-empty set" } });
@@ -579,10 +597,10 @@ function buildAdded(op, i, { catalog, err, refItem, actor, byOp }) {
  * added; leftover creation items are removed (dependants before their parents). Gear and injuries are never touched.
  * Actor fields go into one updateActor op with the values that differ. Ref errors come back as errors (path proposal.*).
  */
-export function replaceToOps(doc, proposal, { catalog, plain = null }) {
+export function replaceToOps(doc, proposal, { catalog, plain = null, rank = null, profile = "creation" }) {
   const actor = plain ? clone(plain) : toPlainActor(doc);
   const P = proposal ?? {};
-  const ops = [], errors = [];
+  const ops = [], errors = [], defaulted = [];
   const pool = actor.items.filter((x) => CREATION_TYPES.includes(x.type));
   const used = new Set();
   const take = (type, name, pred = () => true) => {
@@ -592,6 +610,24 @@ export function replaceToOps(doc, proposal, { catalog, plain = null }) {
   };
   let n = 0;
   const nextId = (p) => `${p}${++n}`;
+  // actor fields FIRST (P1-C): the occupation exists before the talents are added, so the per-op cost of the second talent is
+  // the free occupation talent, not an extra one; the writer writes in phases anyway (items, then the actor update)
+  const set = {};
+  if (P.name && P.name !== actor.name) set.name = P.name;
+  if (isObj(P.attributes)) { const a = {}; for (const k of ATTRS) if (Number.isInteger(P.attributes[k]) && P.attributes[k] !== getPath(actor, `system.attributes.${k}.value`)) a[k] = P.attributes[k]; if (Object.keys(a).length) set.attributes = a; }
+  if (isObj(P.texts)) { const t = {}; for (const k of TEXT_KEYS) if (typeof P.texts[k] === "string" && P.texts[k] !== String(actor.system?.[k] ?? "")) t[k] = P.texts[k]; if (Object.keys(t).length) set.texts = t; }
+  // P1-F: a superhero built under the creation profile starts with the rank's reputation; a replace that leaves it out gets it
+  const rep = { ...P };
+  if (!Number.isInteger(P.reputation) && actor.type === "superhero" && profile !== "in-play") {
+    const r = resolveRank(actor, rank);
+    rep.reputation = RANKS[r.rank].reputation;
+    if (rep.reputation !== actor.system?.reputation) defaulted.push({ path: "proposal.reputation", value: rep.reputation, rank: r.rank });
+  }
+  // notes as the writer writes them (no brackets, cut at a word boundary): the writer converts the RAW proposal again at apply,
+  // so both conversions must compare the same note text (same ops, same opIds)
+  const noteOfP = (x) => cleanNote(x?.note ?? "").note;
+  for (const k of ["resources", "reputation"]) if (Number.isInteger(rep[k]) && rep[k] !== actor.system?.[k]) set[k] = rep[k];
+  if (Object.keys(set).length) ops.push({ op: "updateActor", opId: nextId("act"), set });
   const entryOf = (ref, path, kinds) => {
     const e = catalog?.get?.(ref) ?? null;
     if (!e) { errors.push({ code: "ref.unknown", path, params: { ref } }); return null; }
@@ -622,11 +658,11 @@ export function replaceToOps(doc, proposal, { catalog, plain = null }) {
       if (powerLevel(hit.system) !== level) set.level = level;
       if (link?.itemId && hit.system?.powerSource !== link.itemId) set.powerSourceItemId = link.itemId;
       if (link?.opId) set.powerSourceOpId = link.opId;
-      if ((p.note ?? "") !== noteOf(hit.name)) set.note = p.note ?? "";
+      if (noteOfP(p) !== noteOf(hit.name)) set.note = noteOfP(p);
       if (Object.keys(set).length) ops.push({ op: "updateItem", opId: nextId("pw"), itemId: hit._id, set });
     } else {
       const opId = nextId("pw");
-      ops.push({ op: "addItem", opId, ref: p.ref, level, ...(link?.itemId ? { sourceItemId: link.itemId } : {}), ...(link?.opId ? { sourceOpId: link.opId } : {}), ...(p.note ? { note: p.note } : {}) });
+      ops.push({ op: "addItem", opId, ref: p.ref, level, ...(link?.itemId ? { sourceItemId: link.itemId } : {}), ...(link?.opId ? { sourceOpId: link.opId } : {}), ...(noteOfP(p) ? { note: noteOfP(p) } : {}) });
       powerLink = { opId };
     }
     for (const [list, type] of [[p.boosts ?? [], "boost"], [p.limits ?? [], "limit"]]) {
@@ -643,23 +679,17 @@ export function replaceToOps(doc, proposal, { catalog, plain = null }) {
     list.forEach((t, i) => {
       const e = entryOf(t.ref, `proposal.${type}s[${i}].ref`, [type]);
       if (!e) return;
-      const hit = take(type, e.name, (x) => norm(noteOf(x.name)) === norm(t.note ?? "")) ?? take(type, e.name);
-      if (hit) { if ((t.note ?? "") !== noteOf(hit.name)) ops.push({ op: "updateItem", opId: nextId(type === "talent" ? "ta" : "dr"), itemId: hit._id, set: { note: t.note ?? "" } }); }
-      else ops.push({ op: "addItem", opId: nextId(type === "talent" ? "ta" : "dr"), ref: t.ref, ...(t.note ? { note: t.note } : {}) });
+      const note = noteOfP(t);
+      const hit = take(type, e.name, (x) => norm(noteOf(x.name)) === norm(note)) ?? take(type, e.name);
+      if (hit) { if (note !== noteOf(hit.name)) ops.push({ op: "updateItem", opId: nextId(type === "talent" ? "ta" : "dr"), itemId: hit._id, set: { note } }); }
+      else ops.push({ op: "addItem", opId: nextId(type === "talent" ? "ta" : "dr"), ref: t.ref, ...(note ? { note } : {}) });
     });
   }
   // leftovers: dependants first (boost/limit, talent/drawback, power, source)
   const order = ["boost", "limit", "talent", "drawback", "power", "powerSource"];
   const left = pool.filter((x) => !used.has(x._id)).sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type) || String(a._id).localeCompare(String(b._id)));
   for (const x of left) ops.push({ op: "removeItem", opId: nextId("rm"), itemId: x._id });
-  // actor fields
-  const set = {};
-  if (P.name && P.name !== actor.name) set.name = P.name;
-  if (isObj(P.attributes)) { const a = {}; for (const k of ATTRS) if (Number.isInteger(P.attributes[k]) && P.attributes[k] !== getPath(actor, `system.attributes.${k}.value`)) a[k] = P.attributes[k]; if (Object.keys(a).length) set.attributes = a; }
-  if (isObj(P.texts)) { const t = {}; for (const k of TEXT_KEYS) if (typeof P.texts[k] === "string" && P.texts[k] !== String(actor.system?.[k] ?? "")) t[k] = P.texts[k]; if (Object.keys(t).length) set.texts = t; }
-  for (const k of ["resources", "reputation"]) if (Number.isInteger(P[k]) && P[k] !== actor.system?.[k]) set[k] = P[k];
-  if (Object.keys(set).length) ops.push({ op: "updateActor", opId: nextId("act"), set });
-  return { ops, errors };
+  return { ops, errors, defaulted };
 }
 
 /* ================================================================== partial selection (spec 7.5.6) */
@@ -740,14 +770,19 @@ export function summarize(normalized, projection, budget) {
   for (const op of normalized?.ops ?? []) {
     const info = projection?.opInfo?.[op.opId];
     if (!info) continue;
-    if (info.kind === "actor") lines.push(`${op.opId}: actor ${info.changed.map((c) => c.path.replace(/^system\.|\.value$/g, "").replace(/^attributes\./, "")).join(", ")}`);
-    else {
+    const c = budget?.perOp?.find((x) => x.opId === op.opId);
+    if (info.kind === "actor") {
+      let s = `${op.opId}: actor ${info.changed.map((ch) => ch.path.replace(/^system\.|\.value$/g, "").replace(/^attributes\./, "")).join(", ")}`;
+      if (c?.label && (c.points || c.slots)) s += ` cost: ${c.label}`;
+      lines.push(s);
+    } else {
       let s = `${op.opId}: ${OP_WORD[info.kind]} ${info.type} "${info.name}"`;
       if (info.kind === "add" && info.type === "power") s += ` (${projection.actor.items.find((x) => x._id === info.itemId)?.system?.level ?? "basic"})`;
-      if (info.kind === "update" && info.changed?.length) s += ` [${info.changed.map((c) => c.field).join(", ")}]`;
+      if (info.kind === "update" && info.changed?.length) s += ` [${info.changed.map((ch) => ch.field).join(", ")}]`;
       if (info.cascade?.length) s += ` + ${info.cascade.length} dependant(s)`;
-      const c = budget?.perOp?.find((x) => x.opId === op.opId);
-      if (c && (c.points || c.slots)) s += ` cost: ${c.slots ? `${c.slots > 0 ? "+" : ""}${c.slots} slot ` : ""}${c.points ? `${c.points > 0 ? "+" : ""}${c.points} pts` : ""}`.trimEnd();
+      // P1-C: a readable cost per op ("free occupation talent", "extra talent -1 pt", "+1 slot (3/4) -2 pts")
+      if (c?.label) s += ` cost: ${c.label}`;
+      else if (c && (c.points || c.slots)) s += ` cost: ${c.slots ? `${c.slots > 0 ? "+" : ""}${c.slots} slot ` : ""}${c.points ? `${c.points > 0 ? "+" : ""}${c.points} pts` : ""}`.trimEnd();
       lines.push(s);
     }
   }

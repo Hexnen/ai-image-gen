@@ -388,6 +388,45 @@ await test("fixtures and output carry no book text markers (invented vocabulary 
   }
 });
 
+/* ---------------------------------------------------------------- fixes 2 (analysis-1 P1-D, P1-E) */
+await test("P1-E: sheet refs use the catalogue prefix (sources:, never power-sources:)", () => {
+  const t = snap(typicalHero()).text;
+  assert.match(t, /powerSource "Strange Meteor" ref=sources:\w{16}/);
+  assert.ok(!t.includes("power-sources:"));
+  assert.equal(entryFromIndex("power-sources", { _id: "x".repeat(16), name: "N", system: {} }).ref, `sources:${"x".repeat(16)}`);
+  assert.equal(entryFromIndex("power-sources", { _id: "x".repeat(16), name: "N", system: {} }).pack, "power-sources");
+});
+await test("P1-D: a note holding brackets keeps the catalogue match (no false custom); state split by balanced brackets", () => {
+  const a = typicalHero();
+  const nid = idGen(9191);
+  const lean = a.items.find((i) => i.name === "Lean Times");
+  const nested = item(nid(), "drawback", "Lean Times (Kingpin (Wilson Fisk))", clone(lean._source.system));
+  const h = rebuild(a, { items: [...a.items.filter((i) => i !== lean), nested], system: { relationships: "NPC: Foggy Doe (friend (lawyer))\nHero: Grey Lantern" } });
+  const t = snap(h).text;
+  assert.match(t, /drawback "Lean Times \(Kingpin \(Wilson Fisk\)\)" ref=drawbacks:\w{16}$/m);
+  assert.ok(!/Lean Times[^\n]* custom/.test(t));
+  const st = chargenStateFromActor(h, { rank: "global" });
+  assert.deepEqual(st.drawbacks.map((d) => [d.name, d.note]), [["Lean Times", "Kingpin (Wilson Fisk)"]]);
+  assert.deepEqual(st.npcRel, { name: "Foggy Doe", type: "friend (lawyer)" });
+});
+await test("P1-D: ordinary names split exactly like plus-ultra's patterns (import.mjs / catalog.normBase)", async () => {
+  const N = await import("../scripts/systems/invincible/names.mjs");
+  const puBase = (s) => String(s).replace(/\s*\([^)]*\)\s*$/, "").trim();
+  const puNote = (s) => String(s).match(/\(([^)]*)\)\s*$/)?.[1]?.trim() ?? "";
+  const puPower = (s) => { const m = String(s).match(/^(.*?)\s+\(([^)]*)\)\s*$/); return m ? [m[1], m[2].trim()] : [s, ""]; };
+  const names = ["Phobic (spiders)", "Extra Limb(s)", "Knowledgeable (Technology)", "Flight", "A (b) (c)", "Bar ()", "(x)", "A (b))", "Foo (bar", "Name ( spaced )  ", "Hard Times"];
+  for (const n of names) {
+    assert.equal(N.baseName(n), puBase(n), n);
+    assert.equal(N.noteOf(n), puNote(n), n);
+    const sp = N.splitNote(n, { space: true });
+    const [pb, pn] = puPower(n);
+    assert.deepEqual(sp.base === n.trim() ? [n, ""] : [sp.base, sp.note], [pb, pn], n);
+  }
+  // power with a note written without a space stays one name (import.mjs T011), drawbacks split either way
+  const h = rebuild(typicalHero(), { items: [...typicalHero().items, item("LimbLimbLimbLimb", "power", "Extra Limb(s)", { level: "basic" })] });
+  assert.ok(chargenStateFromActor(h, { rank: "global" }).powers.some((p) => p.name === "Extra Limb(s)" && !p.note));
+});
+
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);
 console.log("\nMeasured fixture sizes (local estimator, spec 9.2 [E]; confirm with count_tokens in T8):");
 for (const [k, v] of Object.entries(sizes)) console.log(`  ${k}: ${v.items} items, ${v.lines} lines, ${v.chars} chars, ~${v.tokensEst} tokens, cut level ${v.cutLevel}`);

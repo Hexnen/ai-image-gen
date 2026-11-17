@@ -18,7 +18,7 @@
 
 import * as rules from "./vendor/chargen/rules.mjs";
 import { ATTRS, LEVEL_WORDS, norm, normBase, powerLevelOf } from "./reader.mjs";
-import { normRef, baseName, noteOf, levelWord, cleanText } from "./writer.mjs";
+import { normRef, baseName, noteOf, levelWord, cleanText, writeNote } from "./writer.mjs";
 
 const SIX = ["powerSource", "power", "boost", "limit", "talent", "drawback"];
 const listOf = (coll) => (coll == null ? [] : Array.isArray(coll) ? coll : typeof coll.values === "function" ? [...coll.values()] : [...coll]);
@@ -134,7 +134,7 @@ export function toOps(actor, proposal, cat, opts = {}) {
     const e = entryOf(cat, "power", p);
     if (!e) { errors.push(msg("ref.unknown", `power ${p.ref ?? p.name ?? p.key} is not in the catalogue`)); continue; }
     const w = levelWord(p.level) ?? (p.ref ? cat.levelOf(normRef(p.ref)) : null) ?? "basic";
-    const note = cleanText(p.note, 60);
+    const note = writeNote(p.note);
     const hit = free("power").find((i) => norm(baseName(i.name)) === norm(e.name));
     let powerLink;
     if (hit) {
@@ -170,12 +170,12 @@ export function toOps(actor, proposal, cat, opts = {}) {
     if (!e) { errors.push(msg("ref.unknown", `talent ${t?.ref ?? t?.name ?? t} is not in the catalogue`)); return; }
     const hit = free("talent").find((i) => norm(baseName(i.name)) === norm(e.name));
     if (hit) { used.add(hit._id); return; }
-    ops.push({ opId: `tal-${n + 1}`, kind: "addItem", ref: e.ref, ...(t?.note ? { note: cleanText(t.note, 60) } : {}) });
+    ops.push({ opId: `tal-${n + 1}`, kind: "addItem", ref: e.ref, ...(t?.note ? { note: writeNote(t.note) } : {}) });
   });
   want.drawbacks.forEach((d, n) => {
     const e = entryOf(cat, "drawback", d);
     if (!e) { errors.push(msg("ref.unknown", `drawback ${d?.ref ?? d?.name ?? d} is not in the catalogue`)); return; }
-    const note = cleanText(d?.note ?? (d?.name ? noteOf(d.name) : ""), 60);
+    const note = writeNote(d?.note ?? (d?.name ? noteOf(d.name) : ""));
     const hit = free("drawback").find((i) => norm(baseName(i.name)) === norm(e.name));
     if (hit) {
       used.add(hit._id);

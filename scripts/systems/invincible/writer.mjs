@@ -23,7 +23,10 @@
 //   Expect = { items: { <itemId>: { fp, name } }, actor: { <path>: value }, deletes:[itemId] }: pass back to apply() unchanged.
 //   projected = the actor after the ops, as a plain actor-like object ({ id, uuid, name, type, _source, system, items:[{ id, name,
 //     type, _source, effects }], effects }) for reader.mjs / the validators (spec 7.5 point 1). New items get placeholder ids "+<opId>".
-// APPLY: apply(doc, proposal, { confirmed, expect, profile, only, allowVitals, onStage }) -> Result = { ok, runId, plan, errors,
+// APPLY: apply(doc, proposal, { rank, profile, confirmed, expect, only, allowVitals, onStage }) -> Result = { ok, runId, plan, errors,
+//   (`rank` = the drawer's rank, REQUIRED for superheroes: teen|street|global|cosmic. Without it the hero is validated by
+//   plus-ultra's chargen rank flag, else as Global, and the result carries the warning `rank.defaulted` (P1-G). `profile` =
+//   "creation" (default) | "in-play"; `confirmed` (not `confirm`) = true for removals / level swaps.)
 //   warnings, created:[id], updated:[id], deleted:[id], idMap:{ opId: itemId }, message, busy?, stale?, needsConfirm?, unsaved?,
 //   rolledBack? }. GM only; refuses while the open sheet holds unsaved input; re-plans and re-validates on the CURRENT document;
 //   refuses the WHOLE write when an item it touches changed since the preview (expect); destructive plans need confirmed:true;
@@ -32,6 +35,7 @@
 
 import { ATTRS, LEVEL_WORDS, getPath, norm, normBase, plainText, powerLevelOf, unsavedFrom, automationsOf } from "./reader.mjs";
 import { clone, fingerprint, readJournal, pruneJournal, findRun, selectEntries, driftOf, undoOrder, describeRun, UNDO_TTL } from "./undo.mjs";
+import { baseName, noteOf, withNote, cleanNote } from "./names.mjs";
 
 export const MODULE_ID = "moinens-ai-gen";
 export const JOURNAL_PATH = `flags.${MODULE_ID}.undo`;
@@ -79,9 +83,10 @@ const escapeHtml = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
 const defuse = (s) => String(s).replace(/@(\w+)\[/g, "@​$1[").replace(/\[\[/g, "[​[");
 /** plain text -> safe HTML paragraphs */
 export const toParagraphs = (s) => cleanText(s, 4000).split(/\n+/).map((x) => x.trim()).filter(Boolean).map((p) => `<p>${escapeHtml(defuse(p))}</p>`).join("");
-export const baseName = (n) => String(n ?? "").replace(/\s*\([^)]*\)\s*$/, "").trim();
-export const noteOf = (n) => /\(([^)]*)\)\s*$/.exec(String(n ?? ""))?.[1]?.trim() ?? "";
-const withNote = (name, note) => (note ? `${baseName(name)} (${note})` : baseName(name));
+// "Name (note)": balanced trailing bracket group; notes without brackets, cut at a word boundary (names.mjs, shared, P1-D)
+export { baseName, noteOf };
+/** a note as written: control chars stripped, brackets replaced, cut at a word boundary to NOTE_MAX (same as the validator) */
+export const writeNote = (note) => cleanNote(cleanText(note ?? "", 4000)).note;
 export const levelWord = (l) => {
   if (l === null || l === undefined || l === "") return null;
   if (typeof l === "number") return LEVEL_WORDS[l] ?? null;
@@ -448,7 +453,7 @@ export function createWriter(deps = {}) {
         if (type === "power" && !r.split && r.level) { data.system.level = r.level; levelFlips(data.system, r.level, true); }
         if (type === "power" && r.split && r.level) data.system.level = data.system.level || r.level;
       }
-      const note = cleanText(op.note ?? "", 60);
+      const note = writeNote(op.note);
       if (note) { if (["power", "talent", "drawback"].includes(type)) data.name = withNote(data.name, note); else W("op.note.ignored", `a note is only written on powers, talents and drawbacks (op ${opId})`, { opId }); }
       const links = {};
       let dependsOn = null;
@@ -538,7 +543,7 @@ export function createWriter(deps = {}) {
       }
       if (set.note != null) {
         if (!["power", "talent", "drawback"].includes(type)) E("set.note.type", `notes are written on powers, talents and drawbacks only ("${it.name}" is a ${type})`, { opId });
-        else { const n = cleanText(set.note, 60); const to = withNote(it.name, n); if (swapData) swapData.name = to; ch("name", it.name, to); }
+        else { const n = writeNote(set.note); const to = withNote(it.name, n); if (swapData) swapData.name = to; ch("name", it.name, to); }
       }
       if (set.name != null) {
         if (!isGear) E("set.name.type", `only gear and vehicle weapons can be renamed; use a note on "${it.name}"`, { opId });
@@ -823,7 +828,8 @@ export function createWriter(deps = {}) {
   async function applyLocked(doc, proposal, opts = {}) {
     const { confirmed = false, expect = null, profile, only, allowVitals = false, onStage = null, label = "" } = opts;
     const stage = (s) => { try { onStage?.(s); } catch { /* progress callbacks never break a write */ } };
-    const { plan: p, exec } = await planInternal(doc, proposal, { only, deselect: opts.deselect, allowVitals });
+    // rank + profile reach the replace -> ops conversion too (a creation build without reputation gets the rank's value, P1-F)
+    const { plan: p, exec } = await planInternal(doc, proposal, { only, deselect: opts.deselect, allowVitals, rank: opts.rank, profile });
     const base = { ok: false, runId: null, plan: p, errors: p.errors, warnings: p.warnings, created: [], updated: [], deleted: [], idMap: {} };
     if (!p.ok) return { ...base, message: p.errors[0]?.message ?? "invalid" };
     if (typeof D.validate === "function") {
@@ -832,6 +838,8 @@ export function createWriter(deps = {}) {
       try { v = await D.validate(doc, proposal, { profile, rank: opts.rank, deselect, skipPlan: true, only, allowVitals }); }
       catch (e) { v = { ok: false, errors: [msg("validate.failed", String(e?.message ?? e))] }; }
       if (v && v.ok === false) return { ...base, validation: v, errors: v.errors ?? [], message: v.errors?.[0]?.message ?? "validation failed" };
+      // P1-G: an apply without `rank` (and no plus-ultra flag) was validated as Global: the caller sees that in the result
+      for (const w of v?.warnings ?? []) if (w?.code === "rank.defaulted") p.warnings.push(msg(w.code, w.message ?? "No rank given: validated as the default rank."));
     }
     if (expect) {
       const stale = staleCheck(p, expect, doc);

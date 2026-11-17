@@ -804,4 +804,61 @@ await test("live regressions (lane 20): nested _stats ignored by the fingerprint
   assert.equal(act.system.attributes.fighting.value, before);
 });
 
+/* ---------------------------------------------------------------- fixes 2 (analysis-1 P1-D, P1-F, P1-G) */
+await test("P1-D: the writer writes notes without brackets, cut at a word boundary; nested names keep their base", async () => {
+  const a = hero();
+  const long = "Kingpin (Wilson Fisk) and an invented long tail of extra words here";
+  const r = await W.apply(a, { ops: [{ opId: "d", kind: "addItem", ref: refOf("drawback", "Haunted"), note: long }] });
+  assert.equal(r.ok, true, r.message);
+  const made = a.items.get(r.idMap.d);
+  assert.equal(made.name, "Haunted (Kingpin, Wilson Fisk and an invented long tail of extra)");
+  // an item already named with nested brackets: a note update replaces the whole note (balanced match), base name kept
+  made._source.name = "Haunted (Boss (Big))";
+  const u = await W.apply(a, { ops: [{ opId: "u", kind: "updateItem", itemId: made.id, set: { note: "Rival (Small)" } }] });
+  assert.equal(u.ok, true, u.message);
+  assert.equal(a.items.get(made.id).name, "Haunted (Rival, Small)");
+  // the validator's projection and the writer agree on the name
+  const T5v = await import("../scripts/systems/invincible/validate.mjs");
+  const { makeLookup } = await import("./fixtures/invincible-sheets.mjs");
+  const v = await T5v.validateProposal(hero(), { target: "this", mode: "ops", rationale: "x", ops: [{ op: "addItem", opId: "d", ref: refOf("drawback", "Haunted"), note: long }] }, { catalog: cat, lookup: makeLookup(), itemCheck: () => null, profile: "in-play" });
+  assert.equal(v.opInfo.d.name, made.name.replace("Rival, Small", "Kingpin, Wilson Fisk and an invented long tail of extra"));
+});
+await test("P1-F/P1-G: writer group passes rank + profile to the replace conversion (reputation default); apply without rank warns", async () => {
+  const { writerGroup } = await import("../scripts/systems/invincible/writer-group.mjs");
+  const T5v = await import("../scripts/systems/invincible/validate.mjs");
+  const { makeLookup, actor: mkActor } = await import("./fixtures/invincible-sheets.mjs");
+  let n = 0;
+  const g = writerGroup(() => ({ validate: (doc, p, o) => T5v.validateProposal(doc, p, { catalog: cat, lookup: makeLookup(), itemCheck: () => null, ...o }) }), {
+    getCatalog: async () => cat, fetchData, isGM: () => true, userId: () => "gm1", userName: () => "Gamemaster", liveForm: () => null,
+    randomID: () => `rig${String(++n).padStart(13, "0")}`, now: () => clock, sleep: async () => {}, lockSettle: 0, log: { warn() {}, error() {} }
+  });
+  const blank = () => new FakeActor(mkActor({ id: "blankWriter00001", name: "Blank", attrs: { fighting: 2, agility: 2, strength: 2, reason: 2, intuition: 2, presence: 2 }, items: [] }));
+  const P = {
+    name: "Street Hero", attributes: { fighting: 6, agility: 6, strength: 3, reason: 4, intuition: 5, presence: 3 }, resources: 3,
+    texts: { civilianName: "Invented Name", occupation: "Courier", personality: "Calm, Stern", drive: "Invented drive", flaw: "Invented flaw", team: "Invented team", relationships: "NPC: Tomas Rel (mentor)" },
+    sources: [{ key: "s", ref: refOf("powerSource", "Strange Meteor") }],
+    powers: [{ ref: refOf("power", "Echo Sense"), source: "s" }, { ref: refOf("power", "Quick Step"), source: "s" }, { ref: refOf("power", "Glide Wings"), source: "s" }],
+    talents: [{ ref: refOf("talent", "Quick Wits") }, { ref: refOf("talent", "Streetwise") }], drawbacks: [{ ref: refOf("drawback", "Lean Times"), note: "Boss (Big)" }]
+  };
+  const prop = { target: "this", mode: "replace", rationale: "x", proposal: P };
+  const a = blank();
+  const r = await g.apply(a, prop, { rank: "street", profile: "creation" });
+  assert.equal(r.ok, true, `${r.message} ${JSON.stringify(r.errors)}`);
+  assert.equal(a._source.system.reputation, 1, "street rank's reputation written although the proposal left it out");
+  assert.ok([...a.items.values()].some((i) => i.name === "Lean Times (Boss, Big)"));
+  assert.ok(!r.warnings.some((w) => w.code === "rank.defaulted"));
+  // no rank: validated as Global (the 27 points do not fit 32+) -> refused, and never silently
+  const b = blank();
+  const r2 = await g.apply(b, prop, {});
+  assert.equal(r2.ok, false);
+  assert.ok(r2.validation.warnings.some((w) => w.code === "rank.defaulted"));
+  // no rank but a proposal that fits Global: written, with the rank.defaulted warning in the result
+  const PG = { ...P, attributes: { fighting: 7, agility: 7, strength: 4, reason: 4, intuition: 6, presence: 5 }, powers: [...P.powers, { ref: refOf("power", "Mind Static"), source: "s" }] };
+  const c = blank();
+  const r3 = await g.apply(c, { ...prop, proposal: PG }, {});
+  assert.equal(r3.ok, true, `${r3.message} ${JSON.stringify(r3.errors)}`);
+  assert.ok(r3.warnings.some((w) => w.code === "rank.defaulted"));
+  assert.equal(c._source.system.reputation, 2);
+});
+
 console.log(`\n${passed} passed${process.exitCode ? ", some FAILED" : ""}`);

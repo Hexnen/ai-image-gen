@@ -103,7 +103,7 @@ await test("add a power in creation: attr.over with a reconciled suggestion; ado
   assert.match(e.message, /2 attribute points too many/);
   assert.ok(e.hint && e.suggest?.updateActor?.attributes);
   assert.equal(r1.budget.after.points, 31);
-  assert.deepEqual(r1.budget.perOp, [{ opId: "p1", points: -2, slots: 1, spent: 0 }]);
+  assert.deepEqual(r1.budget.perOp, [{ opId: "p1", points: -2, slots: 1, spent: 0, label: "+1 slot (slots 5/4, over the rank) -2 pts" }]);
   const sug = e.suggest.updateActor.attributes;
   assert.equal(rules.attrSum(sug), 31);
   const r2 = await V(a, ops(add, { op: "updateActor", opId: "a1", set: { attributes: sug } }));
@@ -472,7 +472,7 @@ await test("replace: same build keeps every id (no ops); a rebuild on a blank ac
     drawbacks: [{ ref: ref("drawback", "Lean Times") }]
   };
   const conv = replaceToOps(a, P, { catalog });
-  assert.deepEqual(conv, { ops: [], errors: [] });
+  assert.deepEqual(conv, { ops: [], errors: [], defaulted: [] });
   // swap a talent: one remove + one add, every other item kept
   const P2 = { ...P, talents: [{ ref: ref("talent", "Quick Wits") }, { ref: ref("talent", "Steady Hands") }] };
   const c2 = replaceToOps(a, P2, { catalog });
@@ -605,6 +605,168 @@ await test("projection never touches the document; normalize never throws on jun
   for (const junk of [null, 5, "x", [], { mode: "ops", ops: [null, 3] }]) assert.doesNotThrow(() => normalize(junk));
   const r = await V(a, null);
   assert.equal(r.layer, "L0");
+});
+
+/* ================================================================== fixes 2 (analysis-1 P1-C, P1-D, P1-E, P1-F, P1-G) */
+// a catalogue that also has an (invented) occupation page: Courier = Resources 3, talents Quick Wits / Streetwise / Tough Skin
+const occSource = () => {
+  const s = fixtureSource(rows());
+  const occHtml = "<h2>Courier</h2><p>Invented placeholder job.</p><p>Occupation Talent ([[D3]]):</p><p>1. Quick Wits, 2. Streetwise, 3. Tough Skin</p><p>Resources: 3</p><h2>Night Clerk</h2><p>Occupation Talent:</p><p>1. Steady Hands, 2. Tough Skin, 3. Quick Wits</p><p>Resources: 2</p>";
+  return { ...s, page: async (j, pid, name) => (name === "Occupation" ? { name, journal: "x", html: occHtml } : s.page(j, pid, name)) };
+};
+const catOcc = await buildCatalog(occSource());
+const VO = (doc, input, o = {}) => validateProposal(doc, input, { catalog: catOcc, lookup, itemCheck: () => null, ...o });
+const fullBuild = (over = {}) => ({
+  rank: "global", name: "Fresh Kestrel", attributes: { fighting: 6, agility: 7, strength: 5, reason: 5, intuition: 5, presence: 5 }, resources: 3, reputation: 2,
+  texts: { civilianName: "Invented Name", role: "Wildcard", occupation: "Courier", personality: "Restless, Loyal", drive: "Invented drive", flaw: "Invented flaw", team: "Invented team", relationships: "NPC: Tomas Rel (mentor)" },
+  sources: [{ key: "s1", ref: ref("powerSource", "Strange Meteor") }],
+  powers: [
+    { ref: ref("power", "Glide Wings"), level: "basic", source: "s1", boosts: [{ ref: ref("boost", "Silent Flight", "Glide Wings") }] },
+    { ref: ref("power", "Spark Bolt"), level: "major", source: "s1", limits: [{ ref: ref("limit", "Needs Charging", "Spark Bolt"), grants: "level" }] },
+    { ref: ref("power", "Echo Sense"), source: "s1" }
+  ],
+  talents: [{ ref: ref("talent", "Quick Wits") }, { ref: ref("talent", "Streetwise") }],
+  drawbacks: [{ ref: ref("drawback", "Lean Times") }],
+  ...over
+});
+const rep = (proposal) => ({ target: "this", mode: "replace", proposal, rationale: "x" });
+
+await test("P1-D: brackets in notes are autoFixed, long notes cut at a word boundary with note.cut", async () => {
+  const n = normalize({ target: "this", mode: "ops", ops: [{ op: "addItem", opId: "d", ref: "drawbacks:x", note: "Kingpin (Wilson Fisk)" }, { op: "updateItem", opId: "u", itemId: "i", set: { note: "an invented note that keeps going well beyond the sixty character limit here" } }] });
+  assert.equal(n.proposal.ops[0].note, "Kingpin, Wilson Fisk");
+  assert.ok(n.autoFixed.some((x) => /ops\[0\]\.note: brackets/.test(x)));
+  assert.equal(n.proposal.ops[1].set.note, "an invented note that keeps going well beyond the sixty");
+  assert.deepEqual(n.warnings.map((w) => [w.code, w.path, w.opId]), [["note.cut", "ops[1].set.note", "u"]]);
+  const a = typicalHero();
+  const r = await V(a, ops({ op: "addItem", opId: "d1", ref: ref("drawback", "Haunted"), note: "Kingpin (Wilson Fisk) and an invented long tail of extra words here" }, { op: "addItem", opId: "t1", ref: ref("talent", "Steady Hands") }), { profile: "in-play" });
+  has(r, "note.cut", "warnings");
+  assert.ok(r.warnings.find((w) => w.code === "note.cut").message.includes("cut to \"Kingpin, Wilson Fisk and an invented long tail of extra"));
+  assert.equal(r.opInfo.d1.name, "Haunted (Kingpin, Wilson Fisk and an invented long tail of extra)");
+  // replace path: same cleaning on proposal notes
+  const rr = await V(blankHero(), rep({ ...fullBuild(), drawbacks: [{ ref: ref("drawback", "Lean Times"), note: "Boss (Big)" }] }));
+  assert.ok(rr.autoFixed.some((x) => x.startsWith("proposal.drawbacks[0].note")));
+  assert.ok(rr.ops.some((o) => o.note === "Boss, Big"));
+});
+
+await test("P1-D: an existing nested-bracket name is matched (replace keeps the item, no false custom remove)", async () => {
+  const a = typicalHero();
+  const lean = a.items.find((i) => i.name === "Lean Times");
+  lean.name = lean._source.name = "Lean Times (Kingpin (Wilson Fisk))";
+  const st = stateOf(toPlainActor(a), "global");
+  assert.deepEqual(st.drawbacks.map((d) => d.name), ["Lean Times"]);
+  const P = fullBuild({ name: "Amber Kestrel", drawbacks: [{ ref: ref("drawback", "Lean Times"), note: "Kingpin, Wilson Fisk" }] });
+  const conv = replaceToOps(a, P, { catalog, rank: "global" });
+  assert.ok(conv.ops.every((o) => o.op !== "removeItem" && o.op !== "addItem"), JSON.stringify(conv.ops));
+  const upd = conv.ops.find((o) => o.op === "updateItem");
+  assert.equal(upd.set.note, "Kingpin, Wilson Fisk");   // the bracketed note is rewritten without brackets
+  const r = await V(a, ops({ op: "removeItem", opId: "r", itemId: lean.id }), { profile: "in-play" });
+  assert.ok(!r.warnings.some((w) => w.code === "remove.handEdited"), "catalogue match kept: not reported as custom");
+});
+
+await test("P1-E: refs with the long pack name (power-sources:) validate like the short ones", async () => {
+  const long = ref("powerSource", "Tinkerer Genius").replace(/^sources:/, "power-sources:");
+  const a = typicalHero();
+  const r = await V(a, ops({ op: "addItem", opId: "s", ref: long }), { profile: "in-play" });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  const rr = await V(blankHero(), rep(fullBuild({ sources: [{ key: "s1", ref: ref("powerSource", "Strange Meteor").replace(/^sources:/, "power-sources:") }] })), { rank: "global" });
+  assert.equal(rr.ok, true, JSON.stringify(rr.errors));
+});
+
+await test("P1-C: replace puts the actor op first; occupation talent free, extra talent -1, readable labels", async () => {
+  const r = await VO(blankHero(), rep(fullBuild({ talents: [{ ref: ref("talent", "Quick Wits") }, { ref: ref("talent", "Streetwise") }, { ref: ref("talent", "Steady Hands") }], attributes: { fighting: 6, agility: 7, strength: 5, reason: 5, intuition: 5, presence: 4 } })), { rank: "global" });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.equal(r.ops[0].op, "updateActor");
+  assert.equal(r.ops[0].opId, "act1");
+  const by = Object.fromEntries(r.budget.perOp.map((c) => [r.opInfo[c.opId].name ?? c.opId, c]));
+  assert.equal(by["Quick Wits"].points, 0); assert.equal(by["Quick Wits"].label, "hero talent (free)");
+  assert.equal(by["Streetwise"].points, 0); assert.equal(by["Streetwise"].label, "occupation talent (free)");
+  assert.equal(by["Steady Hands"].points, -1); assert.equal(by["Steady Hands"].label, "extra talent -1 pt");
+  assert.equal(by["Lean Times"].label, "drawback +1 pt");
+  assert.equal(by["Strange Meteor"].label, "first power source (free)");
+  assert.match(by["Glide Wings"].label, /^\+1 slot \(slots \d\/4\) -2 pts$/);
+  assert.equal(r.budget.perOp.find((c) => c.opId === "act1").points, 0);   // the actor op no longer looks +1
+  assert.equal(r.budget.perOp.reduce((s, c) => s + c.points, 0), r.budget.after.points - r.budget.before.points);
+  assert.match(r.summary, /add talent "Streetwise" cost: occupation talent \(free\)/);
+  assert.match(r.summary, /add talent "Steady Hands" cost: extra talent -1 pt/);
+});
+
+await test("P1-C: ops mode with updateActor LAST still prices the occupation talent as free (actor ops evaluated first)", async () => {
+  const b = blankHero();
+  const src = { op: "addItem", opId: "s", ref: ref("powerSource", "Strange Meteor") };
+  const pw = { op: "addItem", opId: "p", ref: ref("power", "Echo Sense"), sourceOpId: "s" };
+  const t1 = { op: "addItem", opId: "t1", ref: ref("talent", "Quick Wits") };
+  const t2 = { op: "addItem", opId: "t2", ref: ref("talent", "Streetwise") };
+  const act = { op: "updateActor", opId: "a", set: { texts: { occupation: "Courier" } } };
+  const r = await V(b, ops(src, pw, t1, t2, act), { profile: "in-play", rank: "global" });
+  const c = Object.fromEntries(r.budget.perOp.map((x) => [x.opId, x]));
+  assert.deepEqual(r.budget.perOp.map((x) => x.opId), ["s", "p", "t1", "t2", "a"]);   // list order kept
+  assert.equal(c.t2.points, 0); assert.equal(c.t2.label, "occupation talent (free)");
+  assert.equal(c.a.points, 0);
+});
+
+await test("P1-F: occupation, Resources, occupation talent and reputation are checked (creation, warnings)", async () => {
+  const ok = await VO(blankHero(), rep(fullBuild()), { rank: "global" });
+  assert.equal(ok.ok, true, JSON.stringify(ok.errors));
+  for (const c of ["occupation.unknown", "resources.occupation", "talent.occ.list", "reputation.rank"]) assert.ok(!codes(ok, "warnings").includes(c), c);
+  const bad = await VO(blankHero(), rep(fullBuild({ resources: 5, reputation: 0, talents: [{ ref: ref("talent", "Quick Wits") }, { ref: ref("talent", "Steady Hands") }] })), { rank: "global" });
+  assert.equal(bad.ok, true, "warnings, not errors (D-4 provisional)");
+  has(bad, "resources.occupation", "warnings"); has(bad, "talent.occ.list", "warnings"); has(bad, "reputation.rank", "warnings");
+  assert.match(bad.warnings.find((w) => w.code === "resources.occupation").message, /Resources 5 differ from the occupation's value \(Courier: 3\)/);
+  assert.match(bad.warnings.find((w) => w.code === "reputation.rank").hint, /Set reputation to 2/);
+  const own = await VO(blankHero(), rep(fullBuild({ texts: { ...fullBuild().texts, occupation: "Lighthouse Keeper" } })), { rank: "global" });
+  has(own, "occupation.unknown", "warnings");
+  assert.ok(!codes(own, "warnings").includes("resources.occupation"));
+  const asRef = await VO(blankHero(), rep(fullBuild({ texts: { ...fullBuild().texts, occupation: "occupation:courier" } })), { rank: "global" });
+  assert.match(asRef.warnings.find((w) => w.code === "occupation.unknown").hint, /Set texts.occupation to "Courier"/);
+  // knowledgeable-style variants: the base name counts
+  const kn = await VO(blankHero(), rep(fullBuild({ talents: [{ ref: ref("talent", "Quick Wits") }, { ref: ref("talent", "Streetwise"), note: "docks" }] })), { rank: "global" });
+  assert.ok(!codes(kn, "warnings").includes("talent.occ.list"));
+  // in-play: none of these checks
+  const ip = await VO(blankHero(), rep(fullBuild({ resources: 5, reputation: 0 })), { rank: "global", profile: "in-play" });
+  for (const c of ["resources.occupation", "reputation.rank"]) assert.ok(!codes(ip, "warnings").includes(c), c);
+});
+
+await test("P1-F: reputation defaults to the rank's value in a creation replace (validator and writer conversion agree)", async () => {
+  const P = fullBuild(); delete P.reputation;
+  const r = await VO(blankHero(), rep(P), { rank: "street" });
+  has(r, "reputation.defaulted", "info");
+  assert.equal(r.ops.find((o) => o.op === "updateActor").set.reputation, 1);
+  assert.equal(replaceToOps(blankHero(), P, { catalog, rank: "street" }).ops[0].set.reputation, 1);
+  assert.equal(replaceToOps(blankHero(), P, { catalog, rank: "street", profile: "in-play" }).ops[0].set.reputation, undefined);
+  const npc = replaceToOps(smallNpc(), { name: "X" }, { catalog, rank: "street" });
+  assert.deepEqual(npc.defaulted, []);
+});
+
+await test("P1-F: Hard Times info names the stored and the effective Resources (D-3 provisional)", async () => {
+  const d = describe({ code: "drawback.hardTimes", params: { n: 1, stored: 3, effective: 2, book: 1 } });
+  assert.match(d.message, /stored at 3/); assert.match(d.message, /sheet shows 2/); assert.match(d.message, /-2 each: 1/);
+  assert.equal(describe({ code: "drawback.hardTimes", params: {} }).message, "Hard Times lowers Resources (the pack effect applies -1).");
+});
+
+await test("P1-F: creation + replace shows warnings the blank actor already had (npc.name.blank hint reaches the model)", async () => {
+  const P = fullBuild({ texts: { ...fullBuild().texts, relationships: "" } });
+  const r = await VO(blankHero(), rep(P), { rank: "global" });
+  has(r, "npc.name.blank", "warnings");
+  assert.match(r.warnings.find((w) => w.code === "npc.name.blank").hint, /NPC: Name \(type\)/);
+  // ops mode keeps "new warnings only"
+  const o = await V(blankHero(), ops({ op: "updateActor", opId: "a", set: { name: "Still Blank" } }), { rank: "global" });
+  assert.ok(!codes(o, "warnings").includes("npc.name.blank"));
+});
+
+await test("P1-G: no suggest when the proposal names another rank; rank.defaulted when nobody chose a rank", async () => {
+  const P = fullBuild({ rank: "street" });
+  const r = await VO(blankHero(), rep(P), { rank: "global" });
+  has(r, "rank.differs", "warnings");
+  const e = r.errors.find((x) => x.code === "attr.unspent" || x.code === "attr.over");
+  if (e) assert.equal(e.suggest, undefined);
+  const r2 = await VO(blankHero(), rep(fullBuild({ attributes: { fighting: 6, agility: 7, strength: 5, reason: 5, intuition: 5, presence: 2 } })), { rank: "global" });
+  assert.ok(r2.errors.find((x) => x.code === "attr.unspent").suggest, "same rank: the reconciled vector is still offered");
+  const d = await VO(blankHero(), rep(fullBuild()));
+  has(d, "rank.defaulted", "warnings");
+  assert.match(d.warnings.find((w) => w.code === "rank.defaulted").message, /validated as global \(the default\)/);
+  assert.ok(!codes(await VO(blankHero(), rep(fullBuild()), { rank: "global" }), "warnings").includes("rank.defaulted"));
+  assert.ok(!codes(await V(typicalHero(), ops({ op: "updateActor", opId: "a", set: { texts: { drive: "x" } } })), "warnings").includes("rank.defaulted"), "plus-ultra flag counts as a chosen rank");
+  assert.ok(!codes(await V(smallNpc(), ops({ op: "updateActor", opId: "a", set: { name: "Y" } })), "warnings").includes("rank.defaulted"), "npc: no rank budget");
 });
 
 console.log(`\n${passed} passed${process.exitCode ? " (with failures)" : ""}`);

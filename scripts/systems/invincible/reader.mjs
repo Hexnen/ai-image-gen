@@ -22,6 +22,7 @@
 
 import * as rules from "./vendor/chargen/rules.mjs";
 import { createState } from "./vendor/chargen/state.mjs";
+import { norm, normBase, splitNote } from "./names.mjs";
 
 export const MODULE_ID = "moinens-ai-gen";
 export const PU_ID = "invincible-plus-ultra";
@@ -34,11 +35,13 @@ export const TEXT_FIELDS = ["civilianName", "role", "occupation", "personality",
 export const ITEM_ORDER = ["powerSource", "power", "boost", "limit", "talent", "drawback", "gear", "vehicleWeapon", "criticalInjury", "spell"];
 /** core packs -> item type they hold (gears holds gear; the index `type` decides per entry) */
 export const PACK_TYPES = Object.freeze({ "powers": "power", "power-sources": "powerSource", "boosts": "boost", "limits": "limit", "talents": "talent", "drawbacks": "drawback", "gears": null });
+/** core pack -> the catalogue's ref prefix (catalog.mjs KIND_INFO.short): refs on the sheet are the refs the tools take (P1-E) */
+export const PACK_SHORT = Object.freeze({ "powers": "powers", "power-sources": "sources", "boosts": "boosts", "limits": "limits", "talents": "talents", "drawbacks": "drawbacks", "gears": "gears" });
 
 /* ------------------------------------------------------------------ small pure helpers */
 const own = (o, k) => !!o && Object.prototype.hasOwnProperty.call(o, k);
-export const norm = (s) => String(s ?? "").replace(/­/g, "").toLowerCase().replace(/\s+/g, " ").trim();
-export const normBase = (s) => norm(String(s ?? "").replace(/\s*\([^)]*\)\s*$/, ""));
+// name matching (balanced trailing "(note)") is shared with proposal / writer / catalog: names.mjs
+export { norm, normBase };
 export function getPath(o, path) {
   let cur = o;
   for (const k of String(path).split(".")) { if (cur == null || typeof cur !== "object") return undefined; cur = cur[k]; }
@@ -176,7 +179,7 @@ export function entryFromIndex(packName, row, { folderName = null } = {}) {
   const sys = row.system ?? {};
   const type = PACK_TYPES[packName] ?? row.type ?? null;
   return {
-    ref: `${packName}:${row._id}`, pack: packName, id: row._id, type, name: String(row.name ?? ""),
+    ref: `${PACK_SHORT[packName] ?? packName}:${row._id}`, pack: packName, id: row._id, type, name: String(row.name ?? ""),
     level: LEVEL_WORDS.includes(sys.level) ? sys.level : "",
     power: type === "boost" || type === "limit" ? folderName : null,
     descHash: hash(plainText(sys.description)), autoSig: automationSig(sys)
@@ -264,7 +267,7 @@ export function chargenStateFromActor(actor, { rank } = {}) {
     const m = line.match(/^(NPC|Hero):\s*(.*)$/i);
     if (!m) continue;
     if (m[1].toLowerCase() === "hero") s.heroRel = { name: m[2].trim(), actorUuid: null };
-    else { const n = m[2].match(/^(.*?)\s*(?:\(([^)]*)\))?$/); s.npcRel = { name: (n?.[1] ?? m[2]).trim(), type: (n?.[2] ?? "").trim() }; }
+    else { const n = splitNote(m[2]); s.npcRel = { name: n.base, type: n.note }; }
   }
   s.team = { name: txt("team"), base: "", where: "", upgrades: [], mode: "text", baseId: null };
   const [base, ups] = txt("teamBase").split(/(?:^|;)\s*upgrades:\s*/i);
@@ -281,9 +284,11 @@ export function chargenStateFromActor(actor, { rank } = {}) {
   ofType("power").forEach((it, n) => {
     const key = `p${n + 1}`;
     powerKey.set(it._id, key);
-    const pm = String(it.name).match(/^(.*?)\s+\(([^)]*)\)\s*$/);
+    // import.mjs: a power note is split only when written with a space ("Extra Limb(s)" stays one name); balanced brackets (names.mjs)
+    const sp = splitNote(it.name, { space: true });
+    const split = sp.base !== String(it.name ?? "").trim();
     const level = Math.max(0, LEVEL_WORDS.indexOf(powerLevelOf(it.system)));
-    s.powers.push({ key, name: pm ? pm[1] : it.name, packUuid: null, level, sourceKey: sourceKey.get(it.system?.powerSource) ?? s.sources[0]?.key ?? null, boosts: [], limits: [], ...(pm && pm[2].trim() ? { note: pm[2] } : {}) });
+    s.powers.push({ key, name: split ? sp.base : it.name, packUuid: null, level, sourceKey: sourceKey.get(it.system?.powerSource) ?? s.sources[0]?.key ?? null, boosts: [], limits: [], ...(split && sp.note ? { note: sp.note } : {}) });
   });
   const powerOf = (it) => s.powers.find((p) => p.key === powerKey.get(it.system?.power));
   for (const it of ofType("boost")) powerOf(it)?.boosts.push({ name: it.name, packUuid: null });
@@ -292,8 +297,8 @@ export function chargenStateFromActor(actor, { rank } = {}) {
   s.heroTalent = talents[0] ?? null;
   if (s.occupation) { s.occTalent = talents[1] ?? null; s.extraTalents = talents.slice(2); } else s.extraTalents = talents.slice(1);
   s.drawbacks = ofType("drawback").map((it) => {
-    const m = String(it.name).match(/^(.*?)\s*\(([^)]*)\)\s*$/);
-    return m ? { name: m[1], packUuid: null, note: m[2] } : { name: it.name, packUuid: null, note: "" };
+    const d = splitNote(it.name);
+    return d.base !== String(it.name ?? "").trim() ? { name: d.base, packUuid: null, note: d.note } : { name: it.name, packUuid: null, note: "" };
   });
   return s;
 }

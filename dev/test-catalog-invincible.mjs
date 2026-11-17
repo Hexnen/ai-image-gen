@@ -293,4 +293,42 @@ await test("pack: prompt capability complete; staticPrompt stable; proposal tool
   console.log(`     fixture sizes (chars/3.5 tokens): ${JSON.stringify(sizes)}`);
 });
 
+/* ---------------------------------------------------------------- fixes 2 (analysis-1 P1-D, P1-E, P1-F) */
+await test("P1-E: a ref written with the long pack name is the same ref (get / levelOf / refToUuid); shortRef", async () => {
+  const { shortRef } = await import("../scripts/systems/invincible/catalog.mjs");
+  assert.equal(shortRef("power-sources:abc"), "sources:abc");
+  assert.equal(shortRef(" npcs-creatures:x "), "npcs:x");
+  assert.equal(shortRef("powers:x"), "powers:x");
+  assert.equal(shortRef("occupation:mock-job"), "occupation:mock-job");
+  const viaLong = cat.get(`power-sources:${id("srcOdd")}`);
+  assert.ok(viaLong && viaLong.ref === `sources:${id("srcOdd")}`);
+  assert.equal(cat.levelOf(`powers:${id("pwrZapM")}`), "major");
+  assert.equal(refToUuid(cat, `power-sources:${id("srcOdd")}`), `Compendium.invincible-core.power-sources.Item.${id("srcOdd")}`);
+  const r = await getEntries(cat, source, [`power-sources:${id("srcOdd")}`]);
+  assert.deepEqual(r.unknown, []); assert.equal(r.entries[0].ref, `sources:${id("srcOdd")}`);
+});
+await test("P1-D: findByName / normBase use the balanced trailing bracket group (nested note)", async () => {
+  const { normBase } = await import("../scripts/systems/invincible/catalog.mjs");
+  assert.equal(normBase("Plain Trouble (Kingpin (Wilson Fisk))"), "plain trouble");
+  assert.equal(normBase("Plain Trouble (one) (two)"), "plain trouble (one)");
+  assert.equal(cat.findByName("drawback", "Plain Trouble (Kingpin (Wilson Fisk))")?.ref, `drawbacks:${id("drwPlain")}`);
+  assert.equal(cat.findByName("boost", "Far Reach (Glide)")?.ref, `boosts:${id("bstFar")}`);   // a catalogue name that itself ends in brackets
+});
+await test("P1-F: occupationFacts reads Resources and the occupation talent list (one line, per line, list items)", async () => {
+  const { occupationFacts } = await import("../scripts/systems/invincible/catalog.mjs");
+  assert.deepEqual(occupationFacts("Intro placeholder.\nOccupation Talent ([[D3]]):\n1. Alpha Knack, 2. Beta Knack, 3. Knowing (any)\nResources: 3\nKey Relationship ([[D3]]):\n1. x"), { resources: 3, talents: ["Alpha Knack", "Beta Knack", "Knowing (any)"] });
+  assert.deepEqual(occupationFacts("Occupation Talent:\n1. One\n2. Two\nResources: 5"), { resources: 5, talents: ["One", "Two"] });
+  assert.deepEqual(occupationFacts("Occupation Talent: 1. One, 2. Two\nResources: 2"), { resources: 2, talents: ["One", "Two"] });
+  assert.deepEqual(occupationFacts("Occupation Talent\n- One\n- Two\nResources: 4"), { resources: 4, talents: ["One", "Two"] });
+  assert.deepEqual(occupationFacts("No facts here."), { resources: null, talents: [] });
+  // through buildCatalog: occupation entries carry the facts, the index text does not change (cached prefix)
+  const f = fixture();
+  const occHtml = "<h2>Mock Job</h2><p>Occupation placeholder text.</p><p>Occupation Talent ([[D3]]):</p><p>1. Quick Placeholder, 2. Other Knack, 3. Third Knack</p><p>Resources: 4</p>";
+  const src2 = { ...f.source, page: async (j, pid, name) => (name === "Occupation" ? { name, journal: "2: Your Superhero", html: occHtml } : f.source.page(j, pid, name)) };
+  const c2 = await buildCatalog(src2, { feedRules: false });
+  const occ = c2.byKind("occupation")[0];
+  assert.equal(occ.resources, 4); assert.deepEqual(occ.talents, ["Quick Placeholder", "Other Knack", "Third Knack"]);
+  assert.ok(!indexText(c2).includes("Other Knack"));
+});
+
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);
