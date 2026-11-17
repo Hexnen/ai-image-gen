@@ -242,6 +242,42 @@ export function readItem(item, ctx = {}) {
   return row;
 }
 
+/* ------------------------------------------------------------------ talent roles (W2-3) */
+/**
+ * Role of each talent of a superhero, the way plus-ultra import.mjs (and chargenStateFromActor below) reads it: by the order of the
+ * actor's item collection (= the stored `items` array; Foundry keeps that order across reloads, v14 EmbeddedCollectionField
+ * stores the id list in order). 1st talent = "hero", 2nd = "occupation" when the actor has an occupation text, the rest "extra".
+ * The item `sort` field (drag order on the sheet) plays no part. New items are always appended, so replacing the hero or the
+ * occupation talent shifts the roles of the talents after it (talentRoleShifts).
+ * talents: [{ id }] in collection order -> Map(id -> "hero"|"occupation"|"extra")
+ */
+export const TALENT_ROLES = Object.freeze(["hero", "occupation", "extra"]);
+export function talentRoles(talents, hasOccupation) {
+  const out = new Map();
+  (talents ?? []).forEach((t, n) => out.set(String(t.id ?? t._id), n === 0 ? "hero" : n === 1 && hasOccupation ? "occupation" : "extra"));
+  return out;
+}
+/** roles of an actor-like object's talents (plain `{ items:[{_id,type}], system:{occupation} }` or a document) */
+export function talentRolesOf(actor) {
+  const src = srcOf(actor);
+  const items = listOf(actor?.items ?? src.items).map(srcOf).filter((i) => i?.type === "talent").map((i) => ({ id: i._id ?? i.id, name: i.name }));
+  return { roles: talentRoles(items, !!String(src.system?.occupation ?? "").trim()), items };
+}
+/**
+ * Talents that exist before AND after a change and whose role differs (e.g. the hero talent removed and a new one added: the new one
+ * lands last, the old occupation talent becomes the hero talent). Pure.
+ * -> [{ itemId, name, from, to }]
+ */
+export function talentRoleShifts(before, after) {
+  const b = talentRolesOf(before), a = talentRolesOf(after);
+  const out = [];
+  for (const t of a.items) {
+    const id = String(t.id), from = b.roles.get(id), to = a.roles.get(id);
+    if (from && to && from !== to) out.push({ itemId: id, name: String(t.name ?? ""), from, to });
+  }
+  return out;
+}
+
 /* ------------------------------------------------------------------ chargen state (stateFromActor, rewritten pure) */
 /**
  * actor-like object -> plus-ultra chargen state (vendored state.mjs shape). Same heuristics as plus-ultra import.mjs (header).
@@ -421,6 +457,11 @@ export function readActor(actor, { lookup = EMPTY_LOOKUP, live = null, rank = nu
     validation: null
   };
   const type = model.doc.type;
+  // W2-3: the talent role is the collection order (talentRoles); the sheet line shows it, so the block's (tree) order may differ
+  if (type === "superhero") {
+    const roles = talentRoles(items.filter((i) => i.type === "talent"), !!model.texts.occupation);
+    for (const i of items) if (roles.has(i.id)) i.role = roles.get(i.id);
+  }
   if (type === "superhero") model.validation = superheroBaseline(chargenStateFromActor(actor, { rank: useRank }));
   else if (type === "npc") model.validation = npcBaseline(actor, items);
   return model;

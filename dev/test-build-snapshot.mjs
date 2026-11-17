@@ -55,12 +55,16 @@ await test("deterministic: same actor -> same bytes; rebuilt copy -> same bytes;
   assert.notEqual(snap(c).fingerprint, s.fingerprint);
 });
 
-await test("item order is independent of the collection order (tree: source -> power -> boosts/limits)", () => {
+await test("item order is independent of the collection order (tree: source -> power -> boosts/limits); talents excepted (W2-3)", () => {
   const a = typicalHero();
   const shuffled = rebuild(a, { items: [...a.items].reverse() });
-  const I = (t) => t.split("\n").filter((l) => l.startsWith("I "));
+  const I = (t) => t.split("\n").filter((l) => l.startsWith("I ") && !/^I \w+ talent /.test(l));
   assert.deepEqual(I(snap(shuffled).text), I(snap(a).text));
-  const lines = I(snap(a).text);
+  // talents keep the collection order: that order is their role
+  const T = (t) => t.split("\n").filter((l) => /^I \w+ talent /.test(l)).map((l) => l.match(/talent "([^"]+)" role=(\w+)/).slice(1).join(":"));
+  assert.deepEqual(T(snap(a).text), ["Quick Wits:hero", "Streetwise:occupation"]);
+  assert.deepEqual(T(snap(shuffled).text), ["Streetwise:hero", "Quick Wits:occupation"]);
+  const lines = snap(a).text.split("\n").filter((l) => l.startsWith("I "));
   const at = (name) => lines.findIndex((l) => l.includes(`"${name}"`));
   assert.ok(at("Strange Meteor") < at("Glide Wings") && at("Glide Wings") < at("Silent Flight") && at("Spark Bolt") < at("Needs Charging"));
   assert.ok(at("Needs Charging") < at("Quick Wits") && at("Lean Times") < at("Grapple Line"));
@@ -86,7 +90,7 @@ await test("items: ids, levels, links, refs, gear numbers; catalogue items carry
   assert.match(t, new RegExp(`^I ${id("Glide Wings")} power "Glide Wings" lvl=basic `, "m"));
   assert.match(t, new RegExp(`^I ${id("Silent Flight")} boost "Silent Flight" pow=${id("Glide Wings")} ref=boosts:\\w{16}$`, "m"));
   assert.match(t, new RegExp(`^I ${id("Needs Charging")} limit "Needs Charging" pow=${id("Spark Bolt")} ref=limits:`, "m"));
-  assert.match(t, /^I \w{16} talent "Quick Wits" ref=talents:\w{16} fx=initiativeSize\+1$/m);
+  assert.match(t, /^I \w{16} talent "Quick Wits" role=hero ref=talents:\w{16} fx=initiativeSize\+1$/m);
   assert.match(t, /^I \w{16} gear "Grapple Line" ref=gears:\w{16} edited cost=1 desc="/m);
   assert.match(t, /^I \w{16} gear "Pocket Camera" custom cost=1 desc="/m);
   assert.match(t, /^I \w{16} gear "Stun Baton" ref=gears:\w{16} cost=2 restricted atk=\+1 dmg=2 rng=0-0$/m);
@@ -425,6 +429,80 @@ await test("P1-D: ordinary names split exactly like plus-ultra's patterns (impor
   // power with a note written without a space stays one name (import.mjs T011), drawbacks split either way
   const h = rebuild(typicalHero(), { items: [...typicalHero().items, item("LimbLimbLimbLimb", "power", "Extra Limb(s)", { level: "basic" })] });
   assert.ok(chargenStateFromActor(h, { rank: "global" }).powers.some((p) => p.name === "Extra Limb(s)" && !p.note));
+});
+
+/* ---------------------------------------------------------------- W2-3: talent role on the sheet line */
+import { talentRoles, talentRolesOf, talentRoleShifts } from "../scripts/systems/invincible/reader.mjs";
+import { buildCatalog } from "../scripts/systems/invincible/catalog.mjs";
+import { validateProposal } from "../scripts/systems/invincible/validate.mjs";
+import { CATALOG_ROWS, fromCatalog } from "./fixtures/invincible-sheets.mjs";
+const talentLines = (t) => t.split("\n").filter((l) => /^I \w+ talent /.test(l));
+await test("W2-3: role=hero|occupation|extra by collection order; no occupation -> 2nd is extra; NPC lines have no role", () => {
+  const a = typicalHero();
+  const nid = idGen(777);
+  const extra = fromCatalog(nid, "talents", "Steady Hands");
+  const h = rebuild(a, { items: [...a.items, extra] });
+  assert.deepEqual(talentLines(snap(h).text).map((l) => l.match(/role=(\w+)/)[1]), ["hero", "occupation", "extra"]);
+  const noOcc = rebuild(h, { system: { occupation: "" } });
+  assert.deepEqual(talentLines(snap(noOcc).text).map((l) => l.match(/role=(\w+)/)[1]), ["hero", "extra", "extra"]);
+  // the reader's chargen state agrees with the marker
+  const st = chargenStateFromActor(h, { rank: "global" });
+  assert.deepEqual([st.heroTalent.name, st.occTalent.name, st.extraTalents.map((x) => x.name)], ["Quick Wits", "Streetwise", ["Steady Hands"]]);
+  for (const l of talentLines(snap(bigNpc()).text)) assert.ok(!/ role=/.test(l), l);
+  assert.deepEqual([...talentRoles([{ id: "a" }, { id: "b" }, { id: "c" }], true).values()], ["hero", "occupation", "extra"]);
+});
+await test("W2-3: a role change is one changed line per talent in the update block (diff by item key, order-free)", () => {
+  const a = typicalHero();
+  const old = snap(a);
+  const quick = a.items.find((i) => i.name === "Quick Wits");
+  const h = rebuild(a, { items: [...a.items.filter((i) => i !== quick), quick] });   // re-created hero talent lands last
+  const d = diffLines(old.lines, snap(h).lines);
+  assert.equal(d.added.length + d.removed.length, 0);
+  assert.deepEqual(d.changed.map((l) => l.match(/talent "([^"]+)" role=(\w+)/).slice(1).join(":")).sort(), ["Quick Wits:occupation", "Streetwise:hero"]);
+});
+await test("W2-3: talentRoleShifts: hero removed + new talent added -> old occupation talent becomes hero (pure)", () => {
+  const before = { system: { occupation: "Courier" }, items: [{ _id: "h", type: "talent", name: "A" }, { _id: "o", type: "talent", name: "B" }, { _id: "p", type: "power", name: "P" }] };
+  const after = { system: { occupation: "Courier" }, items: [{ _id: "o", type: "talent", name: "B" }, { _id: "p", type: "power", name: "P" }, { _id: "new:t1", type: "talent", name: "C" }] };
+  assert.deepEqual(talentRoleShifts(before, after), [{ itemId: "o", name: "B", from: "occupation", to: "hero" }]);
+  assert.deepEqual(talentRoleShifts(before, before), []);
+  assert.equal(talentRolesOf(after).roles.get("new:t1"), "occupation");
+});
+/* invented catalogue over the fixture rows (same shape as test-build-validate-invincible) */
+function catSource() {
+  const TYPE = { "power-sources": "powerSource", powers: "power", boosts: "boost", limits: "limit", talents: "talent", drawbacks: "drawback" };
+  const packs = {};
+  for (const [pack, list] of Object.entries(clone(CATALOG_ROWS))) {
+    const names = [...new Set(list.map((x) => x.folder).filter(Boolean))];
+    packs[pack] = { folders: names.map((n) => ({ id: `f_${n}`, name: n, parent: null })), docs: list.map((x) => ({ ...x, type: x.type ?? TYPE[pack], folder: x.folder ? `f_${x.folder}` : null, effects: [] })) };
+  }
+  return { has: (p) => !!packs[p], index: async (p) => packs[p]?.docs ?? [], folders: (p) => packs[p]?.folders ?? [], document: async (p, id) => clone(packs[p]?.docs.find((d) => d._id === id) ?? null), page: async () => null };
+}
+await test("W2-3: validation warns talent.role.shift (ops: hero replaced; replace: listed order the sheet cannot keep); none when roles hold", async () => {
+  const catalog = await buildCatalog(catSource(), { feedRules: false });
+  const ref = (n) => catalog.findByName("talent", n).ref;
+  const V = (doc, input) => validateProposal(doc, input, { catalog, lookup, itemCheck: () => null, profile: "in-play", rank: "global" });
+  const a = typicalHero();
+  const id = (n) => a.items.find((i) => i.name === n).id;
+  const shift = (r) => r.warnings.filter((w) => w.code === "talent.role.shift");
+  const ops = (...list) => ({ target: "this", mode: "ops", rationale: "t", ops: list });
+  // ops: the hero talent swapped for another -> Streetwise becomes the hero talent
+  const r1 = await V(a, ops({ op: "removeItem", opId: "r1", itemId: id("Quick Wits") }, { op: "addItem", opId: "a1", ref: ref("Steady Hands") }));
+  assert.deepEqual(shift(r1).map((w) => w.path), [`items.${id("Streetwise")}`], JSON.stringify(r1.errors));
+  assert.match(shift(r1)[0].message, /occupation talent now and will be the hero talent/);
+  // ops: an extra talent added -> no shift
+  assert.deepEqual(shift(await V(a, ops({ op: "addItem", opId: "a1", ref: ref("Steady Hands") }))), []);
+  // ops: hero replaced AND the occupation talent re-added after it -> roles as intended, no shift on kept items
+  const r3 = await V(a, ops({ op: "removeItem", opId: "r1", itemId: id("Quick Wits") }, { op: "removeItem", opId: "r2", itemId: id("Streetwise") }, { op: "addItem", opId: "a1", ref: ref("Steady Hands") }, { op: "addItem", opId: "a2", ref: ref("Streetwise") }));
+  assert.deepEqual(shift(r3), []);
+  // replace: both talents kept, listed the other way round -> the sheet keeps its order, both listed roles differ
+  const rp = (talents) => ({ target: "this", mode: "replace", rationale: "t", proposal: { talents: talents.map((n) => ({ ref: ref(n) })) } });
+  const listed = shift(await V(a, rp(["Streetwise", "Quick Wits"])));
+  // (the path is the item, or its proposal.talents[i] entry once W2-2 maps replace paths back)
+  assert.deepEqual(listed.map((w) => w.message.match(/Talent "([^"]+)" is listed as the (\w+) talent but will be the (\w+)/).slice(1).join(">")), ["Quick Wits>occupation>hero", "Streetwise>hero>occupation"]);
+  assert.ok(listed.every((w, k) => [`items.${id(["Quick Wits", "Streetwise"][k])}`, `proposal.talents[${[1, 0][k]}]`].includes(w.path)), JSON.stringify(listed.map((w) => w.path)));
+  assert.ok(listed.every((w) => /is listed as the/.test(w.message)));
+  // replace keeping the order -> nothing
+  assert.deepEqual(shift(await V(a, rp(["Quick Wits", "Streetwise"]))), []);
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);

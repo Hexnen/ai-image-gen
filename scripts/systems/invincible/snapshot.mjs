@@ -9,7 +9,8 @@
 //   BONUS health: Durable +2; attack: Martial Arts +1                               system.bonuses (prepared)
 //   TEXT <field> "..."                                                               one line per non-empty text field
 //   EMPTY drive flaw ...                                                             text fields that are blank
-//   I <itemId> <type> "<name>" lvl= src=<id> pow=<id> ref=<pack:id>|custom edited cost= ... auto=[...] script fx=... desc="..."
+//   I <itemId> <type> "<name>" lvl= src=<id> role=hero|occupation|extra pow=<id> ref=<pack:id>|custom edited cost= ... auto=[...] script fx=... desc="..."
+//     (role= on superhero talents only; talents stay in the actor's collection order, which IS the role order)
 //   FX <effectId> "<name>" disabled statuses=... changes                             actor-level effects
 //   FLAG pu rank=global archetype=...  /  FLAG undo runs=2 last=<runId>
 //   UNSAVED <path> stored="..." live="..."
@@ -90,10 +91,11 @@ function fmtAuto(auto) {
 /* ------------------------------------------------------------------ item lines in tree order */
 const byName = (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
 /** items ordered: each source -> its powers -> each power's boosts, limits; then powers/boosts/limits without a present link;
-    then talents, drawbacks, gear, vehicle weapons, injuries, other types (each group by name, then id) */
+    then talents, drawbacks, gear, vehicle weapons, injuries, other types (each group by name, then id). Talents (W2-3) keep the
+    actor's collection order instead: that order is their role (hero, occupation, extras), shown as role= on the line. */
 export function orderItems(items) {
   const ids = new Set(items.map((i) => i.id));
-  const of = (t) => items.filter((i) => i.type === t).sort(byName);
+  const of = (t) => (t === "talent" ? items.filter((i) => i.type === t) : items.filter((i) => i.type === t).sort(byName));
   const out = [], seen = new Set();
   const push = (i) => { if (!seen.has(i.id)) { seen.add(i.id); out.push(i); } };
   const powers = of("power"), boosts = of("boost"), limits = of("limit");
@@ -111,6 +113,7 @@ export function itemLine(i, ids, { descChars = LIMITS.descChars, foldFx = false 
     s += ` lvl=${i.level || "-"}`;
     s += ` src=${i.sourceId ? (ids.has(i.sourceId) ? i.sourceId : `${i.sourceId}(missing)`) : "-"}`;
   }
+  if (i.role) s += ` role=${i.role}`;
   if (i.type === "boost" || i.type === "limit") s += ` pow=${i.powerId ? (ids.has(i.powerId) ? i.powerId : `${i.powerId}(missing)`) : "-"}`;
   s += i.ref ? ` ref=${i.ref}${i.edited ? " edited" : ""}` : " custom";
   if (i.gear) {

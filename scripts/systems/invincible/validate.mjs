@@ -469,6 +469,12 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
       if (r.ok) e.suggest = { updateActor: { attributes: r.attrs } };
     }
   }
+  // W2-3: a talent's role is its place in the collection (new items go last); say when the change gives a talent another role
+  // (ops: compared with the sheet now; replace: compared with the role its place in proposal.talents asks for). Before the L2
+  // stop, so the model sees it together with rule errors.
+  if (isHero) for (const s of talentShifts(basePlain, proj.actor, P, catalog)) {
+    acc.warnings.push({ code: "talent.role.shift", path: `items.${s.itemId}`, ...(s.itemId.startsWith(NEW_PREFIX) ? { opId: s.itemId.slice(NEW_PREFIX.length) } : {}), params: s });
+  }
   if (acc.errors.length) return finish("L2", acc, { rank });
 
   // ---- L3 stale check + writer dry run
@@ -520,11 +526,6 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
     const pw = proj.actor.items.find((x) => x._id === it.system.power);
     const read = pw && LEVEL_WORDS.indexOf(powerLevel(pw.system)) > 0 ? "level" : "boost";
     if (read !== it.system._grants) acc.warnings.push({ code: "grants.heuristic", opId: String(it._id).replace(/^new:/, ""), params: { name: it.name, read, asked: it.system._grants } });
-  }
-  // W2-3: a talent's role is its place in the collection (new items go last); say when the change gives a talent another role
-  // (ops: compared with the sheet now; replace: compared with the role its place in proposal.talents asks for)
-  if (isHero) for (const s of talentShifts(basePlain, proj.actor, P, catalog)) {
-    acc.warnings.push({ code: "talent.role.shift", path: `items.${s.itemId}`, ...(s.itemId.startsWith(NEW_PREFIX) ? { opId: s.itemId.slice(NEW_PREFIX.length) } : {}), params: s });
   }
 
   res.expect = expectFor(doc ?? asDoc(basePlain), ops, proj);
