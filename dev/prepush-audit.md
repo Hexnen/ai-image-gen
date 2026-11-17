@@ -139,7 +139,7 @@ albo ograniczyć do testów.
 ## A8 (INFO): sekrety
 
 Brak prawdziwych kluczy w całej historii (`--all`). Trafienia to jawne atrapy testowe:
-`dev/test-transport.mjs` (`sk-ant-real-looking-0000000000`), `FAKE_KEY = "sk-ant-fake-test-key-..."`, `redactSecrets` test
+`dev/test-dry-transport.mjs` (`sk-ant-real-looking-0000000000`), `FAKE_KEY = "sk-ant-fake-test-key-..."`, `redactSecrets` test
 (`sk-ant-api03-abcdefghijkl`), `FAKE = { openai: "sk-test-not-real-...", gemini: "AIza-test-not-real-gemini", ... }`,
 `dev/test-dry-transport.mjs:26` (`TOKEN = "abcdefghijklmnop1234"`). Token przekaźnika (`dev/dry-run/relay.mjs:27`) losowany przy starcie,
 nigdzie nie zapisany w repo; `relay.json` nie jest śledzony. Klucze API w ustawieniach `scope: "client"` (PLAN.md:9), nie w kodzie.
