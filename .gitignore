@@ -5,5 +5,5 @@ dev/screenshots/
 # build/release artefacts and local dry-run state
 *.zip
 relay.json
-dry-*/
+/dry-*/
 .claude/
