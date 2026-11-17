@@ -88,6 +88,8 @@ export function toolResultContent(res) {
 export const PROPOSAL_STATUSES = Object.freeze(["pending", "applied", "discarded"]);
 /** Proposal states kept per conversation (oldest dropped). */
 export const MAX_PROPOSAL_STATES = 20;
+/** Applied / discarded proposal objects kept so markProposal(id, "pending") can restore them (W6-D1; oldest dropped). */
+export const MAX_SHELVED_PROPOSALS = 5;
 const safeId = (s) => String(s ?? "").replace(/[^A-Za-z0-9_.:-]/g, "").slice(0, 64) || "?";
 
 /** `<proposal id="..." status="..."/>` lines for the states the model has not seen yet (null when none). */
@@ -151,7 +153,7 @@ function newRecord({ key, worldId, doc, pack, settings, now }) {
     messages: [], timeline: [], turns: [],
     usage: { ...anthropic.emptyUsage(), usd: 0, requests: 0 },
     lastPromptTokens: 0, lastRequestAt: 0, prefixFp: null, sheet: null, snapshotFingerprint: null, unansweredReason: null,
-    pendingProposal: null, lastRunId: null, options: {}, proposalStates: [],
+    pendingProposal: null, lastRunId: null, options: {}, proposalStates: [], shelvedProposals: [],
     heldToolResults: null   // W3-4: tool_result blocks of a turn ended on submit, sent at the start of the next GM message
   };
 }
@@ -290,7 +292,8 @@ export class Session {
    * `<proposal id="..." status="..."/>` placed before the GM's text of the NEXT GM message (in messages only, never in
    * system[]: the cached prefix stays byte-identical). The first GM message after a submit always carries the marker;
    * later ones only when the status changed since the model last saw it.
-   * applied / discarded of the pending proposal also clear it (no separate clearPendingProposal needed).
+   * applied / discarded of the pending proposal also clear it (no separate clearPendingProposal needed); "pending" of
+   * such a proposal makes it the pending proposal again (`restored: true`) unless a newer proposal is pending (W6-D1).
    * opts.runId (with "applied") also stores the writer's run id for Undo (setLastRun).
    * -> { ok: true, id, status } | { ok: false, reason: "status" | "unknown" }
    */
@@ -305,7 +308,21 @@ export class Session {
     }
     if (!e) return { ok: false, reason: "unknown" };
     e.status = status;
-    if (status !== "pending" && this.record.pendingProposal?.proposalId === pid) this.record.pendingProposal = null;
+    const shelf = (this.record.shelvedProposals ??= []);
+    if (status !== "pending" && this.record.pendingProposal?.proposalId === pid) {
+      // W6-D1: keep the proposal object (input, summary) so "pending" again (Undo) can make it pending once more
+      const i = shelf.findIndex((p) => p?.proposalId === pid);
+      if (i >= 0) shelf.splice(i, 1);
+      shelf.push(this.record.pendingProposal);
+      if (shelf.length > MAX_SHELVED_PROPOSALS) shelf.splice(0, shelf.length - MAX_SHELVED_PROPOSALS);
+      this.record.pendingProposal = null;
+    }
+    if (status === "pending" && !this.record.pendingProposal) {
+      // W6-D1: an applied / discarded proposal marked pending again is the session's pending proposal again (the drawer
+      // and a stand-in can Apply it once more). A newer proposal that is pending meanwhile stays the pending one.
+      const i = shelf.findIndex((p) => p?.proposalId === pid);
+      if (i >= 0) { this.record.pendingProposal = { ...shelf[i], restored: true }; shelf.splice(i, 1); }
+    }
     if (status === "applied" && runId) this.record.lastRunId = String(runId);
     this.record.timeline.push({ at: this.#h.now(), msgIndex: this.record.messages.length, type: "proposal-status", proposalId: pid, status });
     // B5 (bughunt-1): never rejects. The state is set in memory (the drawer, the marker of the next GM message and the

@@ -65,6 +65,15 @@ await test("dockGeometry: right edge, flip left, shrink, clamp, height below the
   assert.ok(k.height >= M.DOCK.minHeight && k.top + k.height <= 900);
 });
 
+await test("W6-R4 driftKey: a later builder run says so; else removed / edited", () => {
+  assert.equal(M.driftKey({ why: "edited", laterRun: "r2" }), "later");
+  assert.equal(M.driftKey({ why: "missing", laterRun: "r2" }), "later");
+  assert.equal(M.driftKey({ why: "missing" }), "missing");
+  assert.equal(M.driftKey({ why: "edited" }), "edited");
+  assert.equal(M.driftKey({ why: "field" }), "edited");
+  assert.match(readFileSync(new URL("../scripts/build/drawer-app.mjs", import.meta.url), "utf8"), /Undo\.drift\.\$\{M\.driftKey\(d\)\}/);
+});
+
 await test("headerButtonState: pressed when open, pending dot, working wins the tooltip", () => {
   const L = (k) => k;
   assert.deepEqual(M.headerButtonState({}, L), { pressed: false, pending: false, working: false, tooltip: "MAIG.Drawer.Open" });
@@ -129,6 +138,7 @@ await test("proposalInputs / cardProposal: pending wins; an undone (pending agai
   assert.ok(!map.has("t2"), "dry-run checks are no proposals");
   const pend = { proposalId: "prop-b", input: { x: 1 } };
   assert.deepEqual(M.cardProposal(pend, [], items), { ...pend, restored: false });
+  assert.equal(M.cardProposal({ ...pend, restored: true }, [], items).restored, true, "W6-D1: harness-restored pending keeps the flag");
   const back = M.cardProposal(null, [{ id: "prop-b", status: "discarded" }, { id: "prop-a", status: "pending" }], items);
   assert.equal(back.proposalId, "prop-a");
   assert.equal(back.restored, true);
@@ -191,7 +201,7 @@ await test("lang: every MAIG.Drawer key used in code and template exists in en.j
   const src = ["scripts/build/drawer-app.mjs", "scripts/build/drawer-model.mjs", "templates/builder-drawer.hbs"].map((f) => readFileSync(join(ROOT, f), "utf8")).join("\n");
   const used = new Set([...src.matchAll(/MAIG\.Drawer\.[A-Za-z0-9.-]+[A-Za-z0-9]/g)].map((m) => m[0]));
   // keys built at runtime: Profile.<p>, Profile.hint.<p>, Mode.<m>, State.<s>, Event.<s>, Confirm.<a>, Undo.drift.<w>
-  for (const k of ["Profile.creation", "Profile.in-play", "Profile.hint.creation", "Profile.hint.in-play", "Mode.superhero", "Mode.npc", "State.pending", "State.applied", "State.discarded", "Event.pending", "Event.applied", "Event.discarded", "Confirm.remove", "Confirm.swap", "Confirm.reorder", "Role.hero", "Role.occupation", "Role.extra", "Result.health", "Result.resolve", "Undo.drift.edited", "Undo.drift.missing"]) used.add(`MAIG.Drawer.${k}`);
+  for (const k of ["Profile.creation", "Profile.in-play", "Profile.hint.creation", "Profile.hint.in-play", "Mode.superhero", "Mode.npc", "State.pending", "State.applied", "State.discarded", "Event.pending", "Event.applied", "Event.discarded", "Confirm.remove", "Confirm.swap", "Confirm.reorder", "Role.hero", "Role.occupation", "Role.extra", "Result.health", "Result.resolve", "Undo.drift.edited", "Undo.drift.missing", "Undo.drift.later"]) used.add(`MAIG.Drawer.${k}`);
   // a template-literal prefix (`MAIG.Drawer.Confirm.${...}`) is a namespace of real keys, not a key
   const partial = [...used].filter((k) => !(k in en) && Object.keys(en).some((x) => x.startsWith(`${k}.`)));
   for (const k of [...used].filter((x) => !partial.includes(x))) {

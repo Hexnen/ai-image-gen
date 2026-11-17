@@ -11,7 +11,7 @@
 import { RANKS, RANK_ORDER, ATTRS, ROLES, MAX_DRAWBACKS, FREE_TALENTS, ATTR_MIN, SLOT_VALUE, TALENT_LIMITS, DRAWBACK_LIMITS } from "./vendor/chargen/rules.mjs";
 import { htmlToText } from "./catalog.mjs";
 
-export const DIGEST_VERSION = 6;   // 3 = W2-8 text pass; 4 = W3-14 (profiles, role keys, fx, expected texts, solo, freed points, gear); 5 = W4-T; 6 = W5-T
+export const DIGEST_VERSION = 7;   // 3 = W2-8 text pass; 4 = W3-14 (profiles, role keys, fx, expected texts, solo, freed points, gear); 5 = W4-T; 6 = W5-T; 7 = W6 (free slot counts)
 export const RULES_PART_CHARS = 6000;   // spec 6: cap 6,000 chars per read_rules call (longer pages come in parts)
 
 /** Book names of the ranks (the rank table below; pack.mjs re-exports them for pack.ranks()). */
@@ -43,7 +43,7 @@ export function rulesDigest() {
     "creation (new hero, rebuild): the budget must balance: spend ALL available points (no leftover, no overspend). in-play (a hero who grew in play): only new errors block; the budget is information only; the rank's attribute cap is still an error; growth rules are not enforced.",
     "",
     "## Superhero budget",
-    `Attribute points available = rank points + ${SLOT_VALUE} x (rank power slots - slots used) - extra power sources - extra talents + drawbacks. Example: an empty ${RANK_NAMES[top.key]} sheet has ${top.points} + ${SLOT_VALUE} x ${top.powers} = ${top.points + SLOT_VALUE * top.powers} points.`,
+    `Attribute points available = rank points + ${SLOT_VALUE} x (rank power slots - slots used) - extra power sources - extra talents + drawbacks. Example: an empty ${RANK_NAMES[top.key]} sheet has ${top.points} + ${SLOT_VALUE} x ${top.powers} = ${top.points + SLOT_VALUE * top.powers} points. An unused slot counts (+${SLOT_VALUE} points) even when no power is planned for it.`,
     `Every attribute is an integer from ${ATTR_MIN} to the rank cap. Points freed when the GM says to leave the rest (fewer powers or slots): put them into attributes that fit the concept and say so in the rationale; do not ask.`,
     "Slots used per power = levels above Basic + 1 + its boosts - the levels/boosts paid by its limits.",
     "Power levels: basic, major, massive, monstrous. A level needs the previous one. Hero powers in every profile: at most Major; Massive only at Cosmic Champion; Monstrous never. A power never goes above the highest level its catalogue entry lists.",

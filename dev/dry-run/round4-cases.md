@@ -7,3 +7,5 @@ Run after wave 3 is finished (W3-1..W3-16 and the C3 text pass). Same six cases 
 
 Both are questions, not change requests: the stand-in answers in text (tools only if it needs a rule it does not have), and the report says whether the answer was right, how many requests/tool calls it cost, and what the model had to guess.
 Also check in round 4: F0 (idMap vs actor.items after Apply, 5 builds), end of turn after submit (W3-4), `progress`/`text`, Health/Resolve = max at build (W3-3), the new warnings/hints.
+
+Literal GM messages of all six cases (word for word, with drawer values): `dev/dry-run/round-messages.md`.

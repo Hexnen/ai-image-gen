@@ -119,16 +119,42 @@ export function linkTarget(src) {
 const sameJson = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
 /**
- * Drift of entries against the current document: what changed after the run wrote it.
- * items = Map(id -> current source) of the actor's items; actorSrc = actor _source.
- * -> [{ opId, itemId, name, why: "edited"|"missing"|"exists"|"field", path? }]
+ * W6-R4: what LATER journalled runs (after `run` in the journal, entries not undone) changed: items they updated, swapped or
+ * removed and actor paths they wrote -> { items: Map(itemId -> runId), paths: Map(path -> runId) }. A drift on one of them
+ * was (at least) made by that builder run, not by hand.
  */
-export function driftOf(entries, items, actorSrc) {
+export function laterTouches(journal, run) {
+  const items = new Map(), paths = new Map();
+  const runs = journal?.runs ?? [];
+  const i = runs.findIndex((r) => r.runId === run?.runId);
+  if (i < 0) return { items, paths };
+  for (const r of runs.slice(i + 1)) {
+    for (const e of r.ops ?? []) {
+      if (e.undone) continue;
+      if (e.kind === "actor") { for (const p of e.paths ?? Object.keys(e.after ?? {})) paths.set(p, r.runId); continue; }
+      if ((e.kind === "update" || e.kind === "swap" || e.kind === "remove") && e.itemId) items.set(String(e.itemId), r.runId);
+    }
+  }
+  return { items, paths };
+}
+
+/**
+ * Drift of entries against the current document: what changed after the run wrote it.
+ * items = Map(id -> current source) of the actor's items; actorSrc = actor _source; later = laterTouches(...) (optional):
+ * a drift on something a later builder run changed carries `laterRun: runId` (W6-R4).
+ * -> [{ opId, itemId, name, why: "edited"|"missing"|"exists"|"field", path?, laterRun? }]
+ */
+export function driftOf(entries, items, actorSrc, later = null) {
   const out = [];
+  const byRun = (d) => {
+    const r = d.path ? later?.paths?.get(d.path) : d.itemId ? later?.items?.get(String(d.itemId)) : null;
+    if (r && d.why !== "exists") d.laterRun = r;
+    out.push(d);
+  };
   for (const e of entries) {
     if (e.kind === "actor") {
       for (const [path, v] of Object.entries(e.after ?? {})) {
-        if (!sameJson(getPath(actorSrc, path), v)) out.push({ opId: e.opId, itemId: null, name: path, why: "field", path });
+        if (!sameJson(getPath(actorSrc, path), v)) byRun({ opId: e.opId, itemId: null, name: path, why: "field", path });
       }
       continue;
     }
@@ -139,8 +165,8 @@ export function driftOf(entries, items, actorSrc) {
       if (cur) out.push({ opId: e.opId, itemId: e.itemId, name: e.name, why: "exists" });
       continue;
     }
-    if (!cur) out.push({ opId: e.opId, itemId: e.itemId, name: e.name, why: "missing" });
-    else if (e.after && fingerprint(cur) !== e.after) out.push({ opId: e.opId, itemId: e.itemId, name: cur.name ?? e.name, why: "edited" });
+    if (!cur) byRun({ opId: e.opId, itemId: e.itemId, name: e.name, why: "missing" });
+    else if (e.after && fingerprint(cur) !== e.after) byRun({ opId: e.opId, itemId: e.itemId, name: cur.name ?? e.name, why: "edited" });
   }
   return out;
 }

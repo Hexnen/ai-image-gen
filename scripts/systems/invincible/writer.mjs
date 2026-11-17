@@ -44,7 +44,7 @@
 //   that order, a per-item undo puts the restored items back at their old place (undo.mjs restoreTarget / movePlan).
 
 import { ATTRS, LEVEL_WORDS, getPath, norm, normBase, plainText, powerLevelOf, unsavedFrom, automationsOf, talentRoles } from "./reader.mjs";
-import { clone, fingerprint, readJournal, pruneJournal, findRun, selectEntries, driftOf, undoOrder, describeRun, restoreTarget, movePlan, UNDO_TTL } from "./undo.mjs";
+import { clone, fingerprint, readJournal, pruneJournal, findRun, selectEntries, driftOf, laterTouches, undoOrder, describeRun, restoreTarget, movePlan, UNDO_TTL } from "./undo.mjs";
 import { baseName, noteOf, withNote, cleanNote } from "./names.mjs";
 import { attributeFromNote, fillAttributeKey, onlyAttributePlaceholders } from "./proposal.mjs";
 
@@ -1274,7 +1274,7 @@ export function createWriter(deps = {}) {
       const entries = r.ops.filter((e) => !e.undone);
       return describeRun(r, now, driftOf(entries, items, src));
     }).reverse();
-    const drift = driftOf(run.ops.filter((e) => !e.undone), items, src);
+    const drift = driftOf(run.ops.filter((e) => !e.undone), items, src, laterTouches(journal, run));
     return { available: true, runId: run.runId, at: run.at, age: now - (Number(run.at) || 0), drift, clean: !drift.length, changes: drift.length, runs };
   }
   async function undo(doc, runId = null, opts = {}) {
@@ -1290,14 +1290,14 @@ export function createWriter(deps = {}) {
     if (D.now() - (Number(run.at) || 0) > UNDO_TTL) return none("undo.expired", `The undo record of "${doc.name}" is older than 24 hours.`);
     const entries = selectEntries(run, opIds);
     if (!entries.length) return none("undo.none", "Those changes are already undone.");
-    const drift = driftOf(entries, items, src);
+    const drift = driftOf(entries, items, src, laterTouches(journal, run));   // W6-R4: laterRun = changed by a later builder run
     for (const e of entries.filter((x) => x.kind === "world")) {
       const d = typeof D.fromUuid === "function" ? await D.fromUuid(e.uuid) : null;
       if (!d) drift.push({ opId: e.opId, itemId: e.itemId, name: e.name, why: "missing" });
       else if (e.after && fingerprint(srcOf(d)) !== e.after) drift.push({ opId: e.opId, itemId: e.itemId, name: d.name, why: "edited" });
     }
     if (drift.length && confirmDrift !== true) {
-      const text = `"${doc.name}" changed after the builder wrote it (${drift.map((d) => `${d.name}: ${d.why}`).join(", ")}). Confirm to undo anyway.`;
+      const text = `"${doc.name}" changed after the builder wrote it (${drift.map((d) => `${d.name}: ${d.laterRun ? `${d.why} by a later builder run` : d.why}`).join(", ")}). Confirm to undo anyway.`;
       return { ok: false, needsConfirm: true, drift, errors: [msg("undo.drift", text)], message: text, runId: run.runId };
     }
     try {

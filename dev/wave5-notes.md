@@ -410,3 +410,50 @@ Przyrost: runda poprawki (+~310 w system[0]), obrażenia slugfest, najbliższa w
 - Prawdziwy model z nowymi zdaniami (runda poprawki: czy poprawia albo pisze jedno zdanie, a nie pustą odpowiedź; pytanie o rangę przy prośbie częściowej; długi; obrażenia).
 - Rozmiar indeksu na torze (bez zmian w kodzie indeksu, więc liczba z W4-T); prawdziwe tokeny (`count_tokens`).
 - Dane paczki (lista wad, Reduced Sense jako limit, Signature Item jako moc) czytane z `invincible-plus-ultra/scripts/i18n/item-ids.mjs`, nie z paczek na żywo.
+
+## W6: poprawki z próby na sucho, runda 7 (D1, R1-R6)
+
+Pliki: `scripts/build/harness.mjs`, `harness-prompt.mjs` (`HARNESS_RULES_VERSION` 7), `drawer-model.mjs`, `drawer-app.mjs`, `builder-api.mjs` (komentarz), `scripts/systems/invincible/rules-digest.mjs` (`DIGEST_VERSION` 7), `validate.mjs` (tylko `costLabel`), `undo.mjs`, `writer.mjs` (tylko dryf Undo), `lang/en.json` + `lang/pl.json` (1 klucz dopisany); testy `test-harness` (+1, 1 asercja dopisana), `test-drawer-model` (+1), `test-build-ops` (+1), `test-build-validate-invincible` (3 asercje zmienione, 2 dopisane), `test-prompt-texts` (4 asercje zmienione, 2 dopisane); `dev/dry-run/round-messages.md` (nowy) + odnośnik w `round3/4/5-6/7-cases.md`. Wendor bez zmian. Bez toru, bez sieci, bez klucza.
+
+### Tabela: punkt -> poprawione / nie
+| Punkt | Wynik | Co / dlaczego (sprawdzone w kodzie) |
+|---|---|---|
+| D1 Undo -> `markProposal(id,"pending")` bez `pendingProposal` | poprawione (harness) | Potwierdzone: `markProposal` (`harness.mjs`) zerował `record.pendingProposal` przy applied/discarded i nigdy go nie odtwarzał; szuflada obchodziła to `cardProposal` z transkryptu (W5-T7-1), ale API / zastępca (dry7-multi `undo-6.json`: `pendingAfterUndo: null`) nie miał czego zastosować. Teraz applied/discarded odkłada obiekt propozycji na półkę `record.shelvedProposals` (najwyżej `MAX_SHELVED_PROPOSALS` = 5, najstarsze wypadają); `pending` tej propozycji przywraca ją jako `pendingProposal` (`restored: true`, te same `input`/`summary`/`toolUseId`), o ile w międzyczasie nie czeka nowsza propozycja (ta zostaje). Semantyka applied/discarded bez zmian (nadal czyszczą). Szuflada: `#onUndo` bez zmian (woła `markProposal(applied.id, "pending")`), `cardProposal` przenosi flagę `restored` z obiektu harnessu (styl `is-restored` jak dotąd); fallback z transkryptu zostaje dla rekordów sprzed W6 (bez półki). |
+| R1 kolizja reguł szuflada vs częściowe (dry7-nc 0002) | poprawione (tekst) | Wg tymczasowej reguły właściciela (szuflada wygrywa), bez „even for one part”: „A request that needs another value: if all of it depends on that value, call no tools: ask in one sentence for the drawer change; if the GM also asks for changes that do not need it ("only change X", "leave the rest"), submit only those and ask for the value in one rationale sentence.” Zdanie o częściowym „for another reason” bez zmian. `HARNESS_RULES_VERSION` 7. |
+| R2 wolny slot w budżecie | poprawione (skrót) | Wzór sprawdzony: `vendor/chargen/rules.mjs budget()` = punkty rangi + `SLOT_VALUE` (2) x (sloty rangi - użyte) - ...; skrót podawał tylko wzór. Dopisane: „An unused slot counts (+2 points) even when no power is planned for it.” `DIGEST_VERSION` 7 (nowy fingerprint pakietu). |
+| R3 „+2 pts” po zdaniu o boście | poprawione (`costLabel`) | Etykieta dodanego limitu: `...; the boost "Y" stays paid by a slot; the limit returns +2 pts` (także bez boostu: `pays for a level of "X" (no slot for it; slots 3/4); the limit returns +2 pts`). `limitPays` bez zmian; usunięcie limitu („limit gone: ... -2 pts”) bez zmian. |
+| R4 etykieta dryfu „edited” po późniejszym przebiegu | poprawione (tanie i poprawne) | `undo.mjs laterTouches(journal, run)`: przedmioty, które PÓŹNIEJSZE przebiegi w dzienniku (wpisy nie cofnięte) zmieniły (`update`/`swap`/`remove`), i ścieżki aktora, które zapisały; `driftOf(..., later)` dodaje `laterRun: runId` do dryfu `edited`/`missing`/`field` na nich. Writer: `undoStatus` (dryf bieżącego przebiegu) i `undo` (komunikat `Targeted: edited by a later builder run`). Szuflada: `M.driftKey(d)` -> klucz `MAIG.Drawer.Undo.drift.later` („{name} (zmienione przez późniejszy zapis kreatora AI)”). Ręczna edycja bez późniejszego przebiegu: nadal „edytowane”. `describeRun().ops[].drift` (lista `why`) bez zmian. |
+| R5 moce w replace nie w kolejności propozycji | nie (tymczasowo, zapisane) | Mechanizm W5-A-3 (usuń + utwórz z keepId, `movePlan`) dałoby się rozszerzyć na moce, ale kolejność mocy nie ma znaczenia mechanicznego (role mają tylko talenty; czytnik karty sortuje moce sam, W5-B 6e), a odtwarzanie mocy przy każdym replace to dodatkowe `item.remove`/`item.add` (dziennik plus-ultra, hooki systemu przy usuwaniu mocy z boostami/limitami) dla czysto kosmetycznej zmiany. Zamiana poziomu nadal przesuwa moc na koniec kolekcji (te same id). Do decyzji właściciela, jeśli kolejność mocy na arkuszu ma znaczenie. |
+| R6 dosłowne wiadomości MG | zrobione | `dev/dry-run/round-messages.md`: sześć przypadków z wartościami szuflady (Spider-Man + pytanie o jedno źródło, Daredevil x3, Nightcrawler x3, All Might x3, ogień/unik/długi, „coś w stylu Batmana ale nie Batman”); odnośnik dopisany w `round3-cases.md`, `round4-cases.md`, `round5-6-cases.md`, `round7-cases.md`. |
+
+### Wybory (zachowanie tymczasowe)
+| # | Pytanie | Wybór |
+|---|---|---|
+| W6-a | D1: gdzie poprawka | Harness (źródło prawdy dla szuflady i API). Półka zamiast przeszukiwania historii: id propozycji pochodzi z wyniku walidatora, nie z `tool_use`, więc odczyt z wiadomości byłby kruchy. |
+| W6-b | D1: Undo starszego przebiegu, gdy czeka nowsza propozycja | Nowsza zostaje `pendingProposal`; stara dostaje tylko stan `pending` (znacznik dla modelu jak dotąd). Szuflada i tak cofa tylko przebieg z `lastRunId`. |
+| W6-c | R1: gdy MG nie wymienił osobnych zmian | Cała wiadomość zależy od wartości szuflady = bez narzędzi, jedno zdanie. Część niezależna jest zgłaszana tylko, gdy MG wprost o nią prosi. |
+| W6-d | R4: późniejszy przebieg ORAZ ręczna edycja tego samego przedmiotu | Etykieta „późniejszy zapis kreatora” (rozdzielenie wymagałoby porównania z `after` późniejszego przebiegu; prawdziwe, choć niepełne). |
+| W6-e | R5 | Bez zmian (patrz tabela). |
+
+### Rozmiar prefiksu (znaki / tokeny est. = ceil(znaki/3,5) na blok)
+| Blok | Przed (W5-T) | Po |
+|---|---|---|
+| system[0] | 4 180 / 1 195 | 4 321 / 1 235 |
+| system[1] skrót | 7 348 / 2 100 | 7 420 / 2 120 |
+| tools | 14 504 / 4 144 | 14 504 / 4 144 |
+| razem bez indeksu | 26 032 / 7 439 | 26 245 / 7 499 (sufit testu 7 500: zapasu 1 tok) |
+| cały prefiks | ~75 803 / ~21 660 | ~76 016 / ~21 720 |
+
+Uwaga: sufit 7 500 jest prawie wyczerpany; następny przebieg tekstów musi coś skrócić albo właściciel podnosi sufit.
+
+### Testy
+- `test-harness` 49 (+1 W6-D1: Apply -> pending = `pendingProposal` z tym samym wejściem i `restored`, zapisane w magazynie, ponowny Apply, nowsza propozycja wygrywa, nieznane id, półka ograniczona do 5; dopisana asercja w teście discarded -> pending).
+- `test-drawer-model` 16 (+1 `driftKey`; `cardProposal` przenosi `restored`; klucz `Undo.drift.later` w kontroli en/pl).
+- `test-build-ops` 55 (+1 W6-R4: zamiana poziomu w późniejszym przebiegu -> `laterRun`, ręczna edycja bez, komunikat, po cofnięciu późniejszego przebiegu czysto, czysty `laterTouches`).
+- `test-build-validate-invincible` 56 (etykiety limitu `; the limit returns +2 pts`, brak „slot +2 pts”).
+- `test-prompt-texts` 24 (R1 nowe zdanie, brak „even for one part”, R2 zdanie o wolnym slocie, wersje 7/7, sufit 7 499 < 7 500).
+- Wszystkie `dev/test-*.mjs` zielone: ops 55, snapshot 37, validate 56, catalog 25, drawer-model 16, dry-relay 13, dry-transport 12, enhance 22, harness 49, migrate-id 19, packs 24, prompt-texts 24, transport 30, vendor load 9, vendor-sync ALL OK (wendor bajt w bajt).
+
+### Niezweryfikowane
+- Bez toru: szuflada po Undo (karta z `pendingProposal` harnessu, ponowny Apply) i okno dryfu z „zmienione przez późniejszy zapis kreatora AI” tylko w node.
+- Prawdziwy model z nowym zdaniem R1 (czy przy „reszty nie ruszaj” zgłasza część niezależną i pyta o rangę jednym zdaniem).

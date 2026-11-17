@@ -8,3 +8,5 @@ Same four characters as rounds 1-2 (Spider-Man/Global, Daredevil/Street, Nightcr
    - Inspired-by request, must not reproduce the named character. Watch: does the model build an original character with the same role (vigilante/gadget/detective), name and personality of its own, custom power source handling (D-10), gear, language of personality words (D-7).
 
 Rank for both: ask the owner or use the drawer default; if (default), the stand-in follows the prompt rule (one sentence asking to change the rank in the drawer). Run after the W2 code tasks and the W2-8 text pass.
+
+Literal GM messages of all six cases (word for word, with drawer values): `dev/dry-run/round-messages.md`.

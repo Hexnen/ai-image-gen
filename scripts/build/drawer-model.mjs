@@ -36,6 +36,15 @@ export function dockGeometry(rect, view, d = DOCK) {
 }
 
 /**
+ * W6-R4: lang key suffix of one Undo drift row (MAIG.Drawer.Undo.drift.<key>): a change made by a LATER builder run
+ * (writer `laterRun`) says so instead of the alarming "edited"; else removed / edited.
+ */
+export function driftKey(d) {
+  if (d?.laterRun) return "later";
+  return d?.why === "missing" ? "missing" : "edited";
+}
+
+/**
  * State of the robot button in the sheet header (W5-E: it carries what the side tab used to: open, a proposal waiting, a
  * turn still running). -> { pressed, pending, working, tooltip }
  */
@@ -98,11 +107,12 @@ export function proposalInputs(items) {
 
 /**
  * The proposal the card shows: the session's pending one, else the NEWEST proposal state when it is "pending" again
- * (an Undo of an applied proposal marks it pending, W7-1; the harness has no pending object for it any more, so its input
- * comes from the transcript). -> { proposalId, input, summary?, warnings?, restored } | null
+ * (an Undo of an applied proposal marks it pending, W7-1; since W6-D1 the harness makes it the pending proposal again with
+ * `restored: true`; a record without that object (older harness) takes the input from the transcript).
+ * -> { proposalId, input, summary?, warnings?, restored } | null
  */
 export function cardProposal(pending, states, items) {
-  if (pending?.proposalId) return { ...pending, restored: false };
+  if (pending?.proposalId) return { ...pending, restored: !!pending.restored };
   const last = (states ?? []).at(-1);
   if (!last || last.status !== "pending") return null;
   const input = proposalInputs(items).get(String(last.id));

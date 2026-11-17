@@ -21,3 +21,5 @@ The stand-in GM applies each proposal before the next message (Apply as in RUNBO
 - the final edit: it must be a small ops change (swap powers/talents/drawbacks/note, maybe one removal), the rationale names what was kept;
 - rank changes between messages come from the drawer (`setOptions`) and the sheet header shows them; the model must not ask for a rank change when the drawer already matches.
 Deliverables: the same evidence as round 5 plus a per-message table (requests, tool calls, usd, cache read/write tokens, history tokens, proposal outcome) and the final sheet.
+
+Literal GM messages of all six cases (word for word, with drawer values): `dev/dry-run/round-messages.md`.

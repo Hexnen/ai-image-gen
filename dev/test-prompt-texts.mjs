@@ -284,8 +284,10 @@ await test("W4-T system[0]: change notes, Apply confirms removals, header settin
   assert.equal((h.match(/confirms removals/g) ?? []).length, 1);
   // (c) the header's settings (rank, profile) are the truth for every request, also right after a build
   assert.match(h, /Sheet header settings \(e\.g\. rank, profile\) are the GM's drawer settings: they hold for every request, also right after a build; never assume or change them/);
-  // (b) a request that needs another drawer value: no tools, no proposal, one sentence
-  assert.match(h, /For a request that needs another value, even for one part, call no tools and send no proposal: ask in one sentence for the change in the drawer/);
+  // (b) a request that needs another drawer value: wholly dependent = no tools, no proposal, one sentence;
+  // W6-R1 (dry7-nc): independent other changes the GM asked for are submitted + one rationale sentence asks
+  assert.match(h, /A request that needs another value: if all of it depends on that value, call no tools: ask in one sentence for the drawer change; if the GM also asks for changes that do not need it \("only change X", "leave the rest"\), submit only those and ask for the value in one rationale sentence/);
+  assert.ok(!/even for one part/.test(h), "W6-R1: the ambiguous 'even for one part' is gone");
   // (a) partly doable: do the part, say what was not done and why, at most one question (W5-T: the drawer rule wins)
   assert.match(h, /A request possible only in part for another reason \(a rule forbids a part, the GM said to leave alone what it would change, or the sheet has nothing for it\): submit the possible part; the rationale says what was not done and why, with at most one question/);
   // the drawer case lives in its own line, not in the "ask before submitting" list
@@ -298,7 +300,7 @@ await test("W4-T digest: rank cap = drawer (agrees with system[0] and attr.cap),
   // (b) the digest names the case, system[0] says what to do; the in-play attr.cap hint says the same
   assert.match(d, /an attribute above the rank's cap needs another rank/);
   assert.ok(!/call no tools/.test(d), "the no-tools rule lives once, in system[0]");
-  assert.match(HARNESS_RULES, /call no tools and send no proposal/);
+  assert.match(HARNESS_RULES, /call no tools: ask in one sentence for the drawer change/);
   assert.match(MESSAGES["attr.cap"]({ attr: "agility", cap: 6, inPlay: true }).hint, /ask them to change the rank in the drawer/);
   // W4-A-T5: occupation talent required in every profile; swap from the list or the GM removes it by hand (agrees with the hint)
   assert.match(d, /one hero talent \+ one occupation talent, both required in every profile/);   // W5-T: the hero talent too
@@ -336,13 +338,15 @@ await test("W5-T system[0] + submit tool: the fix round (W5-B-1), never an empty
   // the tags that mark the text versions (the digest's goes into the pack fingerprint)
   const { HARNESS_RULES_VERSION } = await import("../scripts/build/harness-prompt.mjs");
   const { DIGEST_VERSION } = await import("../scripts/systems/invincible/rules-digest.mjs");
-  assert.equal(HARNESS_RULES_VERSION, 6); assert.equal(DIGEST_VERSION, 6);
+  assert.equal(HARNESS_RULES_VERSION, 7); assert.equal(DIGEST_VERSION, 7);
   assert.ok(!/invincible|talent/i.test(h), "system[0] stays system-agnostic");
 });
 
 await test("W5-T digest + guide + hints: levels in every profile, slugfest damage, nearest drawback, team-base upgrades, notes, talent order, confirms", async () => {
   const d = rulesDigest();
   assert.match(d, /Hero powers in every profile: at most Major; Massive only at Cosmic Champion; Monstrous never/);
+  // W6-R2 (dry7-nc): an unused rank slot is worth points (budget = points + 2 x (rank slots - used), vendor rules.mjs budget())
+  assert.match(d, /An unused slot counts \(\+2 points\) even when no power is planned for it/);
   assert.ok(!/New heroes start/.test(d));
   assert.match(MESSAGES["power.level.massive"]({ name: "X" }, { rank: "global" }).hint, /in-play profile does not allow it either/);   // STRUCTURAL: new Massive blocks in-play too
   assert.match(d, /their damage \(PREPARED slugfestDamage\) = half of strength rounded up \+ damage effects/);

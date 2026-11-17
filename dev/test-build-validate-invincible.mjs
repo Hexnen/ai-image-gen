@@ -866,7 +866,7 @@ await test("W2-5: readable budget: budget.note, spentAfter instead of the spent 
   assert.equal(act.spentAfter, 33); assert.equal(act.label, `attributes spent ${r.budget.before.spent} -> 33`);
   assert.ok(r.budget.perOp.filter((c) => c.opId !== "act1").every((c) => !("spentAfter" in c)));
   const lim = r.budget.perOp.find((c) => r.opInfo[c.opId].type === "limit");
-  assert.equal(lim.label, 'pays for a level of "Spark Bolt" (no slot for it; slots 3/4) +2 pts');
+  assert.equal(lim.label, 'pays for a level of "Spark Bolt" (no slot for it; slots 3/4); the limit returns +2 pts');
   assert.equal(r.budget.perOp.reduce((s, c) => s + c.points, 0), r.budget.after.points - r.budget.before.points);
   assert.match(r.summary, /act1: actor .*resources 3, reputation 2/);
   assert.match(r.summary, /cost: pays for a level of "Spark Bolt"/);
@@ -881,7 +881,7 @@ await test("W2-5: readable budget: budget.note, spentAfter instead of the spent 
   const b = blankHero();
   const lb = await V(b, ops({ op: "addItem", opId: "s", ref: ref("powerSource", "Strange Meteor") }, { op: "addItem", opId: "p", ref: ref("power", "Glide Wings"), sourceOpId: "s" },
     { op: "addItem", opId: "bo", ref: ref("boost", "Silent Flight", "Glide Wings"), powerOpId: "p" }, { op: "addItem", opId: "li", ref: ref("limit", "Loud", "Glide Wings"), powerOpId: "p", grants: "boost" }), { profile: "in-play", rank: "global" });
-  assert.equal(lb.budget.perOp.find((c) => c.opId === "li").label, 'pays for a boost of "Glide Wings" (no slot for it; slots 1/4) +2 pts');
+  assert.equal(lb.budget.perOp.find((c) => c.opId === "li").label, 'pays for a boost of "Glide Wings" (no slot for it; slots 1/4); the limit returns +2 pts');
 });
 
 await test("P1-F: creation + replace shows warnings the blank actor already had (npc.name.blank hint reaches the model)", async () => {
@@ -919,7 +919,7 @@ await test("W3-6 / W4-A-2: the limit label follows the sheet's reading; grants l
   const r = await VO(blankHero(), rep(P), { rank: "global" });
   assert.equal(r.ok, true, JSON.stringify(r.errors));
   const lim = r.budget.perOp.find((c) => r.opInfo[c.opId].type === "limit");
-  assert.equal(lim.label, 'pays for a level of "Spark Bolt" (no slot for it; slots 3/4) +2 pts');
+  assert.equal(lim.label, 'pays for a level of "Spark Bolt" (no slot for it; slots 3/4); the limit returns +2 pts');
   assert.match(r.summary, /add limit "Needs Charging" cost: pays for a level of "Spark Bolt"/, "the summary line the model can quote");
   assert.ok(![...codes(r, "warnings"), ...codes(r, "info"), ...codes(r, "errors")].includes("grants.heuristic"));
   assert.deepEqual(r.autoFixed, [], "silent: not even an autoFixed line");
@@ -1193,6 +1193,9 @@ await test("W5-B-3: a limit on a power with a level AND a boost says both facts 
   const r = await VO(blankHero(), rep(P), { rank: "global" });
   const lim = r.budget.perOp.find((c) => r.opInfo[c.opId].type === "limit" && r.opInfo[c.opId].name === "Loud");
   assert.match(lim.label, /^pays for the level Major of "Glide Wings" \(no slot for it; slots \d+\/4\); the boost "Silent Flight" stays paid by a slot/);
+  // W6-R3 (dry7-fire): the points belong to the limit, not to the boost clause before them
+  assert.match(lim.label, /stays paid by a slot; the limit returns \+2 pts$/);
+  assert.ok(!/slot \+2 pts/.test(lim.label), "no bare '+2 pts' right after the boost clause");
   if (r.ok) assert.match(r.summary, /add limit "Loud" cost: pays for the level Major of "Glide Wings" .*the boost "Silent Flight" stays paid by a slot/);
   // no boost on the power: the W3-6 wording stays
   const plain = r.budget.perOp.find((c) => r.opInfo[c.opId].type === "limit" && r.opInfo[c.opId].name === "Needs Charging");

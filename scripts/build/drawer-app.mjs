@@ -735,7 +735,7 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
         const yes = await confirmDialog({
           title: L("MAIG.Drawer.Undo.confirmTitle"),
           lead: L("MAIG.Drawer.Undo.confirmLead", { name: this.actor.name }),
-          items: (r.drift ?? []).map((d) => L(`MAIG.Drawer.Undo.drift.${d.why === "missing" ? "missing" : "edited"}`, { name: d.name })),
+          items: (r.drift ?? []).map((d) => L(`MAIG.Drawer.Undo.drift.${M.driftKey(d)}`, { name: d.name })),
           yes: L("MAIG.Drawer.Undo.confirmYes"), no: L("MAIG.Drawer.Confirm.no")
         });
         if (!yes) return;

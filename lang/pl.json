@@ -395,6 +395,7 @@
   "MAIG.Drawer.Undo.confirmYes": "Cofnij",
   "MAIG.Drawer.Undo.drift.edited": "{name} (edytowane)",
   "MAIG.Drawer.Undo.drift.missing": "{name} (usunięte)",
+  "MAIG.Drawer.Undo.drift.later": "{name} (zmienione przez późniejszy zapis kreatora AI)",
   "MAIG.Drawer.Flash.applied": "Zastosowano.",
   "MAIG.Drawer.Flash.notApplied": "Nic nie zapisano: zmiany nie zostały potwierdzone.",
   "MAIG.Drawer.Flash.unsaved": "Karta ma niezapisane pole: najpierw je zapisz albo zamknij.",

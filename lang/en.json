@@ -395,6 +395,7 @@
   "MAIG.Drawer.Undo.confirmYes": "Undo",
   "MAIG.Drawer.Undo.drift.edited": "{name} (edited)",
   "MAIG.Drawer.Undo.drift.missing": "{name} (removed)",
+  "MAIG.Drawer.Undo.drift.later": "{name} (changed by a later AI builder run)",
   "MAIG.Drawer.Flash.applied": "Applied.",
   "MAIG.Drawer.Flash.notApplied": "Nothing written: the changes were not confirmed.",
   "MAIG.Drawer.Flash.unsaved": "The sheet has unsaved input: save it or close the field first.",

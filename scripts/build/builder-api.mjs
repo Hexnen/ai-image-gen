@@ -4,7 +4,7 @@
 //   const s = await game.modules.get("moinens-ai-gen").api.build.openSession(actor);
 //   s.on("*", (data, type) => ...); await s.send("Build me Spider-Man"); s.stop(); s.transcript(); s.prewarm();
 //   await s.setOptions({ rank, profile }) -> the effective options; api.build.ranks() -> rank keys/names/numbers;
-//   await s.markProposal(id, "applied"|"discarded"|"pending") -> proposal state the model sees next turn (W2-7, P1-H);
+//   await s.markProposal(id, "applied"|"discarded"|"pending") -> proposal state the model sees next turn (W2-7, P1-H; "pending" restores the pendingProposal, W6-D1);
 //   pack = api.build.registry.getPack(): pack.apply(doc, input, { rank, profile, confirmed }) -> concise result
 //   ({ verbose: true } adds plan/projected), pack.snapshot(doc, { rank, profile }) -> { text, ... }.
 // Order with registry.mjs is free: both merge into api.build; the pack is looked up at each call.

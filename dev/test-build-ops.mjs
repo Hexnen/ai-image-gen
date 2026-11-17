@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { createWriter, selectOps, levelFlips, normRef, JOURNAL_PATH, LOCK_PATH } from "../scripts/systems/invincible/writer.mjs";
 import { toOps } from "../scripts/systems/invincible/replace.mjs";
 import { createBridge } from "../scripts/systems/invincible/pu-bridge.mjs";
-import { fingerprint, pruneJournal, UNDO_TTL, UNDO_RUNS } from "../scripts/systems/invincible/undo.mjs";
+import { fingerprint, pruneJournal, laterTouches, UNDO_TTL, UNDO_RUNS } from "../scripts/systems/invincible/undo.mjs";
 import { buildCatalog } from "../scripts/systems/invincible/catalog.mjs";
 import { chargenStateFromActor, getPath, readActor } from "../scripts/systems/invincible/reader.mjs";
 import { typicalHero, bigNpc, CATALOG_ROWS, item as fxItem, idGen } from "./fixtures/invincible-sheets.mjs";
@@ -1227,6 +1227,33 @@ await test("W5-A-2: undo of a split-power level swap puts the power back in plac
   // drift detection still works on the re-created items
   a.items.get(r1.idMap.t)._source.name = "Steady Hands (hand edit)";
   assert.deepEqual(W.undoStatus(a).drift.map((d) => d.why), ["edited"]);
+});
+
+await test("W6-R4 dry7-nc: drift made by a LATER journalled run carries laterRun (message says so); a hand edit does not", async () => {
+  const a = hero();
+  const r1 = await W.apply(a, { ops: [{ opId: "p", kind: "addItem", ref: refOf("power", "Iron Hide"), level: "basic", sourceItemId: byName(a, "Strange Meteor").id }, { opId: "t", kind: "addItem", ref: refOf("talent", "Steady Hands") }] });
+  assert.equal(r1.ok, true, r1.message);
+  const r2 = await W.apply(a, { ops: [{ opId: "u", kind: "updateItem", itemId: r1.idMap.p, set: { level: "major" } }] }, { confirmed: true });
+  assert.equal(r2.ok, true, r2.message);
+  a.items.get(r1.idMap.t)._source.name = "Steady Hands (hand edit)";
+  const u = await W.undo(a, r1.runId);
+  assert.equal(u.ok, false); assert.equal(u.needsConfirm, true);
+  const byId = Object.fromEntries(u.drift.map((d) => [d.itemId, d]));
+  assert.equal(byId[r1.idMap.p].laterRun, r2.runId, "the swap of the later run");
+  assert.equal(byId[r1.idMap.p].why, "edited");
+  assert.equal(byId[r1.idMap.t].laterRun, undefined, "a hand edit stays plain 'edited'");
+  assert.match(u.message, /Iron Hide: edited by a later builder run/);
+  assert.match(u.message, /Steady Hands \(hand edit\): edited(?! by)/);
+  // the later run undone first: its entries no longer count
+  const u2 = await W.undo(a, r2.runId);
+  assert.equal(u2.ok, true, u2.message);
+  a.items.get(r1.idMap.t)._source.name = "Steady Hands";
+  assert.equal(W.undoStatus(a).clean, true, JSON.stringify(W.undoStatus(a).drift));
+  // pure helper
+  const j = { runs: [{ runId: "A", ops: [] }, { runId: "B", ops: [{ kind: "update", itemId: "i1" }, { kind: "actor", paths: ["system.x"] }, { kind: "remove", itemId: "i2", undone: true }] }] };
+  const lt = laterTouches(j, { runId: "A" });
+  assert.deepEqual([[...lt.items], [...lt.paths]], [[["i1", "B"]], [["system.x", "B"]]]);
+  assert.equal(laterTouches(j, { runId: "B" }).items.size, 0, "nothing after the newest run");
 });
 
 await test("W5-A-2: per-item undo puts the restored item back at its old place and leaves the rest of the run alone", async () => {

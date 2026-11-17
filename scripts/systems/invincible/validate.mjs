@@ -817,7 +817,7 @@ export function limitPays(lim, slots = "") {
 }
 const signed = (n, unit) => `${n > 0 ? "+" : ""}${n} ${unit}${Math.abs(n) === 1 ? "" : "s"}`;
 /** -> "hero talent (free)", "occupation talent (free)", "extra talent -1 pt", "drawback +1 pt", "extra power source -1 pt",
-    "+1 slot (slots 3/4) -2 pts", "pays for a boost of \"X\" (no slot for it; slots 2/4) +2 pts", "attributes spent 12 -> 34",
+    "+1 slot (slots 3/4) -2 pts", "pays for a boost of \"X\" (no slot for it; slots 2/4); the limit returns +2 pts", "attributes spent 12 -> 34",
     "+1 pt" ... ; "" when the op costs nothing and has no role */
 export function costLabel(c, info, ctx) {
   if (!c) return "";
@@ -827,7 +827,8 @@ export function costLabel(c, info, ctx) {
   if (info?.kind === "actor" && spent) return [spent, c.slots ? `${signed(c.slots, "slot")} (slots ${c.slotsAfter}/${c.rankPowers})` : "", pts].filter(Boolean).join(", ");
   // W2-5: a limit pays for one level or boost of its power: say so instead of "-1 slot", which read like a slot refund
   const lim = info?.type === "limit" && c.slots && ctx.limitOf ? ctx.limitOf(info.itemId) : null;
-  if (lim && info.kind === "add" && c.slots < 0) return `${limitPays(lim, `slots ${c.slotsAfter}/${c.rankPowers}`)}${pts ? ` ${pts}` : ""}`;
+  // W6-R3: "; the limit returns +2 pts" (a bare trailing "+2 pts" after the boost clause read as the boost's)
+  if (lim && info.kind === "add" && c.slots < 0) return `${limitPays(lim, `slots ${c.slotsAfter}/${c.rankPowers}`)}${pts ? `; the limit returns ${pts}` : ""}`;
   if (lim && info.kind === "remove" && c.slots > 0) return `limit gone: the ${lim.grants} of "${lim.power}" it paid for needs a slot again (slots ${c.slotsAfter}/${c.rankPowers})${pts ? ` ${pts}` : ""}`;
   const role = (name) => (c.points ? `${name} ${pts}` : `${name} (free)`);
   if (info?.kind === "add" && info.type === "talent" && !c.slots) {

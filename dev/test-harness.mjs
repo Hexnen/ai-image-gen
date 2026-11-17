@@ -2,7 +2,7 @@
 // Scripted fake model behind a stub fetch emitting real SSE, fake IndexedDB, fake limits / log. No network, no real key.
 // Run from the module folder: node dev/test-harness.mjs
 import assert from "node:assert/strict";
-import { createHarness, transcriptOf, unansweredToolUses, errorSignature, toolResultContent, isEmptyAnswer, HISTORY_TOKEN_CAP, MAX_TOOL_RESULT_CHARS } from "../scripts/build/harness.mjs";
+import { createHarness, transcriptOf, unansweredToolUses, errorSignature, toolResultContent, isEmptyAnswer, HISTORY_TOKEN_CAP, MAX_TOOL_RESULT_CHARS, MAX_SHELVED_PROPOSALS } from "../scripts/build/harness.mjs";
 import { createSessionStore, HistoryEditError, assertAppendOnly } from "../scripts/build/session-store.mjs";
 import { decideSheetBlock, pairsOf, diffPairs, foldPairs, encodeHeld, decodeHeld, SUPERSEDES, UNCHANGED_BLOCK } from "../scripts/build/sheet-sync.mjs";
 import { prefixBytes, buildMessagesRequest } from "../scripts/anthropic/index.mjs";
@@ -820,6 +820,48 @@ await test("W2-7 proposal marker: discarded; a newer submit supersedes an older 
   assert.ok(tr.some((x) => x.role === "gm" && /did you see that/.test(x.text)));
   await s.markProposal("p2", "pending");                         // e.g. after an Undo
   assert.equal(s.proposals.find((p) => p.id === "p2").status, "pending");
+  assert.equal(s.pendingProposal?.proposalId, "p2", "W6-D1: discarded then pending = pending proposal again");
+});
+
+await test("W6-D1 dry7-multi: Apply, Undo (markProposal pending) -> pendingProposal again with its input; re-Apply works; newer pending wins; persisted", async () => {
+  const store = createSessionStore({ indexedDB: fakeIndexedDB() });
+  const ACTOR3 = { uuid: "Actor.ccc333", name: "Vampire", documentName: "Actor", type: "superhero" };
+  const fetchImpl = fakeModel((i) => (i === 0 ? submitThenText(0) : i === 2 ? submitThenText(2) : reply({ text: `t${i}` })));
+  const { deps } = makeDeps({ pack: proposalPack(), fetchImpl, store });
+  const s = await createHarness(deps).openSession(ACTOR3);
+  await s.send("build");                                         // p1
+  const orig = s.pendingProposal;
+  assert.equal(orig.proposalId, "p1");
+  await s.markProposal("p1", "applied", { runId: "run-1" });
+  assert.equal(s.pendingProposal, null, "applied clears it (semantics kept)");
+  const back = await s.markProposal("p1", "pending");
+  assert.deepEqual(back, { ok: true, id: "p1", status: "pending" });
+  assert.equal(s.pendingProposal?.proposalId, "p1", "the drawer has something to re-apply");
+  assert.deepEqual(s.pendingProposal.input, orig.input, "same input");
+  assert.equal(s.pendingProposal.toolUseId, orig.toolUseId);
+  assert.equal(s.pendingProposal.restored, true);
+  assert.equal(s.record.shelvedProposals.length, 0, "taken off the shelf");
+  const fresh = await createHarness(makeDeps({ pack: proposalPack(), fetchImpl, store }).deps).openSession(ACTOR3);
+  assert.equal(fresh.pendingProposal?.proposalId, "p1", "persisted in the store");
+  await s.markProposal("p1", "applied", { runId: "run-2" });     // re-Apply
+  assert.equal(s.pendingProposal, null); assert.equal(s.record.lastRunId, "run-2");
+  await s.send("now?");                                          // marker
+  await s.send("another");                                       // p2 submitted, pending
+  assert.equal(s.pendingProposal.proposalId, "p2");
+  await s.markProposal("p1", "pending");                         // Undo of the older run while p2 is pending
+  assert.equal(s.pendingProposal.proposalId, "p2", "a newer pending proposal stays the pending one");
+  assert.equal(s.proposals.find((p) => p.id === "p1").status, "pending");
+  assert.deepEqual(await s.markProposal("zz", "pending"), { ok: false, reason: "unknown" });
+  // the shelf is bounded
+  const sh = (s.record.shelvedProposals = []);
+  for (let k = 0; k < 8; k++) {
+    s.record.pendingProposal = { proposalId: `q${k}`, input: {} };
+    s.record.proposalStates.push({ id: `q${k}`, status: "pending", reported: null });
+    await s.markProposal(`q${k}`, "discarded");
+  }
+  assert.equal(s.record.shelvedProposals.length, MAX_SHELVED_PROPOSALS);
+  assert.equal(s.record.shelvedProposals[0].proposalId, "q3");
+  void sh;
 });
 
 await test("W2-7 prefix stability with proposal markers: tools + system bytes identical, marker only in messages, history a strict prefix", async () => {
