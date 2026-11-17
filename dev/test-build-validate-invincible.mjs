@@ -482,7 +482,8 @@ await test("L4 warnings: removing custom / hand-edited items, sensitive fields, 
   assert.equal(s.ok, true);
   assert.equal(s.warnings.filter((x) => x.code === "field.sensitive").length, 2);
   const g = await V(a, ops({ op: "addItem", opId: "l", ref: ref("limit", "Loud"), powerItemId: idOf(a, "Glide Wings"), grants: "level" }), { profile: "in-play" });
-  has(g, "grants.heuristic", "warnings");
+  has(g, "grants.heuristic", "info");   // W3-6: info, not a warning (grants never changes the cost)
+  assert.ok(!codes(g, "warnings").includes("grants.heuristic"));
   const rp = await V(blankHero(), { target: "this", mode: "replace", proposal: { rank: "cosmic", name: "Blank" }, rationale: "x" }, { rank: "global", profile: "in-play" });
   has(rp, "rank.differs", "warnings");
 });
@@ -876,6 +877,121 @@ await test("P1-G: no suggest when the proposal names another rank; rank.defaulte
   assert.ok(!codes(await VO(blankHero(), rep(fullBuild()), { rank: "global" }), "warnings").includes("rank.defaulted"));
   assert.ok(!codes(await V(typicalHero(), ops({ op: "updateActor", opId: "a", set: { texts: { drive: "x" } } })), "warnings").includes("rank.defaulted"), "plus-ultra flag counts as a chosen rank");
   assert.ok(!codes(await V(smallNpc(), ops({ op: "updateActor", opId: "a", set: { name: "Y" } })), "warnings").includes("rank.defaulted"), "npc: no rank budget");
+});
+
+/* ================================================================== wave 3, group C1 (analysis-3) */
+const group = (cat) => validateGroup(() => null, { catalog: cat, lookup, itemCheck: () => null });
+
+await test("W3-6: the limit label follows the sheet's reading, not the model's grants; grants.heuristic is info 'does not change the cost'", async () => {
+  const P = fullBuild();
+  P.powers[1].limits[0].grants = "boost";   // Spark Bolt is Major: the sheet reads the limit as paying for a level
+  const r = await VO(blankHero(), rep(P), { rank: "global" });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  const lim = r.budget.perOp.find((c) => r.opInfo[c.opId].type === "limit");
+  assert.equal(lim.label, 'pays for a level of "Spark Bolt" (no slot for it; slots 3/4) +2 pts');
+  const gi = r.info.find((i) => i.code === "grants.heuristic") ?? assert.fail(JSON.stringify(r.info));
+  assert.match(gi.message, /grants "boost" does not change the cost; the sheet reads it as paying for a level/);
+  assert.equal(gi.hint, "Nothing to fix.");
+  assert.ok(!codes(r, "warnings").includes("grants.heuristic"));
+  // same budget whatever grants says
+  const r2 = await VO(blankHero(), rep(fullBuild()), { rank: "global" });
+  assert.deepEqual(r2.budget.after, r.budget.after);
+});
+
+await test("W3-7: Hard Times info only when drawbacks / Resources are touched or in a replace; rank.defaulted and npc.name.blank texts", async () => {
+  const th = typicalHero();
+  const hard = mkActor({ id: th.id, name: th.name, attrs: {}, system: th._source.system, flags: th._source.flags, items: [...th.items, item("drwHardTimes9999", "drawback", "Hard Times")] });
+  const ht = (r) => codes(r, "info").includes("drawback.hardTimes");
+  const plain = await V(hard, ops({ op: "updateActor", opId: "a", set: { texts: { drive: "Invented new drive" } } }), { profile: "in-play" });
+  assert.equal(plain.ok, true, JSON.stringify(plain.errors)); assert.equal(ht(plain), false, "an unrelated edit: no Hard Times remark");
+  assert.equal(ht(await V(hard, ops({ op: "updateActor", opId: "a", set: { resources: 2 } }), { profile: "in-play" })), true, "Resources touched");
+  assert.equal(ht(await V(hard, ops({ op: "addItem", opId: "d", ref: ref("drawback", "Haunted"), note: "Invented rival" }), { profile: "in-play" })), true, "a drawback added");
+  assert.equal(ht(await V(hard, ops({ op: "updateItem", opId: "u", itemId: idOf(hard, "Lean Times"), set: { note: "Invented" } }), { profile: "in-play" })), true, "a drawback changed");
+  // rank.defaulted: no order to ask
+  const d = await VO(blankHero(), rep(fullBuild()));
+  assert.equal(d.warnings.find((w) => w.code === "rank.defaulted").hint, "Nothing to do unless the GM's message names another rank; then ask them to set it in the drawer.");
+  // npc.name.blank: empty relationships = no NPC relationship written; an "NPC:" line without a name = nameless
+  const none = await VO(blankHero(), rep(fullBuild({ texts: { ...fullBuild().texts, relationships: "" } })), { rank: "global" });
+  const nb = none.warnings.find((w) => w.code === "npc.name.blank");
+  assert.match(nb.message, /^No NPC relationship is written/); assert.match(nb.hint, /invent one original NPC and write "NPC: Name \(type\)"/);
+  const nameless = await VO(blankHero(), rep(fullBuild({ texts: { ...fullBuild().texts, relationships: "NPC: (mentor)" } })), { rank: "global" });
+  assert.equal(nameless.warnings.find((w) => w.code === "npc.name.blank").message, "The NPC relationship line has no name.");
+});
+
+await test("W3-8: a note-only change reads `change drawback \"X\" [note \"...\"]` (no [name])", async () => {
+  const a = typicalHero();
+  const r = await V(a, ops({ op: "updateItem", opId: "u", itemId: idOf(a, "Lean Times"), set: { note: "Invented debt" } }), { profile: "in-play" });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.match(r.summary, /^u: change drawback "Lean Times" \[note "Invented debt"\]$/m);
+  assert.doesNotMatch(r.summary, /\[name\]/);
+  const r2 = await V(a, ops({ op: "updateItem", opId: "u", itemId: idOf(a, "Glide Wings"), set: { level: "major", note: "Invented arcs" } }), { profile: "in-play" });
+  assert.equal(r2.ok, true, JSON.stringify(r2.errors));
+  assert.match(r2.summary, /^u: change power "Glide Wings" \[level, note "Invented arcs"\]/m);
+  // a gear rename still says [name]
+  const g = await V(a, ops({ op: "updateItem", opId: "g", itemId: idOf(a, "Grapple Line"), set: { name: "Invented Hook" } }), { profile: "in-play" });
+  assert.match(g.summary, /g: change gear "Grapple Line" \[name\]/);
+});
+
+await test("W3-10: applyConfirm in the submit result for removals (with cascade) and level swaps; none for plain edits", async () => {
+  const a = typicalHero();
+  const sub = (doc, input) => group(catalog).runProposalTool("submit_proposal", input, { doc, options: { rank: "global", profile: "in-play" } });
+  const r = await sub(a, ops({ op: "removeItem", opId: "r", itemId: idOf(a, "Spark Bolt"), cascade: true }, { op: "removeItem", opId: "g", itemId: idOf(a, "Stun Baton") }));
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual(r.applyConfirm, ['remove power "Spark Bolt"', 'remove limit "Needs Charging" (with "Spark Bolt")', 'remove gear "Stun Baton"']);
+  assert.match(r.applyConfirmNote, /the GM confirms these at Apply/i);
+  const nid = idGen(31);
+  const s = fromCatalog(nid, "power-sources", "Strange Meteor");
+  const iron = fromCatalog(nid, "powers", "Iron Hide", { level: "basic", system: { powerSource: s.id } });
+  const plate = mkActor({ id: "splitHero0000001", name: "Plate", attrs: { fighting: 6, agility: 6, strength: 6, reason: 5, intuition: 5, presence: 5 }, items: [s, iron] });
+  const sw = await sub(plate, ops({ op: "updateItem", opId: "u", itemId: iron.id, set: { level: "major" } }));
+  assert.deepEqual(sw.applyConfirm, ['level swap power "Iron Hide" basic -> major']);
+  const none = await sub(a, ops({ op: "updateActor", opId: "a", set: { texts: { drive: "Invented" } } }));
+  assert.equal(none.ok, true); assert.equal(none.applyConfirm, undefined); assert.equal(none.applyConfirmNote, undefined);
+  // check_proposal does not carry it
+  const ck = await group(catalog).runProposalTool("check_proposal", ops({ op: "removeItem", opId: "g", itemId: idOf(a, "Stun Baton") }), { doc: a, options: { rank: "global", profile: "in-play" } });
+  assert.equal(ck.applyConfirm, undefined);
+});
+
+await test("W3-11: attr.cap in-play says the cap applies in-play too and who changes the rank", async () => {
+  const a = typicalHero();
+  const r = await V(a, ops({ op: "updateActor", opId: "a", set: { attributes: { fighting: 9 } } }), { profile: "in-play", rank: "street" });
+  const e = r.errors.find((x) => x.code === "attr.cap") ?? assert.fail(JSON.stringify(r.errors));
+  assert.match(e.hint, /^The rank cap applies in-play too: keep every attribute within 1\.\.\d+\. If the GM wants a higher value, ask them to change the rank in the drawer\.$/);
+  const c = await V(a, ops({ op: "updateActor", opId: "a", set: { attributes: { fighting: 9 } } }), { rank: "street" });
+  assert.match(c.errors.find((x) => x.code === "attr.cap").hint, /^Keep every attribute within 1\.\.\d+\.$/);
+});
+
+await test("W3-12: gear cost next to Resources as info when gear is added or re-priced", async () => {
+  const a = typicalHero();
+  const res = a._source.system.resources;
+  const r = await V(a, ops({ op: "addItem", opId: "g", ref: ref("gear", "Stun Baton") }), { profile: "in-play" });
+  const gi = r.info.find((i) => i.code === "gear.cost") ?? assert.fail(JSON.stringify(r.info));
+  assert.equal(gi.opId, "g");
+  assert.equal(gi.message, `Gear "Stun Baton" cost ${catalog.findByName("gear", "Stun Baton").gear.cost ?? 0} at Resources ${res}.`);
+  const p = await V(a, ops({ op: "updateItem", opId: "u", itemId: idOf(a, "Grapple Line"), set: { gear: { cost: 4 } } }), { profile: "in-play" });
+  assert.match(p.info.find((i) => i.code === "gear.cost").message, new RegExp(`cost 4 at Resources ${res}\\.`));
+  assert.ok(!codes(await V(a, ops({ op: "updateItem", opId: "u", itemId: idOf(a, "Grapple Line"), set: { name: "Invented" } }), { profile: "in-play" }), "info").includes("gear.cost"), "a rename is no re-pricing");
+});
+
+await test("W3-9: effect.placeholder warning for an added item whose effect key has [..]; model: note, GM: edit the effect", async () => {
+  const R = rows(); R.talents.push({ _id: "talSignature0000", name: "Signature Knack", system: { description: "<p>Invented placeholder talent.</p>" } });
+  const s = fixtureSource(R);
+  s.documents = async (p) => (await s.index(p)).map((d) => (d._id === "talSignature0000" ? { ...d, effects: [{ name: "Pick", system: { changes: [{ key: "bonus.[attribute]", type: "add", value: "2" }] } }] } : d));
+  const catPH = await buildCatalog(s);
+  assert.deepEqual(catPH.findByName("talent", "Signature Knack").placeholders, ["bonus.[attribute]"]);
+  const a = typicalHero();
+  const input = ops({ op: "addItem", opId: "t", ref: catPH.findByName("talent", "Signature Knack").ref });
+  const gm = await validateProposal(a, input, { catalog: catPH, lookup, itemCheck: () => null, profile: "in-play" });
+  const w = gm.warnings.find((x) => x.code === "effect.placeholder") ?? assert.fail(JSON.stringify(gm.warnings));
+  assert.equal(w.opId, "t"); assert.match(w.message, /Talent "Signature Knack" has an effect with a choice left open \(bonus\.\[attribute\]\)/);
+  assert.match(w.hint, /in the item's note/); assert.match(w.gm, /edit the effect by hand after Apply/);
+  const model = await group(catPH).runProposalTool("submit_proposal", input, { doc: a, options: { rank: "global", profile: "in-play" } });
+  const mw = model.warnings.find((x) => x.code === "effect.placeholder");
+  assert.ok(mw && !("gm" in mw));
+  const noted = await validateProposal(a, ops({ op: "addItem", opId: "t", ref: catPH.findByName("talent", "Signature Knack").ref, note: "Reason" }), { catalog: catPH, lookup, itemCheck: () => null, profile: "in-play" });
+  assert.match(noted.warnings.find((x) => x.code === "effect.placeholder").hint, /^Nothing to fix: the note names the choice/);
+  // an item without a placeholder, and a sheet item (ops mode) do not warn
+  assert.ok(!codes(await validateProposal(a, ops({ op: "addItem", opId: "t", ref: catPH.findByName("talent", "Steady Hands").ref }), { catalog: catPH, lookup, itemCheck: () => null, profile: "in-play" }), "warnings").includes("effect.placeholder"));
 });
 
 console.log(`\n${passed} passed${process.exitCode ? " (with failures)" : ""}`);

@@ -23,7 +23,7 @@
 
 import * as rules from "./vendor/chargen/rules.mjs";
 import { chargenStateFromActor, readItem, getCatalogLookup, talentRoleShifts, talentRolesOf } from "./reader.mjs";
-import { getCatalog, slug } from "./catalog.mjs";
+import { getCatalog, slug, effectsOf, placeholderKeys } from "./catalog.mjs";
 import {
   PROPOSAL_SCHEMA, PROPOSAL_GUIDE, LEVEL_WORDS, normalize, project, replaceToOps, selectOps, expectFor, checkStale, toPlainActor, asDoc,
   customItemData, levelExists, powerLevel, baseName, noteOf, norm, normBase, hash, stableJson, summarize, getPath, CUSTOM_TYPES, resolveRank, NEW_PREFIX
@@ -100,14 +100,20 @@ export const MESSAGES = Object.freeze({
   "drawback.note.missing": (p) => ({ message: `Drawback "${p.name}" needs a choice (${p.kind === "source" ? "a power source" : "defined when taken"}) in its note.`, hint: "Add note: \"...\" (shown in brackets in the name)." }),
   "attr.invalid": (p) => ({ message: `Attribute ${A(p.attr)} is not a whole number.`, hint: "Attributes are integers." }),
   "attr.low": (p) => ({ message: `Attribute ${A(p.attr)} is below ${p.min}.`, hint: `Every attribute is at least ${p.min}.` }),
-  "attr.cap": (p) => ({ message: `Attribute ${A(p.attr)} is above the rank cap ${p.cap}.`, hint: `Keep every attribute within 1..${p.cap}.` }),
+  // W3-11 (finding 7, D-14): the cap stays hard in-play; say so and who can change it
+  "attr.cap": (p) => ({ message: `Attribute ${A(p.attr)} is above the rank cap ${p.cap}.`, hint: p.inPlay
+    ? `The rank cap applies in-play too: keep every attribute within 1..${p.cap}. If the GM wants a higher value, ask them to change the rank in the drawer.`
+    : `Keep every attribute within 1..${p.cap}.` }),
   "budget.range": (p) => ({ message: `The attribute budget (${p.budget}) cannot be spent within 1..${p.cap} per attribute.`, hint: "Change slots, talents, sources or drawbacks so the budget fits 6..6x cap." }),
   "attr.over": (p) => ({ message: `${p.over} attribute points too many (budget ${p.budget}).`, hint: `Lower attributes by ${p.over} in total, or free points (drop a boost/level, take a drawback).` }),
   "attr.unspent": (p) => ({ message: `${p.left} attribute points are unspent (budget ${p.budget}).`, hint: `Raise attributes by ${p.left} in total, each within 1..cap.` }),
   "occupation.missing": () => ({ message: "The occupation is missing.", hint: "Set texts.occupation (it decides Resources and the occupation talent)." }),
   "talent.occ.missing": () => ({ message: "The occupation talent is missing.", hint: "Add a second talent (the occupation talent)." }),
   "resources.invalid": (p) => ({ message: `Resources ${p.resources} is invalid for a hero with an occupation.`, hint: "Set resources to the occupation's value (at least 1)." }),
-  "npc.name.blank": () => ({ message: "The NPC relationship has no name.", hint: "Add \"NPC: Name (type)\" to texts.relationships." }),
+  // W3-7 (finding 8, D-15 provisional): an empty relationships text is "no NPC relationship written", not "a nameless NPC"
+  "npc.name.blank": (p) => (p.line
+    ? { message: "The NPC relationship line has no name.", hint: "Write the NPC's name in it: \"NPC: Name (type)\" in texts.relationships." }
+    : { message: "No NPC relationship is written (texts.relationships has no \"NPC: Name (type)\" line).", hint: "At a build, invent one original NPC and write \"NPC: Name (type)\" in texts.relationships." }),
   // creation-profile checks of the life step (P1-F; warnings, owner decision D-4 provisional)
   "occupation.unknown": (p) => ({ message: p.name ? `Occupation "${p.occupation}" is written as a ref or slug; the sheet stores the occupation's name ("${p.name}").` : `Occupation "${p.occupation}" is not in the catalogue; its Resources and occupation talent cannot be checked.`, hint: p.name ? `Set texts.occupation to "${p.name}".` : "Use an occupation name from the catalogue index (English, exactly as listed), or keep an own occupation if the GM wants one." }),
   "resources.occupation": (p) => ({ message: `Resources ${p.resources} differ from the occupation's value (${p.occupation}: ${p.value}).`, hint: `Set resources to ${p.value}; talents and drawbacks change Resources through their effects, not the stored value.` }),
@@ -134,11 +140,18 @@ export const MESSAGES = Object.freeze({
   "plan.failed": (p) => ({ message: `The write plan failed: ${p.error}`, hint: "Usually a sheet change; check the <sheet> block and resubmit." }),
   // L4 / info
   "rank.differs": (p) => ({ message: `The proposal's rank (${p.proposed}) differs from the drawer's rank (${p.rank}); validated as ${p.rank}, so budget numbers and fixes here are for ${p.rank}.`, hint: "Ask the GM to set the rank in the drawer; do not rebalance for the other rank." }),
-  "rank.defaulted": (p) => ({ message: `No rank chosen (drawer or plus-ultra flag): validated as ${p.rank} (the default).`, hint: "If the GM wants another rank, ask them to set it in the drawer." }),
+  // W3-7 (finding 6): the hint read like an order to ask the GM
+  "rank.defaulted": (p) => ({ message: `No rank chosen (drawer or plus-ultra flag): validated as ${p.rank} (the default).`, hint: "Nothing to do unless the GM's message names another rank; then ask them to set it in the drawer." }),
   "note.cut": (p) => ({ message: `A note is longer than ${p.max} characters (${p.length}); it is cut to "${p.kept}".`, hint: `Keep notes short (at most ${p.max} characters).` }),
   "remove.handEdited": (p) => ({ message: `Removes ${p.custom ? "custom" : "hand-edited"} item "${p.name}".`, hint: "The GM sees it in the preview; say why in choiceNotes." }),
   "field.sensitive": (p) => ({ message: `Writes ${p.field}, which is only changed when the GM asked for it.`, hint: "Leave it out unless the GM asked." }),
-  "grants.heuristic": (p) => ({ message: `Limit "${p.name}" will be read as paying for a ${p.read} (power level decides), not a ${p.asked}.`, hint: "A limit pays for a level when its power is above Basic, else for a boost." }),
+  // W3-6: info, not a warning: the budget never used `grants` (slot counts are the same either way), only the text contradicted
+  "grants.heuristic": (p) => ({ message: `Limit "${p.name}": grants "${p.asked}" does not change the cost; the sheet reads it as paying for a ${p.read} (a level when its power is above Basic, else a boost).`, hint: "Nothing to fix." }),
+  "gear.cost": (p) => ({ message: `Gear "${p.name}" cost ${p.cost} at Resources ${p.resources}.`, hint: "Information only; the GM decides what the hero can afford." }),
+  // W3-9 (finding 3; D-13 undecided, so no writer substitution): the model names the choice in the note, the GM edits the effect
+  "effect.placeholder": (p) => ({ message: `${p.type ? `${p.type[0].toUpperCase()}${p.type.slice(1)} ` : ""}"${p.name}" has an effect with a choice left open (${(p.keys ?? []).join(", ")}).`,
+    hint: p.noted ? "Nothing to fix: the note names the choice; the GM sets the effect." : p.canNote ? "Write the choice (e.g. the attribute) in the item's note; the GM sets the effect." : "Name the choice in choiceNotes; the GM sets the effect.",
+    gm: `The effect of "${p.name}" still has the placeholder key ${(p.keys ?? []).join(", ")}: edit the effect by hand after Apply (the builder does not fill it in).` }),
   "profile.suggestInPlay": () => ({ message: "The current sheet already fails the creation rules.", hint: "The GM may switch the drawer to the in-play profile (no new errors)." }),
   "budget.delta": (p) => ({ message: `Under creation rules this change ${p.delta < 0 ? `costs ${-p.delta}` : `frees ${p.delta}`} attribute point(s) (budget ${p.before} -> ${p.after}, spent ${p.spentBefore} -> ${p.spentAfter}).`, hint: "In-play: informational only." }),
   "talent.role.shift": (p) => ({ message: `Talent "${p.name}" ${p.listed ? `is listed as the ${p.from} talent but will be` : `is the ${p.from} talent now and will be`} the ${p.to} talent after this change: the role follows the order of the talents on the sheet (1st hero, 2nd occupation, the rest extras) and a new talent is always added last.`, hint: "If that is not intended, also remove and re-add the talents that must come after the new one, in role order; otherwise ignore this." }),
@@ -198,6 +211,9 @@ export function superheroIssues(plain, rank, catalog) {
     const stored = Number(state.resources) || 0;
     ht.params = { ...ht.params, n, stored, effective: stored - n, book: stored - 2 * n };
   }
+  // W3-7: is there an "NPC:" line at all (nameless NPC) or no NPC relationship written
+  const nb = out.find((i) => i.code === "npc.name.blank");
+  if (nb) nb.params = { ...nb.params, line: /^\s*NPC:/im.test(String(getPath(plain, "system.relationships") ?? "")) };
   return { issues: [...out, ...catalogueIssues(plain, catalog)], state };
 }
 /**
@@ -440,6 +456,7 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
   const blame = opBlame(ops, proj);
   for (const i of projIssues) {
     const e = { ...i, opId: i.opId ?? blame(i) };
+    if (profile === "in-play" && i.code === "attr.cap") e.params = { ...e.params, inPlay: true };   // W3-11
     if (i.severity === "error") {
       if (profile === "in-play" && BUDGET_CODES.has(i.code)) continue;            // reported as budget.delta below
       if (profile === "in-play" && baseSigs.has(sig(i))) { acc.info.push({ code: "baseline.tolerated", path: i.path, params: { issue: describe(i, { rank }).message } }); continue; }
@@ -447,6 +464,11 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
     } else if (i.severity === "warn") { if (!baseWarnSigs.has(sig(i))) acc.warnings.push(e); }
     else acc.info.push(e);
   }
+  // W3-7 (finding 2): the Hard Times remark only when the change touches drawbacks or Resources, or in a replace (it came with
+  // every submit on a sheet that has Hard Times)
+  const touchesHT = Object.values(proj.opInfo).some((x) => x.type === "drawback" || (x.cascade ?? []).some((c) => c.type === "drawback") ||
+    (x.kind === "actor" && (x.changed ?? []).some((c) => c.path === "system.resources")));
+  if (P.mode !== "replace" && !touchesHT) acc.info = acc.info.filter((x) => x.code !== "drawback.hardTimes");
   // item data of AI-defined items (DataModel; runtime only)
   const itemCheck = opts.itemCheck ?? foundryItemCheck;
   ops.forEach((op, i) => {
@@ -521,12 +543,41 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
     }
     if (!opts.allowVitals) for (const c of info.changed ?? []) if (/karma|derived\.\w+\.value/.test(c.path ?? "")) acc.warnings.push({ code: "field.sensitive", path: c.path, opId: opIdOf(proj, info), params: { field: c.path.replace(/^system\./, "") } });
   }
+  // W3-6: `grants` never changes the cost (the sheet has no field for it; the reader decides by the power's level): info only
   for (const it of proj.actor.items) {
     if (it.type !== "limit" || !it.system?._grants) continue;
     const pw = proj.actor.items.find((x) => x._id === it.system.power);
-    const read = pw && LEVEL_WORDS.indexOf(powerLevel(pw.system)) > 0 ? "level" : "boost";
-    if (read !== it.system._grants) acc.warnings.push({ code: "grants.heuristic", opId: String(it._id).replace(/^new:/, ""), params: { name: it.name, read, asked: it.system._grants } });
+    const read = limitReading(pw);
+    if (read !== it.system._grants) acc.info.push({ code: "grants.heuristic", opId: String(it._id).replace(/^new:/, ""), params: { name: it.name, read, asked: it.system._grants } });
   }
+  // W3-9: an item this change adds (in a creation replace: any item of the result) whose effect key still has a placeholder
+  // ("bonus.[attribute]"). Added items: the catalogue entry's effects (the projection carries none); sheet items: their own.
+  for (const it of proj.actor.items) {
+    const isNew = String(it._id).startsWith(NEW_PREFIX);
+    if (!isNew && !showAllWarnings) continue;
+    const own = placeholderKeys(effectsOf(it.effects));
+    const entry = isNew ? (catalog?.get?.(it._ref) ?? catalog?.findByName?.(it.type, baseName(it.name))) : null;
+    const keys = own.length ? own : entry?.placeholders ?? [];
+    if (!keys.length) continue;
+    acc.warnings.push({ code: "effect.placeholder", path: `items.${it._id}`, ...(isNew ? { opId: it._id.slice(NEW_PREFIX.length) } : {}),
+      params: { name: baseName(it.name), type: it.type, keys, noted: !!noteOf(it.name), canNote: ["power", "talent", "drawback"].includes(it.type) } });
+  }
+  // W3-12 (D-17 provisional): gear cost next to the hero's Resources, info only (no rule enforced), for gear this change adds or
+  // re-prices
+  if (isHero) {
+    const resources = Number(getPath(proj.actor, "system.resources")) || 0;
+    for (const [opId, info] of Object.entries(proj.opInfo)) {
+      if (info.type !== "gear" && info.type !== "vehicleWeapon") continue;
+      if (info.kind !== "add" && !(info.kind === "update" && (info.changed ?? []).some((c) => c.field === "cost"))) continue;
+      const it = proj.actor.items.find((x) => x._id === info.itemId);
+      const cost = Number(it?.system?.cost);
+      if (it && Number.isInteger(cost)) acc.info.push({ code: "gear.cost", opId, path: `items.${info.itemId}`, params: { name: it.name, cost, resources } });
+    }
+  }
+
+  // W3-10 (finding 5): removals and level swaps need the GM's confirmation at Apply (writer: plan.needConfirm); the model is told
+  // in the submit result. Same set as the writer's plan.deletes (removeItem + cascade) and plan.swaps (split-level power change).
+  res.applyConfirm = applyConfirmList(proj);
 
   res.expect = expectFor(doc ?? asDoc(basePlain), ops, proj);
   res.summary = [...summarize({ ops }, proj, res.budget), ...keptLine(conv, ops), ...(isHero && res.budget.after ? [`budget ${res.budget.after.points} spent ${res.budget.after.spent} slots ${res.budget.after.slots}/${res.budget.after.rankPowers}`] : [])].join("\n");
@@ -555,6 +606,17 @@ function keptLine(conv, ops) {
   const act = ops.find((o) => o.op === "updateActor")?.opId;
   return [`${act ?? "actor"}: kept ${k.map(([f, v]) => `${f} ${v}`).join(", ")} (already on the sheet)`];
 }
+/** W3-10: what the GM confirms at Apply -> ["remove talent \"X\"", "remove boost \"Y\" (with \"Z\")", "level swap power \"W\" major -> massive"] */
+export function applyConfirmList(proj) {
+  const out = [];
+  for (const info of Object.values(proj?.opInfo ?? {})) {
+    if (info.kind === "remove") out.push(`remove ${info.type} "${info.name}"`);
+    for (const c of info.cascade ?? []) out.push(`remove ${c.type} "${c.name}" (with "${info.name}")`);
+    if (info.splitSwap && info.splitSwap.from !== info.splitSwap.to) out.push(`level swap ${info.type} "${baseName(info.name)}" ${info.splitSwap.from} -> ${info.splitSwap.to}`);
+  }
+  return out;
+}
+export const APPLY_CONFIRM_NOTE = "The GM confirms these at Apply (removals and level swaps); nothing to do for you.";
 const opIdOf = (proj, info) => Object.entries(proj.opInfo).find(([, v]) => v === info)?.[0];
 const planIssue = (e) => (typeof e === "string" ? { code: "plan.error", message: e, hint: "Check the sheet and resubmit." } : { code: String(e?.code ?? "plan.error"), path: e?.path, opId: e?.opId, params: e?.params ?? {}, ...(MESSAGES[e?.code] ? {} : { message: String(e?.message ?? e?.code ?? "plan error"), hint: String(e?.hint ?? "Check the sheet and resubmit.") }) });
 async function resolveLookup(l) {
@@ -649,13 +711,14 @@ export function perOpCost(basePlain, ops, catalog, rank, before) {
     talents: fin.actor.items.filter((x) => x.type === "talent").map((x) => x._id),
     sources: fin.actor.items.filter((x) => x.type === "powerSource").map((x) => x._id),
     occupation: !!st.occupation,
-    // W2-5: a limit's power and what it pays for (`grants` as given, else the reader's heuristic: level above Basic, else boost)
+    // W2-5: a limit's power and what it pays for. W3-6: always the reader's reading (level when the power is above Basic, else
+    // boost: reader.mjs chargenStateFromActor, which the budget uses), never the model's `grants` (it does not change the cost)
     limitOf: (itemId) => {
       const all = [...fin.actor.items, ...basePlain.items];
       const l = all.find((x) => x._id === itemId);
       const pw = l ? all.find((x) => x._id === l.system?.power) : null;
       if (!pw) return null;
-      return { power: baseName(pw.name), grants: l.system?._grants ?? (LEVEL_WORDS.indexOf(powerLevel(pw.system)) > 0 ? "level" : "boost") };
+      return { power: baseName(pw.name), grants: limitReading(pw) };
     }
   };
   return ops.map((op) => {
@@ -666,6 +729,8 @@ export function perOpCost(basePlain, ops, catalog, rank, before) {
     return out;
   });
 }
+/** W3-6: what a limit pays for as the reader (and so the budget) reads it: a level when its power is above Basic, else a boost */
+export const limitReading = (power) => (power && LEVEL_WORDS.indexOf(powerLevel(power.system)) > 0 ? "level" : "boost");
 const signed = (n, unit) => `${n > 0 ? "+" : ""}${n} ${unit}${Math.abs(n) === 1 ? "" : "s"}`;
 /** -> "hero talent (free)", "occupation talent (free)", "extra talent -1 pt", "drawback +1 pt", "extra power source -1 pt",
     "+1 slot (slots 3/4) -2 pts", "pays for a boost of \"X\" (no slot for it; slots 2/4) +2 pts", "attributes spent 12 -> 34",
@@ -708,6 +773,8 @@ export function toolResult(name, r, doc) {
   if (r.ok && name === "submit_proposal") {
     out.proposalId = `prop-${hash(`${doc?.uuid ?? ""}|${stableJson(r.normalized)}`)}`;
     out.summary = r.summary ?? "";
+    // W3-10: model-facing (tool result, outside the cached prefix)
+    if (r.applyConfirm?.length) { out.applyConfirm = r.applyConfirm; out.applyConfirmNote = APPLY_CONFIRM_NOTE; }
   }
   // GM-only remarks (`gm`, W2-5) never reach the model
   const model = (list) => list.map((i) => { if (!i?.gm) return i; const { gm, ...rest } = i; return rest; });

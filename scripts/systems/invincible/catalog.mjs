@@ -13,6 +13,7 @@
 //   index(pack, fields)                -> [{ _id, name, type, folder, system, _stats }]   (pack index with extra fields)
 //   folders(pack)                      -> [{ id, name, parent }]                          (parent = folder id or null)
 //   document(pack, id)                 -> plain toObject() data (items: system, effects; actors: system, items) or null
+//   documents(pack)                    -> [plain toObject() data] (optional, W3-13: item effects for the fx column)
 //   page(journalId, pageId, pageName)  -> { name, journal, html } | null                  (core-book journal pages only)
 //
 // Refs: `<short>:<documentId>` (spec 6: "pack short name + document id"), e.g. `powers:Ab12...`; archetypes and occupations
@@ -82,6 +83,8 @@ export function htmlToText(html) {
   let s = String(html ?? "");
   s = s.replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, " ");
   s = s.replace(/@\w+\[[^\]]*\]\{([^}]*)\}/g, "$1").replace(/@\w+\[([^\]]*)\]/g, "$1");
+  // W3-13: inline roll markers ([[D3]], [[/r 1d6]], [[/r 1d6]]{label}) -> their label or formula
+  s = s.replace(/\[\[(?:\/\w+\s+)?([^\]]*?)\]\](?:\{([^}]*)\})?/g, (m, f, l) => (l ?? f).trim());
   s = s.replace(/<h[1-6]\b[^>]*>/gi, "\n## ").replace(/<\/h[1-6]>/gi, "\n");
   s = s.replace(/<li\b[^>]*>/gi, "\n- ").replace(/<\/(li|ul|ol)>/gi, "\n");
   s = s.replace(/<\/t[dh]>\s*<t[dh]\b[^>]*>/gi, " | ").replace(/<\/?tr\b[^>]*>/gi, "\n");
@@ -251,14 +254,78 @@ export function automationFacts(a) {
 export function automationsOf(system) {
   return Object.values(system?.automations ?? {}).map(automationFacts).filter(Boolean);
 }
-/** Effects -> [{ name, disabled?, changes:[{key, type, value}] }] (v14 `type`, older `mode`). */
+/** Effects -> [{ name, disabled?, transfer?: false, changes:[{key, type, value}] }] (v14 `type`, older `mode`; v14 keeps the
+    changes in `system.changes`, older data in `changes`). `transfer: false` = the effect stays on the item (not on the actor). */
 export function effectsOf(effects) {
   return (Array.isArray(effects) ? effects : []).map((e) => ({
     name: e?.name ?? "",
     ...(e?.disabled ? { disabled: true } : {}),
-    changes: (e?.changes ?? []).map((c) => ({ key: c.key, type: c.type ?? c.mode, value: c.value }))
+    ...(e?.transfer === false ? { transfer: false } : {}),
+    changes: (Array.isArray(e?.system?.changes) ? e.system.changes : Array.isArray(e?.changes) ? e.changes : []).filter((c) => c?.key).map((c) => ({ key: c.key, type: c.type ?? c.mode, value: c.value }))
   }));
 }
+
+/* ---- W3-13: a short effect summary for the index (`fx` column) */
+const FX_ATTRS = ["fighting", "agility", "strength", "reason", "intuition", "presence"];
+const FX_MODE = { 0: "custom", 1: "multiply", 2: "add", 3: "downgrade", 4: "upgrade", 5: "override" };
+/** effect change key -> short label: "system.attributes.reason.value" -> "reason", "system.derived.health.bonus" -> "health",
+    "system.resources" -> "resources"; the system's own bonus keys stay recognisable ("bonus.reason", "maxPush.all") */
+export function fxLabel(key) {
+  const k = String(key ?? "").replace(/^system\./, "");
+  const m = /^attributes\.(\w+)\.value$/.exec(k) ?? /^derived\.(\w+)\.bonus$/.exec(k);
+  if (m) return m[1];
+  return k.replace(/^derived\./, "") || String(key ?? "");
+}
+/** label -> { cat, attr } for grouping: "reason" -> { "", reason }, "bonus.reason" -> { "bonus.", reason }, else null */
+const fxAttr = (label) => {
+  if (FX_ATTRS.includes(label)) return { cat: "", attr: label };
+  const m = /^(bonus\.|maxPush\.)(\w+)$/.exec(label);
+  return m && FX_ATTRS.includes(m[2]) ? { cat: m[1], attr: m[2] } : null;
+};
+const FX_ALL = { "": "all attributes", "bonus.": "all attribute bonuses", "maxPush.": "maxPush all attributes" };
+const fxValue = (type, v) => {
+  const mode = typeof type === "number" ? FX_MODE[type] : String(type ?? "add");
+  const s = String(v ?? "").trim(), n = Number(s);
+  const num = s !== "" && Number.isFinite(n);
+  if (mode === "add") return num ? (n >= 0 ? `+${n}` : `${n}`) : `+${s}`;
+  if (mode === "override") return `=${s}`;
+  if (mode === "multiply") return `*${s}`;
+  if (mode === "upgrade") return `>=${s}`;
+  if (mode === "downgrade") return `<=${s}`;
+  return `~${s}`;
+};
+export const FX_MAX = 70;
+/**
+ * effects (effectsOf shape) -> "reason-3, 5 others -1" | "health+1 (disabled)" | "intuiton-1 (not transferred)" | "" (no changes).
+ * Same value on 3+ attributes groups them ("N others V" next to other attribute changes, "all attributes V" for all six);
+ * effects joined with "; "; cut at FX_MAX characters ("…"). Pure and byte-stable.
+ */
+export function fxSummary(effects) {
+  const parts = [];
+  for (const e of effects ?? []) {
+    const ch = (e?.changes ?? []).map((c) => { const label = fxLabel(c.key); return { label, a: fxAttr(label), val: fxValue(c.type, c.value) }; });
+    if (!ch.length) continue;
+    const out = [];
+    // attribute-named changes, per category (attribute value, attribute bonus, maxPush), in first-seen order
+    for (const cat of [...new Set(ch.filter((c) => c.a).map((c) => c.a.cat))]) {
+      const attr = ch.filter((c) => c.a?.cat === cat);
+      const groups = new Map();
+      for (const c of attr) groups.set(c.val, [...(groups.get(c.val) ?? []), c.a.attr]);
+      const big = [...groups.entries()].filter(([, l]) => l.length >= 3).sort((a, b) => b[1].length - a[1].length)[0] ?? null;
+      const rest = attr.filter((c) => !big || c.val !== big[0]).map((c) => `${c.label}${c.val}`);
+      const allSix = new Set(attr.map((c) => c.a.attr)).size === FX_ATTRS.length;
+      out.push(...rest);
+      if (big) out.push(big[1].length === FX_ATTRS.length ? `${FX_ALL[cat]} ${big[0]}` : allSix && rest.length ? `${big[1].length} others ${big[0]}` : `${cat}${big[1].join("/")} ${big[0]}`);
+    }
+    for (const c of ch) if (!c.a) out.push(`${c.label}${c.val}`);
+    const flags = [e.disabled ? "disabled" : "", e.transfer === false ? "not transferred" : ""].filter(Boolean).join(", ");
+    parts.push(`${out.join(", ")}${flags ? ` (${flags})` : ""}`);
+  }
+  const s = parts.join("; ").replace(/\|/g, "/");
+  return s.length > FX_MAX ? `${s.slice(0, FX_MAX - 1).replace(/[,;\s]+$/, "")}…` : s;
+}
+/** placeholder keys left for the user to fill ("bonus.[attribute]") */
+export const placeholderKeys = (effects) => [...new Set((effects ?? []).flatMap((e) => (e?.changes ?? []).map((c) => String(c.key ?? "")).filter((k) => /\[[^\]]*\]/.test(k))))];
 
 /* ------------------------------------------------------------------ index building */
 const INDEX_FIELDS = {
@@ -375,6 +442,25 @@ export async function buildCatalog(source, { feedRules = true } = {}) {
       entries.push({ kind, name, id: slug(name), pack: "core-book", html: s.html, ...(role ? { type: role } : {}), ...(occ ?? {}) });
     }
   }
+  // W3-13: item documents for their effects (fx column of talents / drawbacks; placeholder keys for the validator, W3-9). The
+  // optional adapter call documents(pack) loads a whole pack at once (the reader's lookup loads the same documents); without it
+  // (or when it fails) entries have no effects data and the fx column shows "-".
+  if (typeof source.documents === "function") {
+    for (const pack of ["powers", "boosts", "limits", "power-sources", "talents", "drawbacks", "gears"]) {
+      if (!source.has(pack)) continue;
+      let byId = null;
+      try { byId = new Map(((await source.documents(pack)) ?? []).map((d) => [d?._id, d])); } catch { byId = null; }
+      if (!byId) continue;
+      for (const e of entries) {
+        if (e.pack !== pack) continue;
+        const d = byId.get(e.id);
+        if (!d) continue;
+        e.effects = effectsOf(d.effects);
+        const ph = placeholderKeys(e.effects);
+        if (ph.length) e.placeholders = ph;
+      }
+    }
+  }
   for (const e of entries) {
     e.ref = `${KIND_INFO[e.kind].short}:${e.id}`;
     if (e.summaryText == null) e.summaryText = summaryOf(htmlToText(e.html));
@@ -437,7 +523,7 @@ const clean = (s) => oneLine(s).replace(/\|/g, "/");
 export function indexText(cat) {
   const out = [];
   out.push("<catalog>");
-  out.push("Installed Invincible content (invincible-core). Use refs exactly as written; get_entries(refs) gives the full rules text. Columns per section header; '-' = none.");
+  out.push("Installed Invincible content (invincible-core). Use refs exactly as written; get_entries(refs) gives the full rules text. Columns per section header; '-' = none; fx = the item's effects on the sheet (attribute or field change).");
   const sec = (kind, header, line) => {
     const list = cat.byKind(kind);
     if (!list.length) return;
@@ -453,8 +539,10 @@ export function indexText(cat) {
   sec("boost", "ref|name|summary, grouped under @power", (e) => `${e.ref}|${clean(e.name)}|${e.summaryText || "-"}`);
   sec("limit", "ref|name|summary, grouped under @power", (e) => `${e.ref}|${clean(e.name)}|${e.summaryText || "-"}`);
   sec("powerSource", "ref|name|summary", (e) => `${e.ref}|${clean(e.name)}|${e.summaryText || "-"}`);
-  sec("talent", "ref|name|summary", (e) => `${e.ref}|${clean(e.name)}|${e.summaryText || "-"}`);
-  sec("drawback", "ref|name|needs a choice (source/defined/-)|summary", (e) => `${e.ref}|${clean(e.name)}|${e.needs || "-"}|${e.summaryText || "-"}`);
+  // W3-13: fx = the item's own effects in short (finding 4: a drawback's stat penalty was invisible in the index)
+  const fx = (e) => fxSummary(e.effects) || "-";
+  sec("talent", "ref|name|fx|summary", (e) => `${e.ref}|${clean(e.name)}|${fx(e)}|${e.summaryText || "-"}`);
+  sec("drawback", "ref|name|needs a choice (source/defined/-)|fx|summary", (e) => `${e.ref}|${clean(e.name)}|${e.needs || "-"}|${fx(e)}|${e.summaryText || "-"}`);
   const gearLine = (e) => {
     const g = e.gear ?? {}, a = g.attack;
     const flags = [g.restricted ? "restricted" : "", g.singleUse ? "single-use" : ""].filter(Boolean).join(" ");
@@ -468,7 +556,7 @@ export function indexText(cat) {
   sec("occupation", "ref|name|resources|occupation talents|summary (book section)",
     (e) => `${e.ref}|${clean(e.name)}|${Number.isInteger(e.resources) ? e.resources : "-"}|${(e.talents ?? []).map(clean).join(", ") || "-"}|${e.summaryText || "-"}`);
   sec("npcProfile", "ref|name|group|powers (stock NPC actors)", (e) => `${e.ref}|${clean(e.name)}|${clean(e.type) || "-"}|${clean(e.summaryText) || "-"}`);
-  sec("sampleHero", "ref|name|powers (finished sample heroes, a guide to conventions)", (e) => `${e.ref}|${clean(e.name)}|${clean(e.summaryText) || "-"}`);
+  // W3-13 (D-8 provisional yes): sample heroes are not listed (not read in dry runs 2 and 3); search_catalog / get_entries keep them
   out.push("</catalog>");
   return out.join("\n");
 }
@@ -620,6 +708,12 @@ export function foundrySource(game = globalThis.game) {
       if (!p) return null;
       const d = await p.getDocument(id);
       return d ? d.toObject() : null;
+    },
+    /** W3-13: every document of a pack (one request), plain toObject() data */
+    async documents(name) {
+      const p = packOf(name);
+      if (!p) return [];
+      return (await p.getDocuments()).map((d) => d.toObject());
     },
     async page(journalId, pageId, pageName) {
       const p = packOf("core-book");

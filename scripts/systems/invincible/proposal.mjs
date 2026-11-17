@@ -463,7 +463,7 @@ export function project(doc, ops, { catalog = null, plain = null } = {}) {
     }
     if (allowed.includes("note") && set.note !== undefined) {
       const next = withNote(it.name, set.note);
-      info.changed.push({ field: "name", from: it.name, to: next });
+      info.changed.push({ field: "name", from: it.name, to: next, note: noteOf(next) });   // W3-8: `note` = the note it now has ("" = none)
       it.name = next;
     }
     if (allowed.includes("name") && set.name !== undefined) {
@@ -799,9 +799,12 @@ export function summarize(normalized, projection, budget) {
       if (c?.label && (c.points || c.slots)) s += ` cost: ${c.label}`;
       lines.push(s);
     } else {
-      let s = `${op.opId}: ${OP_WORD[info.kind]} ${info.type} "${info.name}"`;
+      // W3-8 (finding 15): a note change reads `change drawback "Frightful" [note "..."]` (the base name and the new note), not
+      // `[name]`, which looked like a rename
+      const noteCh = info.kind === "update" ? info.changed?.find((ch) => ch.note !== undefined) : null;
+      let s = `${op.opId}: ${OP_WORD[info.kind]} ${info.type} "${noteCh ? baseName(info.name) : info.name}"`;
       if (info.kind === "add" && info.type === "power") s += ` (${projection.actor.items.find((x) => x._id === info.itemId)?.system?.level ?? "basic"})`;
-      if (info.kind === "update" && info.changed?.length) s += ` [${info.changed.map((ch) => ch.field).join(", ")}]`;
+      if (info.kind === "update" && info.changed?.length) s += ` [${info.changed.map((ch) => (ch.note !== undefined ? (ch.note ? `note "${ch.note}"` : "note removed") : ch.field)).join(", ")}]`;
       if (info.cascade?.length) s += ` + ${info.cascade.length} dependant(s)`;
       // P1-C: a readable cost per op ("free occupation talent", "extra talent -1 pt", "+1 slot (3/4) -2 pts")
       if (c?.label) s += ` cost: ${c.label}`;

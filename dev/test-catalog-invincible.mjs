@@ -4,7 +4,8 @@
 // Live check against the real compendia: dev/live-catalog-invincible.js (prints sizes and counts only).
 import assert from "node:assert/strict";
 import {
-  buildCatalog, indexText, search, getEntries, htmlToText, summaryOf, cut, h2Sections, refToUuid, KINDS, bookMaxLevel, hash
+  buildCatalog, indexText, search, getEntries, htmlToText, summaryOf, cut, h2Sections, refToUuid, KINDS, bookMaxLevel, hash,
+  effectsOf, fxSummary, fxLabel
 } from "../scripts/systems/invincible/catalog.mjs";
 import { rulesDigest, readRules, RULE_TOPICS, TOPIC_KEYS, splitParts } from "../scripts/systems/invincible/rules-digest.mjs";
 import { readToolDefs, makeReadTools, readDocument, toolResultText } from "../scripts/systems/invincible/tools.mjs";
@@ -45,10 +46,12 @@ function fixture({ shuffle = false, quickstartBook = false } = {}) {
     },
     limits: { folders: [{ id: "lZ", name: "Zap Wall", parent: null }], docs: [{ _id: id("limSlow"), name: "Slow Zap", type: "limit", folder: "lZ", system: { description: P("Limit placeholder.") } }] },
     "power-sources": { folders: [], docs: [{ _id: id("srcOdd"), name: "Odd Accident", type: "powerSource", system: { description: P("Source placeholder | with pipe.") } }] },
-    talents: { folders: [], docs: [{ _id: id("talQuick"), name: "Quick Placeholder", type: "talent", system: { description: P("Talent placeholder.") }, effects: [] }] },
+    talents: { folders: [], docs: [{ _id: id("talQuick"), name: "Quick Placeholder", type: "talent", system: { description: P("Talent placeholder [[D3]] and [[/r 1d6]]{a roll}.") }, effects: [{ name: "Pick", changes: [{ key: "bonus.[attribute]", type: "add", value: "2" }] }] }] },
     drawbacks: { folders: [], docs: [
-      { _id: id("drwFrail"), name: "Frail Thing", type: "drawback", system: { description: P("Tie it to a power source (choose one) placeholder.") } },
-      { _id: id("drwPlain"), name: "Plain Trouble", type: "drawback", system: { description: P("Plain placeholder.") } }
+      { _id: id("drwFrail"), name: "Frail Thing", type: "drawback", system: { description: P("Tie it to a power source (choose one) placeholder.") },
+        effects: [{ name: "Off", disabled: true, changes: [{ key: "system.derived.health.bonus", mode: 2, value: "1" }] }, { name: "Item only", transfer: false, changes: [{ key: "bonus.intuiton", type: "add", value: "-1" }] }] },
+      { _id: id("drwPlain"), name: "Plain Trouble", type: "drawback", system: { description: P("Plain placeholder.") },
+        effects: [{ name: "Weight", system: { changes: ["fighting", "agility", "strength", "reason", "intuition", "presence"].map((a) => ({ key: `bonus.${a}`, type: "add", value: a === "reason" ? "-3" : "-1" })) } }] }
     ] },
     gears: { folders: [{ id: "gW", name: "Weapons", parent: null }, { id: "gV", name: "Vehicle Weapons", parent: null }], docs: [
       { _id: id("gerStick"), name: "Placeholder Stick", type: "gear", folder: "gW", system: { description: P("Gear placeholder."), cost: 1, restricted: false, singleUse: false, automations: { x: { type: "rollAttack", rollBonus: 1, baseDamage: 2, minRange: 0, maxRange: 0 } } } },
@@ -76,6 +79,7 @@ function fixture({ shuffle = false, quickstartBook = false } = {}) {
     async index(p, fields) { reads.push(`index:${p}`); return order(packs[p]?.docs ?? []).map((d) => ({ ...d, _stats: { modifiedTime: 1000 } })); },
     folders: (p) => order(packs[p]?.folders ?? []),
     async document(p, docId) { reads.push(`doc:${p}:${docId}`); const d = packs[p]?.docs.find((x) => x._id === docId); return d ? structuredClone(d) : null; },
+    async documents(p) { reads.push(`docs:${p}`); return order(packs[p]?.docs ?? []).map((d) => structuredClone(d)); },
     async page(j, pageId, pageName) {
       reads.push(`page:${pageId}`);
       const pg = pages[pageId];
@@ -141,7 +145,7 @@ await test("index text: byte-stable across builds and source order; every ref pr
   const a = indexText(cat);
   const b = indexText(await buildCatalog(fixture({ shuffle: true }).source));
   assert.equal(a, b);
-  for (const e of cat.entries) assert.ok(a.includes(`${e.ref}|`), e.ref);
+  for (const e of cat.entries) assert.equal(a.includes(`${e.ref}|`), e.kind !== "sampleHero", e.ref);   // W3-13 (D-8): no sample heroes in the index
   assert.ok(!/<(?!\/?catalog>)[a-z]/i.test(a), "no HTML tags except the catalog wrapper");
   assert.ok(!/<sheet/i.test(a));
   assert.match(a, /^@Zap Wall$/m, "boosts grouped under their power");
@@ -379,6 +383,39 @@ await test("W2-4: archetypeFacts (no plus-ultra): role, attributes, powers with 
   // the plus-ultra extra still wins when it answers; our reading when it returns nothing
   const r2 = await getEntries(c2, src2, ["archetype:mock-striker"], { extras: { archetype: async () => null } });
   assert.equal(r2.entries[0].structured.powers[0].ref, `powers:${id("pwrGlide")}`);
+});
+
+await test("W3-13: fx column (talent, drawback), grouping, flags, placeholders; roll markers stripped; sampleHero only in search/get_entries", async () => {
+  assert.equal(fxSummary(effectsOf([{ name: "w", system: { changes: ["fighting", "agility", "strength", "reason", "intuition", "presence"].map((a) => ({ key: `bonus.${a}`, type: "add", value: a === "reason" ? "-3" : "-1" })) } }])), "bonus.reason-3, 5 others -1");
+  assert.equal(fxSummary(effectsOf([{ changes: ["fighting", "agility", "strength", "reason", "intuition", "presence"].map((a) => ({ key: `system.attributes.${a}.value`, type: "add", value: a === "reason" ? -3 : -1 })) }])), "reason-3, 5 others -1");
+  assert.equal(fxSummary(effectsOf([{ changes: [{ key: "system.maxPush.all", type: "multiply", value: "2" }, { key: "system.derived.slugfest.damage", type: "add", value: "1" }] }])), "maxPush.all*2, slugfest.damage+1");
+  assert.equal(fxSummary(effectsOf([{ changes: ["fighting", "agility", "strength", "reason", "intuition", "presence"].map((a) => ({ key: `system.attributes.${a}.value`, mode: 2, value: -1 })) }])), "all attributes -1");
+  assert.equal(fxSummary(effectsOf([{ changes: [{ key: "bonus.fighting", type: "add", value: "1" }, { key: "bonus.agility", type: "add", value: "1" }, { key: "bonus.strength", type: "add", value: "1" }] }])), "bonus.fighting/agility/strength +1");
+  assert.equal(fxSummary(effectsOf([{ name: "x", changes: [] }])), "");
+  assert.equal(fxLabel("system.derived.health.bonus"), "health"); assert.equal(fxLabel("system.resources"), "resources");
+  const a = indexText(cat);
+  const line = (n) => a.split("\n").find((l) => l.includes(`|${n}|`));
+  assert.equal(line("Plain Trouble"), `drawbacks:${id("drwPlain")}|Plain Trouble|-|bonus.reason-3, 5 others -1|Plain placeholder.`);
+  assert.equal(line("Frail Thing"), `drawbacks:${id("drwFrail")}|Frail Thing|source|health+1 (disabled); bonus.intuiton-1 (not transferred)|Tie it to a power source (choose one) placeholder.`);
+  assert.match(line("Quick Placeholder"), new RegExp(`^talents:${id("talQuick")}\\|Quick Placeholder\\|bonus\\.\\[attribute\\]\\+2\\|`));
+  assert.match(a, /^# talent \(1\): ref\|name\|fx\|summary$/m);
+  assert.match(a, /^# drawback \(2\): ref\|name\|needs a choice \(source\/defined\/-\)\|fx\|summary$/m);
+  assert.ok(!/sampleHero|Sample Placeholder/.test(a), "no sample hero section");
+  assert.ok(!a.includes("[["), "no roll markers in summaries");
+  assert.deepEqual(cat.findByName("talent", "Quick Placeholder").placeholders, ["bonus.[attribute]"]);
+  assert.equal(cat.findByName("drawback", "Plain Trouble").placeholders, undefined);
+  // get_entries text without roll markers; v14 system.changes and transfer:false kept in effects
+  const r = await getEntries(cat, source, [`talents:${id("talQuick")}`, `drawbacks:${id("drwFrail")}`, `drawbacks:${id("drwPlain")}`, `heroes:${id("heroSample")}`]);
+  assert.equal(r.entries[0].rulesText, "Talent placeholder D3 and a roll.");
+  assert.deepEqual(r.entries[1].effects[1], { name: "Item only", transfer: false, changes: [{ key: "bonus.intuiton", type: "add", value: "-1" }] });
+  assert.equal(r.entries[2].effects[0].changes.length, 6);
+  assert.equal(r.entries[3].attributes.agility, 5, "sample hero still served by get_entries");
+  assert.equal(search(cat, { query: "sample placeholder" }).results[0]?.kind, "sampleHero", "and by search_catalog");
+  // a source without documents(): no effects data, fx "-" (prefix still builds)
+  const { source: s2 } = fixture();
+  delete s2.documents;
+  const c2 = await buildCatalog(s2, { feedRules: false });
+  assert.match(indexText(c2), new RegExp(`\\|Plain Trouble\\|-\\|-\\|`));
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);
