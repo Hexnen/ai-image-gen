@@ -18,7 +18,9 @@
 // before a tool call is `progress[]` (and a "progress" transcript item), never part of `text`.
 // History is append-only (spec 5.2): nothing appended is ever edited, reordered or removed; the store refuses edits.
 // Nothing partial is appended: a refused, failed or stopped request leaves the history ending with the last user message
-// (the next GM message then follows as a second user message, which the API merges). A tool_use whose results were never
+// (the next GM message then follows as a second user message, which the API merges). B4: the GM message itself is
+// appended only with the first answer of its turn, so a turn with no answer at all appends nothing (summary.unsent); an
+// answer with no content is never appended (B2, summary.emptyReply). A tool_use whose results were never
 // sent (cap, Stop, max_tokens) is answered with is_error results at the START of the next GM message, so the history is
 // always a valid request.
 //
@@ -49,7 +51,7 @@ export const EVENT_TYPES = Object.freeze([
   "turn-start",       // { turn, text }
   "sheet",            // { kind: full|update|unchanged|none, tokensEst }
   "user-message",     // { index }
-  "request-start",    // { request, estimateUsd }
+  "request-start",    // { request, estimateUsd, retry?, attempt?, discardPartial? } (B6: again with retry true when the transport retries)
   "stream",           // transport event (text / thinking / tool_input / tool_use / retry / fallback / usage ...)
   "assistant-message",// { index, stop, text, progress } progress: the text came before a tool call (W3-5)
   "request-end",      // { request, usage, usd, durationMs }
@@ -124,6 +126,15 @@ export function errorSignature(res, fallback = "") {
   return JSON.stringify(errs.map((e) => [String(e?.code ?? ""), String(e?.path ?? e?.opId ?? ""), String(e?.message ?? "")]).sort());
 }
 
+/**
+ * B2: true when an assistant content array carries nothing the API accepts as content in a non-final message: no blocks,
+ * or only thinking / redacted_thinking blocks and blank text blocks.
+ */
+export function isEmptyAnswer(content) {
+  if (!Array.isArray(content) || !content.length) return true;
+  return content.every((b) => !b || b.type === "thinking" || b.type === "redacted_thinking" || (b.type === "text" && !String(b.text ?? "").trim()));
+}
+
 /** tool_use blocks of the last message when it is an assistant message whose tools were never answered. */
 export function unansweredToolUses(messages) {
   const last = messages?.[messages.length - 1];
@@ -139,7 +150,7 @@ function newRecord({ key, worldId, doc, pack, settings, now }) {
     createdAt: now, updatedAt: now,
     messages: [], timeline: [], turns: [],
     usage: { ...anthropic.emptyUsage(), usd: 0, requests: 0 },
-    lastPromptTokens: 0, prefixFp: null, sheet: null, snapshotFingerprint: null,
+    lastPromptTokens: 0, lastRequestAt: 0, prefixFp: null, sheet: null, snapshotFingerprint: null, unansweredReason: null,
     pendingProposal: null, lastRunId: null, options: {}, proposalStates: [],
     heldToolResults: null   // W3-4: tool_result blocks of a turn ended on submit, sent at the start of the next GM message
   };
@@ -190,16 +201,24 @@ export function createHarness(deps = {}) {
 
   const ctx = { deps, tr, now, setTimer, clearTimer, t, redact: redactFn, warm, settings };
 
+  // B5 (bughunt-1): one Session per key even when two openSession calls overlap (two drawers, macro + drawer, a fast
+  // double render): the second call waits for the first one's store load instead of building a second record.
+  const opening = new Map();
   async function openSession(doc) {
     const worldId = String(deps.worldId?.() ?? "world");
     const key = docKey(worldId, doc?.uuid);
     if (sessions.has(key)) { const s = sessions.get(key); s.doc = doc ?? s.doc; return s; }
-    let rec = null;
-    try { rec = await deps.store?.load?.(key); } catch { rec = null; }
-    if (!rec || rec.v !== RECORD_VERSION) rec = newRecord({ key, worldId, doc, pack: safePack(deps), settings: settings(), now: now() });
-    const s = new Session(ctx, doc, rec);
-    sessions.set(key, s);
-    return s;
+    if (opening.has(key)) { const s = await opening.get(key); s.doc = doc ?? s.doc; return s; }
+    const p = (async () => {
+      let rec = null;
+      try { rec = await deps.store?.load?.(key); } catch { rec = null; }
+      if (!rec || rec.v !== RECORD_VERSION) rec = newRecord({ key, worldId, doc, pack: safePack(deps), settings: settings(), now: now() });
+      const s = new Session(ctx, doc, rec);
+      sessions.set(key, s);
+      return s;
+    })();
+    opening.set(key, p);
+    try { return await p; } finally { opening.delete(key); }
   }
 
   function getSession(docOrUuid) {
@@ -217,6 +236,7 @@ const hasSheet = (p) => !!p && typeof p.snapshot === "function";
 
 export class Session {
   #h; #handlers = new Map(); #ctl = null; #abortReason = null; #saveChain = Promise.resolve();
+  #inflight = null; // B4: { text, at, tlAt } GM message of the running turn not appended yet
   constructor(h, doc, record) {
     this.#h = h;
     this.doc = doc;
@@ -288,7 +308,11 @@ export class Session {
     if (status !== "pending" && this.record.pendingProposal?.proposalId === pid) this.record.pendingProposal = null;
     if (status === "applied" && runId) this.record.lastRunId = String(runId);
     this.record.timeline.push({ at: this.#h.now(), msgIndex: this.record.messages.length, type: "proposal-status", proposalId: pid, status });
-    await this.#persist();
+    // B5 (bughunt-1): never rejects. The state is set in memory (the drawer, the marker of the next GM message and the
+    // next successful save carry it); a refused save is reported (saved: false + one storage notice), so a successful
+    // Apply never looks like a failed write and the card never stays "pending".
+    try { await this.#persist(); }
+    catch (e) { this.#storageWarn(e); return { ok: true, id: pid, status, saved: false }; }
     return { ok: true, id: pid, status };
   }
   /** The writer's run id after an Apply (for Undo in the drawer). */
@@ -320,23 +344,37 @@ export class Session {
     return { ok: true, conversationId: rec.conversationId };
   }
 
-  /** Display items for the drawer, rebuilt from the stored history (survives reloads). */
-  transcript() { return transcriptOf(this.record); }
+  /**
+   * Display items for the drawer, rebuilt from the stored history (survives reloads). B4: while the GM message of the
+   * running turn is not in the history yet (it is appended with the first answer), it shows as { role: "gm", pending: true }.
+   */
+  transcript() {
+    const f = this.#inflight;
+    if (!f) return transcriptOf(this.record);
+    const tl = [...(this.record.timeline ?? [])];
+    tl.splice(Math.min(f.tlAt, tl.length), 0, { at: f.at, msgIndex: this.record.messages.length, type: "gm-pending", text: f.text });
+    return transcriptOf({ ...this.record, timeline: tl });
+  }
 
   // ------------------------------------------------------------------------------------------------ internals
 
+  /**
+   * Save the record (serialised). The returned promise rejects only for a history edit (HistoryEditError) of THIS save;
+   * B5 (bughunt-1): the chain itself always continues, so one refused save never poisons the later ones.
+   */
   #persist() {
     const h = this.#h;
     this.record.updatedAt = h.now();
     const snap = plain(this.record);
-    this.#saveChain = this.#saveChain.then(async () => {
+    const p = this.#saveChain.then(async () => {
       try { await h.deps.store?.save?.(snap); }
       catch (e) {
         if (e?.code === "history-edit") throw e;
         this.#storageWarn(e);
       }
     });
-    return this.#saveChain;
+    this.#saveChain = p.catch(() => {});
+    return p;
   }
 
   #storageWarn(e) {
@@ -394,13 +432,34 @@ export class Session {
     return { kind: d.kind, text: d.text, tokensEst: anthropic.estimateTokens(d.text) };
   }
 
-  /** Cost estimate of the next request: new tail at the uncached write rate + the already-sent part at the read rate + expected output. */
-  #estimate(body, model) {
-    const all = anthropic.estimateTokens(JSON.stringify({ t: body.tools, s: body.system, m: body.messages }));
-    const seen = Math.min(all, this.record.lastPromptTokens || 0);
-    const fresh = Math.max(0, all - seen);
-    const { row } = anthropic.priceFor(model);
-    const usd = anthropic.estimateMaxCost({ model, promptTokens: fresh, maxOutput: EXPECTED_OUTPUT_TOKENS }).usd + (seen * row.cacheRead) / 1e6;
+  /**
+   * Cost estimate of the next request (B4/B8, bughunt-1), by what is likely in the cache:
+   *   static prefix (tools + system): read rate while its fingerprint was used (request or pre-warm) within the prefix TTL,
+   *     else the prefix write rate (1 h or 5 min, the setting);
+   *   history already sent: read rate while the last request is younger than the 5 min tail TTL, else the 5 min write rate;
+   *   the new part of the history: 5 min write rate (the automatic tail breakpoint writes it);
+   *   + EXPECTED_OUTPUT_TOKENS at the output rate.
+   * Before: everything new at the highest input rate and the history always at the read rate, so a cold Fable first
+   * message (~21k prefix tokens) went over the default 0.50 cap with nothing spent, and an expired history was under-priced.
+   */
+  #estimate(body, model, { fp = null, prefixTtl = anthropic.DEFAULT_PREFIX_TTL } = {}) {
+    const h = this.#h;
+    const tok = anthropic.estimateTokens;
+    const prefix = tok(JSON.stringify({ t: body.tools, s: body.system }));
+    const all = Math.max(prefix, tok(JSON.stringify({ t: body.tools, s: body.system, m: body.messages })));
+    const hist = all - prefix;
+    const { row: base } = anthropic.priceFor(model);
+    const row = base.long && all > base.longAbove ? base.long : base;
+    const now = h.now();
+    const ttlMs = (ttl) => (ttl === "1h" ? 60 : 5) * 60_000;
+    let warmAt = 0;
+    try { warmAt = fp ? Number(h.warm.get?.(fp) ?? 0) || 0 : 0; } catch { warmAt = 0; }
+    const prefixWarm = warmAt > 0 && now - warmAt < ttlMs(prefixTtl) - 60_000;
+    const lastAt = Number(this.record.lastRequestAt ?? 0) || 0;
+    const tailWarm = lastAt > 0 && now - lastAt < ttlMs(anthropic.DEFAULT_TAIL_TTL) - 15_000;
+    const seenHist = tailWarm ? Math.min(hist, Math.max(0, (this.record.lastPromptTokens || 0) - prefix)) : 0;
+    const prefixRate = prefixWarm ? row.cacheRead : (prefixTtl === "1h" ? row.cacheWrite1h : row.cacheWrite5m);
+    const usd = (prefix * prefixRate + seenHist * row.cacheRead + (hist - seenHist) * row.cacheWrite5m + EXPECTED_OUTPUT_TOKENS * row.out) / 1e6;
     return Math.round(usd * 1e6) / 1e6;
   }
 
@@ -477,6 +536,9 @@ export class Session {
    *   the proposal's rationale), stop "tool_use".
    * text (W3-5): text of the assistant message that ended the turn without a tool call ("" when the last one called
    *   tools); progress: texts the model wrote before its tool calls in this turn, oldest first.
+   * unsent (B4): the GM text when no answer came (refusal, error, cap, limit, Stop before the first answer): the message is
+   *   NOT in the history (the next message does not carry it); the transcript shows it as { role: "gm", unsent: true }.
+   * emptyReply (B2): the model ended its turn with no content; nothing was appended (reason done / max_tokens / context).
    */
   async send(text) {
     const h = this.#h;
@@ -505,7 +567,24 @@ export class Session {
     const wall = h.setTimer(() => { this.#abortReason ??= "wall"; try { this.#ctl?.abort(); } catch { /* ignore */ } }, s.wallClockMs);
     const turn = { turn: this.record.turns.length + 1, at: h.now(), requests: 0, toolCalls: 0, usage: anthropic.emptyUsage(), usd: 0, reason: null, cap: null, stop: null, sheet: null, proposalId: null };
     const said = []; // W3-5: { text, more } per assistant message of this turn; more = a tool call / pause followed
-    let reason = null, cap = null, error = null, lastStop = null;
+    let reason = null, cap = null, error = null, lastStop = null, emptyReply = false, capEst = null;
+    // B4 (bughunt-1): the GM message is appended to the history only together with the first answer of the model. A turn
+    // that ends with no answer (refusal, transport error after retries, cost cap, module limit, Stop) leaves the history,
+    // the held tool results, the proposal marker state and the sheet state exactly as they were: nothing is appended,
+    // so the history never gets consecutive user messages from failed sends, and a re-sent message is not doubled.
+    const sheetBefore = { sheet: plain(this.record.sheet), fp: this.record.snapshotFingerprint ?? null };
+    let gmMsg = null, committed = false, marker = null;
+    this.#inflight = { text: msg, at: h.now(), tlAt: this.record.timeline.length };
+    const commitGm = () => {
+      if (committed || !gmMsg) return;
+      committed = true;
+      this.record.timeline.push({ at: this.#inflight?.at ?? h.now(), msgIndex: this.record.messages.length, type: "gm", text: msg });
+      this.record.heldToolResults = null; // sent now (or stale): cleared in the same save as the append
+      this.record.messages.push(plain(gmMsg));
+      if (marker) for (const x of this.record.proposalStates ?? []) x.reported = x.status;
+      this.#inflight = null;
+      this.emit("user-message", { index: this.record.messages.length - 1 });
+    };
 
     try {
       this.emit("turn-start", { turn: turn.turn, text: msg });
@@ -524,7 +603,8 @@ export class Session {
       const held = (Array.isArray(this.record.heldToolResults) ? this.record.heldToolResults : []).filter((b) => b?.type === "tool_result" && openIds.has(b.tool_use_id));
       const heldIds = new Set(held.map((b) => b.tool_use_id));
       const pending = unanswered.filter((b) => !heldIds.has(b.id));
-      const lastStopReason = this.record.turns.at(-1)?.reason ?? "stopped";
+      // B9 (bughunt-1): the reason of the turn that left these tools unanswered (stored with them), not the last turn's
+      const lastStopReason = this.record.unansweredReason ?? this.record.turns.at(-1)?.reason ?? "stopped";
       const content = plain(held);
       content.push(...pending.map((b) => ({
         type: "tool_result", tool_use_id: b.id, is_error: true,
@@ -535,14 +615,10 @@ export class Session {
       this.emit("sheet", { kind: sheet.kind, tokensEst: sheet.tokensEst ?? 0 });
       const gmBlocks = h.tr.userTurn({ sheet: sheet.text, text: msg }).content;
       // proposal state (P1-H): its own text block right before the GM's words (after the sheet block), messages only
-      const marker = proposalMarker(this.record.proposalStates);
+      marker = proposalMarker(this.record.proposalStates);
       if (marker) gmBlocks.splice(gmBlocks.length - 1, 0, { type: "text", text: marker });
       content.push(...gmBlocks);
-      this.record.timeline.push({ at: h.now(), msgIndex: this.record.messages.length, type: "gm", text: msg });
-      this.record.heldToolResults = null; // sent now (or stale): cleared in the same save as the append
-      const idx = await this.#append({ role: "user", content });
-      if (marker) for (const x of this.record.proposalStates ?? []) x.reported = x.status;
-      this.emit("user-message", { index: idx });
+      gmMsg = { role: "user", content };
 
       let consecutiveInvalid = 0, identical = 0, lastSig = null;
       let fixRound = false;   // W5-B-1: at most one fix round per GM message
@@ -551,13 +627,13 @@ export class Session {
         if (turn.requests >= s.maxRequests) { reason = "cap"; cap = "requests"; break; }
         const req = h.tr.buildMessagesRequest({
           apiKey, model: this.record.model, effort: this.record.effort, tools, system,
-          messages: this.record.messages, prefixTtl: s.cacheTtl
+          messages: committed ? this.record.messages : [...this.record.messages, plain(gmMsg)], prefixTtl: s.cacheTtl
         });
         const fp = h.tr.prefixFingerprint(req);
         if (this.record.prefixFp && this.record.prefixFp !== fp && turn.requests === 0) this.#notice("prefixChanged", "info");
         this.record.prefixFp = fp;
-        const est = this.#estimate(req.body, this.record.model);
-        if (s.maxCostPerMessage > 0 && turn.usd + est > s.maxCostPerMessage) { reason = "cap"; cap = "cost"; break; }
+        const est = this.#estimate(req.body, this.record.model, { fp, prefixTtl: s.cacheTtl });
+        if (s.maxCostPerMessage > 0 && turn.usd + est > s.maxCostPerMessage) { reason = "cap"; cap = "cost"; capEst = est; break; }
         let release;
         try { release = h.deps.limits?.reserve ? h.deps.limits.reserve(est) : () => {}; }
         catch (e) {
@@ -570,7 +646,14 @@ export class Session {
         this.emit("request-start", { request: turn.requests, estimateUsd: est });
         let r;
         try {
-          r = await h.tr.streamMessage(req, { fetchImpl: h.deps.fetchImpl, signal, redact: h.deps.redact, onEvent: (e) => this.emit("stream", e) });
+          // B6 (bughunt-1): a transport retry starts the same model request again; the partial text of the failed attempt
+          // is never history, so "request-start" (retry: true) tells a live view to drop what it showed for that attempt.
+          const reqNo = turn.requests;
+          const onEvent = (e) => {
+            this.emit("stream", e);
+            if (e?.type === "retry") this.emit("request-start", { request: reqNo, estimateUsd: est, retry: true, attempt: e.nextAttempt ?? null, discardPartial: !!e.discardPartial });
+          };
+          r = await h.tr.streamMessage(req, { fetchImpl: h.deps.fetchImpl, signal, redact: h.deps.redact, onEvent });
         } catch (e) {
           const fc = this.#failedCost(e, this.record.model);
           const cancelled = e?.kind === "cancelled" || signal.aborted;
@@ -587,13 +670,29 @@ export class Session {
         release();
         const u = r.usage ?? {};
         this.record.lastPromptTokens = (u.input ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0);
+        this.record.lastRequestAt = h.now();
         try { h.warm.set?.(fp, h.now()); } catch { /* ignore */ }
         this.emit("request-end", { request: turn.requests, usage: plain(r.usage), usd, durationMs: r.durationMs });
         lastStop = r.stop;
 
         if (r.stop === "refusal") { reason = "refusal"; break; } // partial refused output is never appended (P10)
-        const aIdx = await this.#append({ role: "assistant", content: r.historyContent });
+        commitGm();   // B4: the GM message goes into the history with its first answer
+        // B2 (bughunt-1): an answer with no content (end_turn with content [] or only thinking / blank text, typical right
+        // after a tool_result) is never appended: an empty assistant message would make every later request a 400
+        // ("all messages must have non-empty content") and the history cannot be edited. The history then ends with the
+        // user message; the next GM message follows it (the API merges consecutive user messages).
+        if (isEmptyAnswer(r.historyContent) && !(r.toolUses ?? []).length) {
+          emptyReply = true;
+          said.push({ text: "", more: false });
+          await this.#persist();
+          if (r.stop === "max_tokens") { reason = "max_tokens"; break; }
+          if (r.stop === "context") { reason = "context"; break; }
+          reason = "done"; break;
+        }
         const more = r.stop === "pause_turn" || (r.stop === "tool_use" && (r.toolUses ?? []).length > 0);
+        // B9: tool calls of this message are "interrupted" until answered (a reload mid-turn); the finally sets the reason
+        this.record.unansweredReason = (r.toolUses ?? []).length ? "interrupted" : null;
+        const aIdx = await this.#append({ role: "assistant", content: r.historyContent });
         said.push({ text: String(r.text ?? ""), more });
         this.emit("assistant-message", { index: aIdx, stop: r.stop, text: r.text, progress: more && !!r.text });
         // pause_turn (only with server tools, which the builder does not use): the transport refuses an assistant-last
@@ -667,9 +766,9 @@ export class Session {
         if (endOnSubmit) { reason = "submitted"; break; }
       }
     } catch (e) {
-      if (e?.code === "history-edit") throw e;
+      // B5 (bughunt-1): send never rejects; a refused save (another conversation took this document) is an error result
       reason = "error";
-      error = { kind: e?.kind ?? "internal", detail: h.redact(e?.message ?? String(e)) };
+      error = { kind: e?.code === "history-edit" ? "history-edit" : (e?.kind ?? "internal"), detail: h.redact(e?.message ?? String(e)) };
       this.#notice("error", "error", { kind: error.kind, detail: error.detail || "-" });
     } finally {
       h.clearTimer(wall);
@@ -677,10 +776,22 @@ export class Session {
       if (reason === "cap") {
         const data = cap === "requests" ? { max: s.maxRequests } : cap === "toolCalls" ? { max: s.maxToolCalls }
           : cap === "invalidSubmits" ? { max: s.maxInvalidSubmits } : cap === "identicalInvalid" ? { max: s.maxIdenticalInvalid }
-          : cap === "cost" ? { max: s.maxCostPerMessage.toFixed(2), spent: turn.usd.toFixed(4) } : cap === "wall" ? { minutes: Math.round(s.wallClockMs / 6000) / 10 } : {};
+          : cap === "cost" ? { max: s.maxCostPerMessage.toFixed(2), spent: turn.usd.toFixed(4), ...(capEst != null ? { estimate: capEst.toFixed(4) } : {}) } : cap === "wall" ? { minutes: Math.round(s.wallClockMs / 6000) / 10 } : {};
         this.#notice(`cap.${cap}`, "warn", data);
       } else if (["stopped", "refusal", "max_tokens", "context"].includes(reason)) {
         this.#notice(`stop.${reason}`, reason === "stopped" ? "info" : "warn");
+      }
+      if (!committed) {
+        // B4: no answer came: the GM message is not history; held results, marker state and the sheet state stay for the
+        // next message; the drawer shows the text as unsent (summary.unsent carries it back for the composer)
+        this.record.sheet = sheetBefore.sheet;
+        this.record.snapshotFingerprint = sheetBefore.fp;
+        const at = this.#inflight?.at ?? h.now();
+        const tlAt = Math.min(this.#inflight?.tlAt ?? this.record.timeline.length, this.record.timeline.length);
+        this.record.timeline.splice(tlAt, 0, { at, msgIndex: this.record.messages.length, type: "gm-unsent", text: msg, reason: reason ?? "error" });
+        this.#inflight = null;
+      } else if (unansweredToolUses(this.record.messages).length) {
+        this.record.unansweredReason = reason ?? "error";   // B9: the "Not run" text of the next GM message names it
       }
       turn.reason = reason ?? "error";
       turn.cap = cap;
@@ -701,6 +812,8 @@ export class Session {
       usage: plain(turn.usage), usd: turn.usd, text: finalText, progress, stop: lastStop, sheet: turn.sheet,
       proposal: turn.proposalId ? plain(this.record.pendingProposal) : null,
       ...(turn.fixRound ? { fixRound: true } : {}),
+      ...(committed ? {} : { unsent: msg }),          // B4: no answer came; the GM message is not in the history
+      ...(emptyReply ? { emptyReply: true } : {}),    // B2: the model ended without any content (nothing appended)
       ...(error ? { error } : {}),
       ...(cap === "invalidSubmits" || cap === "identicalInvalid" ? { lastDraft: plain(this.record.lastFailedSubmit ?? null) } : {})
     };
@@ -756,7 +869,16 @@ export function transcriptOf(record) {
   const items = [];
   const tools = new Map();
   const tl = [...(record?.timeline ?? [])];
-  const flush = (i) => { while (tl.length && (tl[0].msgIndex ?? 0) <= i) { const e = tl.shift(); if (e.type !== "gm") items.push({ role: e.type, ...e }); } };
+  // B4: "gm-unsent" (a GM message no answer came for: refusal, error, cap, limit, Stop before the first answer; not in the
+  // history) and "gm-pending" (the running turn's message) show as GM items with unsent / pending true.
+  const gmItem = (e) => ({ role: "gm", text: String(e.text ?? ""), ...(e.type === "gm-unsent" ? { unsent: true, reason: e.reason ?? null } : { pending: true }) });
+  const flush = (i) => {
+    while (tl.length && (tl[0].msgIndex ?? 0) <= i) {
+      const e = tl.shift();
+      if (e.type === "gm-unsent" || e.type === "gm-pending") items.push(gmItem(e));
+      else if (e.type !== "gm") items.push({ role: e.type, ...e });
+    }
+  };
   (record?.messages ?? []).forEach((m, i) => {
     flush(i);
     const callsTools = m.role === "assistant" && Array.isArray(m.content) && m.content.some((b) => b?.type === "tool_use");

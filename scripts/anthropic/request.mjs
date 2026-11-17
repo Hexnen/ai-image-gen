@@ -110,6 +110,11 @@ function checkMessages(messages) {
   if (messages[0]?.role !== "user") throw new RequestBuildError("the first message must be a user message");
   const last = messages[messages.length - 1];
   if (last?.role === "assistant") throw new RequestBuildError("the last message must not be an assistant message (no prefill on these models)");
+  // B2 (bughunt-1): the API refuses a message with empty content (400); refuse it here, before money is spent
+  messages.forEach((m, i) => {
+    const c = m?.content;
+    if (Array.isArray(c) ? !c.length : !String(c ?? "").length) throw new RequestBuildError(`messages.${i}: empty content`);
+  });
   const lastBlock = Array.isArray(last?.content) ? last.content[last.content.length - 1] : null;
   if (lastBlock?.cache_control) throw new RequestBuildError("no explicit cache_control on the last block (the automatic tail breakpoint owns it)");
   return countMarkers(messages);

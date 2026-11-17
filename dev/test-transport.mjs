@@ -502,6 +502,38 @@ await test("the key never appears in results, events, errors or partials (server
 
 // ---------------------------------------------------------------- pricing
 
+await test("B3 bughunt-1: tool_use dropped by the fallback echo rule is not in toolUses (no orphan tool_result)", async () => {
+  const tool = (i, id, name, input) => [blockStart(i, { type: "tool_use", id, name, input: {} }), delta(i, { type: "input_json_delta", partial_json: JSON.stringify(input) }), blockStop(i)];
+  const chunks = [msgStart({ model: "claude-sonnet-5" }), ...tool(0, "tu1", "search_catalog", { query: "x" }),
+    blockStart(1, { type: "fallback", from: { model: "claude-sonnet-5-5" }, to: { model: "claude-sonnet-5" } }), blockStop(1),
+    ...tool(2, "tu2", "get_entries", { refs: ["powers:abc"] }), msgDelta("tool_use"), msgStop()];
+  const r = await streamMessage(baseReq(), { fetchImpl: stubFetch([{ chunks }]) });
+  assert.deepEqual(r.historyContent.filter((b) => b.type === "tool_use").map((b) => b.id), ["tu2"]);
+  assert.deepEqual(r.toolUses.map((u) => u.id), ["tu2"], "only tool uses that stay in the history are run");
+  assert.equal(r.message.content.filter((b) => b.type === "tool_use").length, 2, "raw message keeps both");
+  // without a fallback block nothing changes
+  const r2 = await streamMessage(baseReq(), { fetchImpl: stubFetch([{ chunks: toolStream() }]) });
+  assert.deepEqual(r2.toolUses.map((u) => u.id), r2.message.content.filter((b) => b.type === "tool_use").map((b) => b.id));
+});
+
+await test("B7 bughunt-1: 429 without a readable retry-after backs off 10 s / 20 s; with retry-after and other kinds unchanged", async () => {
+  const rl = { status: 429, body: { type: "error", error: { type: "rate_limit_error", message: "slow down" } } };
+  const sleeps = [];
+  const r = await streamMessage(baseReq(), { fetchImpl: stubFetch([rl, rl, { chunks: textStream("ok") }]), sleep: async (ms) => { sleeps.push(ms); }, random: () => 0.5 });
+  assert.equal(r.text, "ok");
+  assert.deepEqual(sleeps, [10000, 20000]);
+  assert.equal(retryDelay(1, 3, { kind: "rate-limit" }), 3000, "retry-after wins");
+  assert.equal(retryDelay(1, null, { kind: "overloaded", random: () => 0.5 }), 1000);
+  assert.equal(retryDelay(3, null, { kind: "rate-limit", random: () => 0.5 }), 30000, "capped by RETRY_MAX_MS");
+});
+
+await test("B2 bughunt-1: a message with empty content is refused locally (RequestBuildError, no paid 400)", () => {
+  const msgs = [userTurn({ text: "a" }), { role: "assistant", content: [] }, userTurn({ text: "b" })];
+  assert.throws(() => buildMessagesRequest({ apiKey: FAKE_KEY, tools: TOOLS, system: SYS, messages: msgs }), (e) => e instanceof RequestBuildError && /messages\.1: empty content/.test(e.message));
+  assert.throws(() => buildMessagesRequest({ apiKey: FAKE_KEY, messages: [{ role: "user", content: "" }] }), RequestBuildError);
+  assert.ok(buildMessagesRequest({ apiKey: FAKE_KEY, messages: [userTurn({ text: "a" }), { role: "assistant", content: [{ type: "text", text: "x" }] }, userTurn({ text: "b" })] }));
+});
+
 await test("pricing: table rows, unknown model estimated with the Opus row, haiku long-context card, helpers", () => {
   assert.deepEqual(PRICES["claude-sonnet-5-5"], { in: 2, out: 10, cacheRead: 0.10, cacheWrite5m: 2.5, cacheWrite1h: 4 });
   assert.equal(PRICES["claude-opus-5-5"].cacheRead, 0.20);

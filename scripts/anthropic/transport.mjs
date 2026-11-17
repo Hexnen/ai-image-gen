@@ -68,9 +68,16 @@ function errorFromBody(raw) {
 
 const header = (res, k) => { try { return res?.headers?.get?.(k) ?? null; } catch { return null; } };
 
-/** Backoff delay for attempt n (1-based), honouring retry-after (seconds) when given. */
-export function retryDelay(attempt, retryAfterS, { baseMs = RETRY_BASE_MS, maxMs = RETRY_MAX_MS, random = Math.random } = {}) {
+/** B7 (bughunt-1): base backoff of a 429 without a readable retry-after (the browser may hide it: CORS expose list). */
+export const RATE_LIMIT_BASE_MS = 10_000;
+
+/**
+ * Backoff delay for attempt n (1-based), honouring retry-after (seconds) when given. A rate limit without retry-after
+ * backs off from RATE_LIMIT_BASE_MS (10 s, 20 s) instead of 1 s / 2 s, which would almost surely hit the same limit.
+ */
+export function retryDelay(attempt, retryAfterS, { baseMs = RETRY_BASE_MS, maxMs = RETRY_MAX_MS, random = Math.random, kind = null } = {}) {
   if (Number.isFinite(retryAfterS) && retryAfterS >= 0) return Math.min(retryAfterS * 1000, MAX_RETRY_AFTER_S * 1000);
+  if (kind === "rate-limit") baseMs = Math.max(baseMs, RATE_LIMIT_BASE_MS);
   const exp = Math.min(maxMs, baseMs * 2 ** (attempt - 1));
   return Math.round(exp * (0.75 + 0.5 * random()));
 }
@@ -133,7 +140,7 @@ export async function streamMessage(req, o = {}) {
         && (!rec.streamed || retryMidStream)
         && !(Number.isFinite(e.retryAfter) && e.retryAfter > MAX_RETRY_AFTER_S);
       if (!canRetry) throw e;
-      const delayMs = retryDelay(attempt, e.retryAfter, { random: o.random });
+      const delayMs = retryDelay(attempt, e.retryAfter, { random: o.random, kind: e.kind });
       emit({ type: "retry", attempt, nextAttempt: attempt + 1, kind: e.kind, delayMs, discardPartial: !!rec.streamed });
       try { await sleep(delayMs, o.signal); }
       catch { throw new TransportError("cancelled", "", { attempts, partial: e.partial ?? null }); }
@@ -310,12 +317,15 @@ function finish(out, { attempts, started, now, defaultWriteTtl, req }) {
   }
   const iters = Array.isArray(message.usage?.iterations) ? message.usage.iterations : [];
   const fallbackRan = iters.some((x) => x?.type === "fallback_message") || (message.content ?? []).some((b) => b?.type === "fallback");
+  const hist = historyContent(message);
   return {
     message,                                  // the API message as streamed (content blocks complete)
-    historyContent: historyContent(message),  // append { role: "assistant", content: historyContent } as-is
+    historyContent: hist,                     // append { role: "assistant", content: historyContent } as-is
     stop: classifyStop(message),
     stopDetails: message.stop_details ?? null,
-    toolUses: toolUses(message, out.inputErrors),
+    // B3 (bughunt-1): only the tool_use blocks that stay in the history are run and answered; a tool_use the fallback echo
+    // rule dropped (before the last `fallback` block) would get an orphan tool_result -> 400 on every later request.
+    toolUses: toolUses({ ...message, content: hist }, out.inputErrors),
     text: messageText(message),
     model,
     fallback: { ran: fallbackRan, model: fallbackRan ? model : null },

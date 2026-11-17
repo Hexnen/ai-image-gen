@@ -14,7 +14,7 @@ import {
   expectFor, checkStale, toPlainActor, gearPatch, textToHtml
 } from "../scripts/systems/invincible/proposal.mjs";
 import {
-  validateProposal, validateGroup, proposalToolDefs, MESSAGES, describe, STRUCTURAL, superheroIssues, stateOf,
+  validateProposal, validateGroup, proposalToolDefs, PROPOSAL_TOOL_STRICT, MESSAGES, describe, STRUCTURAL, superheroIssues, stateOf,
   actionableWarnings, isActionableWarning, NO_FIX_WARNINGS, limitPays, talentShifts, talentReorders, applyConfirmList
 } from "../scripts/systems/invincible/validate.mjs";
 import { validatePack } from "../scripts/build/registry.mjs";
@@ -173,7 +173,9 @@ await test("local schema check mirrors the tool schema (strict: additionalProper
   assert.ok(checkShape({ target: "this", mode: "ops", ops: [{ op: "addItem", opId: "a", junk: 1 }] }, PROPOSAL_SCHEMA).some((x) => x.path === "ops[0].junk"));
   const defs = proposalToolDefs();
   assert.deepEqual(defs.map((d) => d.name), ["submit_proposal"], "D-9: one model-facing proposal tool (dryRun = check)");
-  for (const d of defs) { assert.equal(d.strict, true); assert.equal(d.input_schema, PROPOSAL_SCHEMA); }
+  // B1 (bughunt-1, provisional): strict off on the proposal tool (internal constant); L0 checkShape above checks the input
+  assert.equal(PROPOSAL_TOOL_STRICT, false);
+  for (const d of defs) { assert.equal(d.strict, undefined, "B1: no strict key while PROPOSAL_TOOL_STRICT is off"); assert.equal(d.input_schema, PROPOSAL_SCHEMA); }
   assert.deepEqual(PROPOSAL_SCHEMA.properties.dryRun, { type: "boolean" });
   assert.ok(JSON.stringify(defs).length < 16000, `tool defs size ${JSON.stringify(defs).length}`);
   assert.match(defs[0].description, /removeItem {itemId, cascade}/);

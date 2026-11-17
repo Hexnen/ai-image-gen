@@ -2,7 +2,7 @@
 // Scripted fake model behind a stub fetch emitting real SSE, fake IndexedDB, fake limits / log. No network, no real key.
 // Run from the module folder: node dev/test-harness.mjs
 import assert from "node:assert/strict";
-import { createHarness, transcriptOf, unansweredToolUses, errorSignature, toolResultContent, HISTORY_TOKEN_CAP, MAX_TOOL_RESULT_CHARS } from "../scripts/build/harness.mjs";
+import { createHarness, transcriptOf, unansweredToolUses, errorSignature, toolResultContent, isEmptyAnswer, HISTORY_TOKEN_CAP, MAX_TOOL_RESULT_CHARS } from "../scripts/build/harness.mjs";
 import { createSessionStore, HistoryEditError, assertAppendOnly } from "../scripts/build/session-store.mjs";
 import { decideSheetBlock, pairsOf, diffPairs, foldPairs, encodeHeld, decodeHeld, SUPERSEDES, UNCHANGED_BLOCK } from "../scripts/build/sheet-sync.mjs";
 import { prefixBytes, buildMessagesRequest } from "../scripts/anthropic/index.mjs";
@@ -379,12 +379,13 @@ await test("Stop during streaming: cancelled, no partial assistant message appen
   s.on("request-start", () => setTimeout(() => s.stop(), 20));
   const r = await s.send("long one");
   assert.equal(r.reason, "stopped");
-  assert.deepEqual(s.messages.map((x) => x.role), ["user"]);
+  assert.deepEqual(s.messages.map((x) => x.role), [], "B4: stopped before any answer -> the GM message is not history");
+  assert.equal(r.unsent, "long one");
   assert.equal(reservations.open, 0);
   assert.equal(logs[0].status, "cancelled");
   const r2 = await s.send("again");
   assert.equal(r2.reason, "done");
-  assert.deepEqual(s.messages.map((x) => x.role), ["user", "user", "assistant"]);
+  assert.deepEqual(s.messages.map((x) => x.role), ["user", "assistant"]);
 });
 
 await test("Stop during tool execution: results not appended; answered with is_error at the next GM message", async () => {
@@ -426,7 +427,8 @@ await test("refusal: partial refused output not appended, notice; max_tokens: ap
   s.on("notice", (x) => n.push(x.code));
   const r1 = await s.send("bad");
   assert.equal(r1.reason, "refusal"); assert.ok(n.includes("stop.refusal"));
-  assert.deepEqual(s.messages.map((x) => x.role), ["user"]);
+  assert.deepEqual(s.messages.map((x) => x.role), [], "B4: the refused GM message is not history");
+  assert.equal(r1.unsent, "bad");
   const r2 = await s.send("ok then");
   assert.equal(r2.reason, "done"); assert.equal(r2.requests, 2, "pause_turn re-sent");
   assert.deepEqual(fetchImpl.calls[2].body.messages.slice(-2).map((x) => [x.role, allText(x)]), [["assistant", "pausing"], ["user", "Continue."]], "pause_turn: paused message kept, harness Continue appended");
@@ -979,11 +981,13 @@ await test("W3-4 held results: a new conversation drops them; Stop / cap on the 
   const { deps } = makeDeps({ pack: proposalPack(), fetchImpl, settings: { wallClockMs: 100 } });
   const s = await createHarness(deps).openSession(ACTOR);
   assert.equal((await s.send("build")).reason, "submitted");
-  const r = await s.send("next");                                  // request hangs -> wall cap; the GM message was appended with the result
+  const r = await s.send("next");                                  // request hangs -> wall cap; B4: no answer -> nothing appended
   assert.equal(r.cap, "wall");
-  assert.equal(s.record.heldToolResults, null);
-  assert.equal(s.messages.at(-1).content[0].tool_use_id, "n1");
-  assertValidHistory(s.messages);
+  assert.equal(r.unsent, "next");
+  assert.equal(s.record.heldToolResults.length, 1, "B4: held results wait for the next message that gets an answer");
+  assert.equal(s.messages.at(-1).role, "assistant");
+  assert.equal(fetchImpl.calls[1].body.messages.at(-1).content[0].tool_use_id, "n1", "the request carried the held result");
+  assertValidHistory([...s.messages, fetchImpl.calls[1].body.messages.at(-1)]);
   // a fresh submit, then a new conversation: nothing carried over
   const f2 = fakeModel([reply({ tools: [{ id: "n2", name: "submit_proposal", input: { ops: [] } }] }), reply({ text: "fresh" })]);
   const d2 = makeDeps({ pack: proposalPack(), fetchImpl: f2 });
@@ -1111,6 +1115,203 @@ await test("W5-B-1 fix round: setting off unchanged; request cap reached -> no f
   ({ deps } = makeDeps({ pack: makePack({ sheet: makeSheet(), runTool: async () => ({ ok: true, dryRun: true, warnings: [FIX_W] }) }), fetchImpl }));
   r = await (await createHarness(deps).openSession(ACTOR)).send("price it");
   assert.equal(r.reason, "done"); assert.equal(r.fixRound, undefined);
+});
+
+// =========================================================================================== bughunt-1 fixes
+
+const rolesOf = (msgs) => msgs.map((m) => m.role + (Array.isArray(m.content) && !m.content.length ? "(EMPTY)" : "")).join(",");
+const noSleepTr = { streamMessage: (req, o) => import("../scripts/anthropic/index.mjs").then((a) => a.streamMessage(req, { ...o, sleep: async () => {} })) };
+
+await test("B2 bughunt-1: an empty answer (end_turn, content []) is never appended; turn 'done' + emptyReply; next request valid", async () => {
+  const emptyMsg = { chunks: [start(), mDelta("end_turn", 3), mStop()] };
+  const thinkOnly = reply({ thinking: "x", text: "" });
+  const f = fakeModel([reply({ tools: [{ id: "tu1", name: "submit_proposal", input: { ops: [{ opId: "a" }] } }], thinking: "" }), emptyMsg, reply({ text: "ok" }), thinkOnly, reply({ text: "fine" })]);
+  const { deps } = makeDeps({ pack: makePack({ sheet: makeSheet() }), fetchImpl: f, settings: { endTurnOnSubmit: false } });
+  const s = await createHarness(deps).openSession(ACTOR);
+  const r1 = await s.send("Zbuduj bohatera");
+  assert.equal(r1.ok, true); assert.equal(r1.reason, "done"); assert.equal(r1.emptyReply, true); assert.equal(r1.text, "");
+  assert.equal(r1.proposal.proposalId, "p-1");
+  assert.deepEqual(rolesOf(s.messages).split(","), ["user", "assistant", "user"], "no empty assistant message");
+  await s.send("Thanks, now change the note");
+  assert.equal(rolesOf(f.calls[2].body.messages), "user,assistant,user,user", "the GM message follows the tool results (API merges)");
+  // first answer of a GM message empty (only thinking): the GM message is still history, nothing else
+  const r3 = await s.send("once more");
+  assert.equal(r3.emptyReply, true); assert.equal(r3.unsent, undefined);
+  assert.equal(s.messages.at(-1).role, "user");
+  assert.ok(allText(s.messages.at(-1)).includes("once more"));
+  assert.ok(!s.messages.some((m) => m.role === "assistant" && isEmptyAnswer(m.content)));
+  assert.equal(isEmptyAnswer([]), true); assert.equal(isEmptyAnswer([{ type: "thinking", thinking: "", signature: "s" }, { type: "text", text: " \n" }]), true);
+  assert.equal(isEmptyAnswer([{ type: "text", text: "a" }]), false); assert.equal(isEmptyAnswer([{ type: "tool_use", id: "x", name: "n", input: {} }]), false);
+});
+
+await test("B3 bughunt-1: after a mid-answer fallback only the tool_use kept in the history runs; no orphan tool_result", async () => {
+  const tool = (i, id, name, input) => [bStart(i, { type: "tool_use", id, name, input: {} }), bDelta(i, { type: "input_json_delta", partial_json: JSON.stringify(input) }), bStop(i)];
+  const fb = { chunks: [start(), ...tool(0, "tu1", "search_catalog", { query: "x" }),
+    bStart(1, { type: "fallback", from: { model: "claude-sonnet-5-5" }, to: { model: "claude-sonnet-5" } }), bStop(1),
+    ...tool(2, "tu2", "get_entries", { refs: ["powers:abc"] }), mDelta("tool_use"), mStop()] };
+  const f = fakeModel([fb, reply({ text: "done" })]);
+  const ran = [];
+  const { deps } = makeDeps({ pack: makePack({ sheet: makeSheet(), runTool: async (name) => { ran.push(name); return { ok: true }; } }), fetchImpl: f });
+  const s = await createHarness(deps).openSession(ACTOR);
+  assert.equal((await s.send("build")).reason, "done");
+  assert.deepEqual(ran, ["get_entries"]);
+  const b = f.calls[1].body;
+  assert.deepEqual(b.messages[1].content.filter((x) => x.type === "tool_use").map((x) => x.id), ["tu2"]);
+  assert.deepEqual(b.messages[2].content.filter((x) => x.type === "tool_result").map((x) => x.tool_use_id), ["tu2"]);
+  assertValidHistory(s.messages);
+});
+
+await test("B4 bughunt-1: refusal / 529 / cost cap / module limit before any answer append nothing; re-send not doubled; held + marker + sheet kept", async () => {
+  // refusal: the refused text never reaches a later request
+  const refusal = reply({ text: "I can not", stop: "refusal" });
+  const f = fakeModel([refusal, reply({ text: "ok" })]);
+  const { deps } = makeDeps({ pack: makePack({ sheet: makeSheet() }), fetchImpl: f });
+  const s = await createHarness(deps).openSession(ACTOR);
+  const a = await s.send("REFUSED-REQUEST-TEXT");
+  assert.equal(a.reason, "refusal"); assert.equal(a.unsent, "REFUSED-REQUEST-TEXT");
+  assert.equal(s.messages.length, 0);
+  const tr = s.transcript();
+  assert.deepEqual(tr.filter((x) => x.role === "gm").map((x) => [x.text, x.unsent]), [["REFUSED-REQUEST-TEXT", true]], "drawer still shows the unsent text");
+  assert.ok(tr.findIndex((x) => x.role === "gm") < tr.findIndex((x) => x.role === "notice" && x.code === "stop.refusal"), "unsent text before its notice");
+  await s.send("Unrelated new request");
+  assert.equal(rolesOf(f.calls[1].body.messages), "user");
+  assert.ok(!JSON.stringify(f.calls[1].body.messages).includes("REFUSED-REQUEST-TEXT"));
+  assert.match(f.calls[1].body.messages[0].content[0].text, /^<sheet /, "the sheet block was not consumed by the refused send: full block again");
+  // 529 after retries, the GM sends the same text again: once in the request
+  const over = { status: 529, body: { type: "error", error: { type: "overloaded_error", message: "Overloaded" } } };
+  const f4 = fakeModel([over, over, over, reply({ text: "ok" })]);
+  const d4 = makeDeps({ pack: makePack({ sheet: makeSheet() }), fetchImpl: f4, transport: noSleepTr });
+  const s4 = await createHarness(d4.deps).openSession(ACTOR);
+  const e1 = await s4.send("Build Atom Eve");
+  assert.equal(e1.reason, "error"); assert.equal(e1.unsent, "Build Atom Eve"); assert.equal(s4.messages.length, 0);
+  await s4.send("Build Atom Eve");
+  assert.equal(rolesOf(f4.calls.at(-1).body.messages), "user");
+  assert.equal((JSON.stringify(f4.calls.at(-1).body.messages).match(/Build Atom Eve/g) ?? []).length, 1);
+  assert.deepEqual(rolesOf(s4.messages).split(","), ["user", "assistant"]);
+  // cost cap / module limit: nothing stored, however often the GM tries
+  const f3 = fakeModel([reply({ text: "ok" })]);
+  const d3 = makeDeps({ pack: makePack({ sheet: makeSheet() }), fetchImpl: f3, settings: { maxCostPerMessage: 0.0001 } });
+  const s3 = await createHarness(d3.deps).openSession(ACTOR);
+  for (const x of ["try 1", "try 2", "try 3"]) assert.equal((await s3.send(x)).cap, "cost");
+  assert.equal(f3.calls.length, 0); assert.equal(s3.messages.length, 0);
+  const capN = s3.record.timeline.filter((x) => x.type === "notice" && x.code === "cap.cost").at(-1);
+  assert.ok(Number(capN.data.estimate) > 0, "the cost notice carries the estimate");
+  const f5 = fakeModel([reply({ text: "ok" })]);
+  const d5 = makeDeps({ pack: makePack(), fetchImpl: f5, limits: { reserve: () => { throw new Error("Daily limit $5 reached"); }, record: async () => {} } });
+  const s5 = await createHarness(d5.deps).openSession(ACTOR);
+  await s5.send("a"); await s5.send("b");
+  assert.equal(f5.calls.length, 0); assert.equal(s5.messages.length, 0);
+  // held results and the proposal marker wait for a message that gets an answer
+  const f6 = fakeModel([reply({ tools: [{ id: "h1", name: "submit_proposal", input: { ops: [] } }] }), refusal, reply({ text: "fine" })]);
+  const d6 = makeDeps({ pack: proposalPack(), fetchImpl: f6 });
+  const s6 = await createHarness(d6.deps).openSession(ACTOR);
+  assert.equal((await s6.send("build")).reason, "submitted");
+  assert.equal((await s6.send("bad")).reason, "refusal");
+  assert.equal(s6.record.heldToolResults.length, 1);
+  assert.equal(s6.record.proposalStates[0].reported, null, "marker not reported yet");
+  await s6.send("good");
+  const um = f6.calls[2].body.messages.at(-1);
+  assert.equal(um.content[0].tool_use_id, "h1");
+  assert.deepEqual(markersOf(um), ['<proposal id="p1" status="pending"/>']);
+  assert.equal(s6.record.heldToolResults, null);
+  assertValidHistory(s6.messages);
+});
+
+await test("B4 bughunt-1: while the first request runs the GM text shows as pending; after the answer it is history", async () => {
+  let s;
+  let seen = null;
+  const f = fakeModel(() => { seen = s.transcript().filter((x) => x.role === "gm"); return reply({ text: "hi" }); });
+  const { deps } = makeDeps({ pack: makePack(), fetchImpl: f });
+  s = await createHarness(deps).openSession(ACTOR);
+  await s.send("hello");
+  assert.deepEqual(seen.map((x) => [x.text, !!x.pending]), [["hello", true]]);
+  assert.deepEqual(s.transcript().filter((x) => x.role === "gm").map((x) => [x.text, !!x.pending, !!x.unsent]), [["hello", false, false]]);
+});
+
+await test("B5 bughunt-1: parallel openSession -> one Session; a refused save does not poison the chain; markProposal / send never reject", async () => {
+  const f = fakeModel([reply({ text: "a" }), reply({ text: "b" })]);
+  const { deps } = makeDeps({ pack: makePack({ sheet: makeSheet() }), fetchImpl: f });
+  const h = createHarness(deps);
+  const [s1, s2] = await Promise.all([h.openSession(ACTOR), h.openSession(ACTOR)]);
+  assert.equal(s1, s2);
+  assert.equal((await s1.send("one")).reason, "done");
+  // a second harness (another conversation) takes the store key: this session's saves are refused
+  const store = createSessionStore({ indexedDB: fakeIndexedDB() });
+  const fx = fakeModel([reply({ text: "x" }), reply({ text: "y" }), reply({ text: "z" })]);
+  const dA = makeDeps({ pack: makePack(), fetchImpl: fx, store });
+  const sA = await createHarness(dA.deps).openSession(ACTOR);
+  await sA.send("first");
+  const sB = await createHarness(makeDeps({ pack: makePack(), fetchImpl: fx, store }).deps).openSession(ACTOR);
+  await sB.newConversation();
+  const r = await sA.send("second");                                    // its save is refused: error result, no rejection
+  assert.equal(r.reason, "error"); assert.equal(r.error.kind, "history-edit");
+  await assert.rejects(sA.setOptions({ rank: "teen" }), (e) => e.code === "history-edit");
+  const mp = await sA.markProposal("x", "pending");                    // never rejects
+  assert.equal(mp.ok, false);
+  // the chain is not poisoned: a save that is allowed again goes through
+  const store2 = { saves: 0, fail: true, async load() { return null; }, async save() { this.saves++; if (this.fail) { this.fail = false; const e = new Error("refused"); e.code = "history-edit"; throw e; } } };
+  const sC = await createHarness(makeDeps({ pack: makePack(), fetchImpl: fx, store: store2 }).deps).openSession(ACTOR2);
+  await assert.rejects(sC.setOptions({ a: 1 }));
+  assert.deepEqual(await sC.setOptions({ b: 2 }), { a: 1, b: 2 }, "the next save resolves");
+  // markProposal after a successful Apply: the save fails, the state is still applied (card not pending)
+  const f7 = fakeModel([reply({ tools: [{ id: "q1", name: "submit_proposal", input: { ops: [] } }] })]);
+  const store3 = { failNext: false, async load() { return null; }, async save() { if (this.failNext) { this.failNext = false; const e = new Error("refused"); e.code = "history-edit"; throw e; } } };
+  const s7 = await createHarness(makeDeps({ pack: proposalPack(), fetchImpl: f7, store: store3 }).deps).openSession(ACTOR);
+  await s7.send("build");
+  store3.failNext = true;
+  const m7 = await s7.markProposal("p1", "applied", { runId: "run-1" });
+  assert.deepEqual([m7.ok, m7.saved], [true, false]);
+  assert.equal(s7.pendingProposal, null); assert.equal(s7.record.lastRunId, "run-1");
+  assert.equal(s7.proposals[0].status, "applied");
+});
+
+await test("B6 bughunt-1: a transport retry re-emits request-start (retry: true) so a live view drops the failed attempt's text", async () => {
+  const over = { status: 529, body: { type: "error", error: { type: "overloaded_error", message: "Overloaded" } } };
+  const f = fakeModel([over, reply({ text: "ok" })]);
+  const { deps } = makeDeps({ pack: makePack(), fetchImpl: f, transport: noSleepTr });
+  const s = await createHarness(deps).openSession(ACTOR);
+  const starts = [];
+  s.on("request-start", (d) => starts.push(d));
+  assert.equal((await s.send("x")).reason, "done");
+  assert.equal(starts.length, 2);
+  assert.equal(starts[0].retry, undefined);
+  assert.deepEqual([starts[1].request, starts[1].retry, starts[1].attempt], [1, true, 2]);
+});
+
+await test("B8 bughunt-1: estimate prices a cold prefix / expired history at write rates, a warm one at the read rate", async () => {
+  let clock = 1_000_000_000;
+  const warm = new Map();
+  const f = fakeModel(() => reply({ text: "ok" }));
+  const ests = [];
+  const { deps } = makeDeps({ pack: makePack({ catalogIndex: "CATALOG INDEX LINE\n".repeat(3000) }), fetchImpl: f, now: () => clock, warmMap: warm });
+  const s = await createHarness(deps).openSession(ACTOR);
+  s.on("request-start", (d) => ests.push(d.estimateUsd));
+  await s.send("first");                      // cold prefix
+  clock += 60_000;
+  await s.send("second");                     // prefix + history warm
+  clock += 3 * 3600_000;
+  await s.send("third");                      // both expired
+  assert.ok(ests[0] > ests[1] * 2, `cold ${ests[0]} vs warm ${ests[1]}`);
+  assert.ok(ests[2] > ests[1] * 2, `expired ${ests[2]} vs warm ${ests[1]}`);
+  // a pre-warmed prefix makes the first message of a conversation cheap
+  clock += 1000;
+  await s.prewarm({ force: true });
+  const s2 = await createHarness(deps).openSession(ACTOR2);
+  const e2 = [];
+  s2.on("request-start", (d) => e2.push(d.estimateUsd));
+  await s2.send("first of another actor");
+  assert.ok(e2[0] < ests[0] / 2, `warm first ${e2[0]} vs cold first ${ests[0]}`);
+});
+
+await test("B9 bughunt-1: 'Not run' names the reason of the turn that left the tools open, not a later turn's", async () => {
+  const f = fakeModel([reply({ tools: [{ id: "o1", name: "search_catalog", input: { query: "q" } }], stop: "max_tokens" }), reply({ text: "x", stop: "refusal" }), reply({ text: "ok" })]);
+  const { deps } = makeDeps({ pack: makePack(), fetchImpl: f });
+  const s = await createHarness(deps).openSession(ACTOR);
+  assert.equal((await s.send("a")).reason, "max_tokens");
+  assert.equal((await s.send("b")).reason, "refusal");
+  await s.send("c");
+  assert.match(f.calls[1].body.messages.at(-1).content[0].content, /stopped \(max_tokens\)/);
+  assert.match(f.calls[2].body.messages.at(-1).content[0].content, /stopped \(max_tokens\)/);
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);

@@ -847,8 +847,17 @@ export function costLabel(c, info, ctx) {
 const TOOL_DESC = {
   submit_proposal: "Submit the proposal for the GM. It is validated (refs, the rules on the sheet as it would be after the change, a dry run of the write); errors come back with hints, the budget before/after and each op's cost. ok:true ends your turn and the GM sees a preview (applyConfirm: the removals and level swaps the GM confirms at Apply). dryRun:true = check only: same result, nothing reaches the GM, your turn goes on; only to compare variants or to price a change you may not propose (\"what would Flight at Major cost?\"), never before a submit.\n" + PROPOSAL_GUIDE
 };
+/**
+ * B1 (bughunt-1, PROVISIONAL, owner decides after one real request): `strict` on the proposal tool. Internal constant, no
+ * setting. OFF: PROPOSAL_SCHEMA has ~126 optional properties, and Anthropic's strict-grammar complexity limits (optional
+ * parameters / unions per request) could not be confirmed from the local claude-api skill (it lists only unsupported
+ * keywords); over a limit EVERY builder request would get a 400. The schema still goes to the model as is, and the
+ * harness never trusts tool input: L0 `checkShape` (same schema, additionalProperties:false) + `normalize` check it locally.
+ * The four small read tools (6 optional properties together) keep strict: true (tools.mjs).
+ */
+export const PROPOSAL_TOOL_STRICT = false;
 export function proposalToolDefs() {
-  return MODEL_TOOL_NAMES.map((name) => ({ name, description: TOOL_DESC[name], input_schema: PROPOSAL_SCHEMA, strict: true }));
+  return MODEL_TOOL_NAMES.map((name) => ({ name, description: TOOL_DESC[name], input_schema: PROPOSAL_SCHEMA, ...(PROPOSAL_TOOL_STRICT ? { strict: true } : {}) }));
 }
 /**
  * W5-B-1: warnings of an accepted submit that the model can fix in one more submit (the harness then keeps the turn open for one
