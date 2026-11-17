@@ -15,7 +15,7 @@ import {
 } from "../scripts/systems/invincible/proposal.mjs";
 import {
   validateProposal, validateGroup, proposalToolDefs, MESSAGES, describe, STRUCTURAL, superheroIssues, stateOf,
-  actionableWarnings, isActionableWarning, NO_FIX_WARNINGS, limitPays
+  actionableWarnings, isActionableWarning, NO_FIX_WARNINGS, limitPays, talentShifts, talentReorders, applyConfirmList
 } from "../scripts/systems/invincible/validate.mjs";
 import { validatePack } from "../scripts/build/registry.mjs";
 import { CATALOG_ROWS, makeLookup, typicalHero, bigNpc, actor as mkActor, fromCatalog, item, idGen } from "./fixtures/invincible-sheets.mjs";
@@ -805,6 +805,24 @@ await test("P1-F: occupation, Resources, occupation talent and reputation are ch
   for (const c of ["resources.occupation", "reputation.rank"]) assert.ok(!codes(ip, "warnings").includes(c), c);
 });
 
+await test("W5-C (W5-A-V1): a replace is checked in the order the writer writes: new hero talent first + kept occupation talent -> no false talent.occ.list", async () => {
+  // typicalHero: Quick Wits hero, Streetwise occupation (Courier). Replace with [Steady Hands (new), Streetwise (kept)]: the
+  // writer writes Steady Hands hero, Streetwise occupation. The plain projection (kept in place, new last) would read
+  // Streetwise hero, Steady Hands occupation (not on the Courier list).
+  const a = typicalHero();
+  const P = fullBuild({ name: "Amber Kestrel", talents: [{ ref: ref("talent", "Steady Hands") }, { ref: ref("talent", "Streetwise") }] });
+  const r = await VO(a, rep(P), { rank: "global" });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.ok(!codes(r, "warnings").includes("talent.occ.list"), JSON.stringify(r.warnings.map((w) => w.message)));
+  assert.ok(!codes(r, "warnings").includes("talent.role.shift"));
+  assert.equal((r.applyConfirm ?? []).some((s) => s.startsWith("reorder")), false, "Streetwise stays occupation");
+  // the other way round the written order IS wrong: Streetwise hero, Steady Hands occupation -> the warning stays. Nothing is
+  // re-created (the list order is already the projection's), so no reorder to confirm: only the removal (as in the writer)
+  const w = await VO(a, rep(fullBuild({ name: "Amber Kestrel", talents: [{ ref: ref("talent", "Streetwise") }, { ref: ref("talent", "Steady Hands") }] })), { rank: "global" });
+  assert.ok(codes(w, "warnings").includes("talent.occ.list"), JSON.stringify(w.warnings.map((x) => x.code)));
+  assert.deepEqual(w.applyConfirm, ['remove talent "Quick Wits"']);
+});
+
 await test("P1-F: reputation defaults to the rank's value in a creation replace (validator and writer conversion agree)", async () => {
   const P = fullBuild(); delete P.reputation;
   const r = await VO(blankHero(), rep(P), { rank: "street" });
@@ -970,6 +988,54 @@ await test("W3-10: applyConfirm in the submit result for removals (with cascade)
   assert.equal(ckDry.ok, true); assert.equal(ckDry.applyConfirm, undefined);
   const ck = await group(catalog).runProposalTool("check_proposal", ops({ op: "removeItem", opId: "g", itemId: idOf(a, "Stun Baton") }), { doc: a, options: { rank: "global", profile: "in-play" } });
   assert.equal(ck.applyConfirm, undefined);
+});
+
+await test("W5-A-V1/V2: replace has no talent.role.shift (the writer writes the list order); a kept talent changing role is a 'reorder' in applyConfirm; ops keep the shift", async () => {
+  const a = typicalHero();
+  const P = {
+    rank: "global", name: "Amber Kestrel",
+    sources: [{ key: "s1", ref: ref("powerSource", "Strange Meteor") }],
+    powers: [
+      { ref: ref("power", "Glide Wings"), level: "basic", source: "s1", boosts: [{ ref: ref("boost", "Silent Flight", "Glide Wings") }] },
+      { ref: ref("power", "Spark Bolt"), level: "major", source: "s1", limits: [{ ref: ref("limit", "Needs Charging", "Spark Bolt"), grants: "level" }] },
+      { ref: ref("power", "Echo Sense"), source: "s1" }
+    ],
+    talents: [{ ref: ref("talent", "Quick Wits") }, { ref: ref("talent", "Streetwise") }],
+    drawbacks: [{ ref: ref("drawback", "Lean Times") }]
+  };
+  const g = group(catalog);
+  const sub = (input, profile = "in-play") => g.runProposalTool("submit_proposal", input, { doc: a, options: { rank: "global", profile } });
+  const shift = (r) => [...(r.warnings ?? []), ...(r.info ?? [])].filter((w) => w.code === "talent.role.shift");
+  // the two kept talents listed the other way round: the writer re-creates Quick Wits after Streetwise (hero -> occupation)
+  const rev = await sub(rep({ ...P, talents: [P.talents[1], P.talents[0]] }));
+  assert.equal(rev.ok, true, JSON.stringify(rev.errors));
+  assert.deepEqual(shift(rev), [], "no false shift in a replace");
+  assert.deepEqual(rev.applyConfirm, ['reorder talent "Quick Wits" hero -> occupation']);
+  assert.ok(rev.applyConfirmNote);
+  assert.equal(actionableWarnings("submit_proposal", rev).some((w) => w.code === "talent.role.shift"), false, "no fix round from it");
+  // the same order: nothing to confirm (no ops at all)
+  const same = await sub(rep(P));
+  assert.equal(same.ok, true, JSON.stringify(same.errors));
+  assert.deepEqual(shift(same), []); assert.equal(same.applyConfirm, undefined);
+  // dry6 case: a NEW hero talent first, the kept hero talent second, Streetwise dropped -> remove + reorder (Quick Wits
+  // hero -> occupation); the new talent is never a reorder entry
+  const nw = await sub(rep({ ...P, talents: [{ ref: ref("talent", "Steady Hands") }, P.talents[0]] }));
+  assert.equal(nw.ok, true, JSON.stringify(nw.errors));
+  assert.deepEqual(shift(nw), []);
+  assert.deepEqual(nw.applyConfirm, ['remove talent "Streetwise"', 'reorder talent "Quick Wits" hero -> occupation']);
+  // the kept talent stays in its role -> no reorder (an extra re-created behind a new occupation talent keeps "extra"... here:
+  // hero kept first, a new occupation talent second -> only the removal)
+  const occ = await sub(rep({ ...P, talents: [P.talents[0], { ref: ref("talent", "Steady Hands") }] }));
+  assert.equal(occ.ok, true, JSON.stringify(occ.errors));
+  assert.deepEqual(occ.applyConfirm, ['remove talent "Streetwise"']);
+  // pure helpers
+  assert.deepEqual(talentShifts(a, a, { mode: "replace" }), []);
+  assert.deepEqual(talentReorders(a, a, null), []);
+  assert.deepEqual(applyConfirmList({ opInfo: {} }, [{ name: "Mighty (old)", from: "hero", to: "occupation" }]), ['reorder talent "Mighty" hero -> occupation']);
+  // ops mode keeps the warning (the shift is real there)
+  const o = await sub(ops({ op: "removeItem", opId: "r1", itemId: idOf(a, "Quick Wits") }, { op: "addItem", opId: "a1", ref: ref("talent", "Steady Hands") }));
+  assert.deepEqual(shift(o).map((w) => w.params?.name ?? w.message.match(/"([^"]+)"/)[1]), ["Streetwise"]);
+  assert.equal((o.applyConfirm ?? []).some((s) => s.startsWith("reorder")), false);
 });
 
 await test("W3-11: attr.cap in-play says the cap applies in-play too and who changes the rank", async () => {

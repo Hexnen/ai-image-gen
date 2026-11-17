@@ -138,3 +138,41 @@ Pliki: `scripts/systems/invincible/writer.mjs`, `writer-group.mjs`, `undo.mjs`, 
 - Dialog dryfu przy Cofnij (`confirmDrift`) i `stale`/`busy`/`rolledBack` z apply; linia `fix-round`; szybkie ponowne otwarcie arkusza w trakcie zamykania po poprawce W5-T7-10 (sprawdzone tylko, że szufladę da się otworzyć).
 - Jasny motyw na żywo (świat toru ma ciemny); czytnik ekranu.
 - Komunikat po Apply (`message` z pakietu) jest po angielsku.
+
+## W5-C: walidator po W5-A, akcja `reorder`, szuflada T7 (W5-A-V1..V3, W5-B-6)
+
+Pliki: `scripts/systems/invincible/validate.mjs`, `scripts/build/drawer-model.mjs`, `scripts/build/drawer-app.mjs`, `templates/builder-drawer.hbs`, `lang/en.json` + `lang/pl.json` (13 kluczy, tylko dopisane); testy `dev/test-build-validate-invincible.mjs` (+2), `dev/test-build-ops.mjs` (+2), `dev/test-build-snapshot.mjs` (1 asercja zmieniona), `dev/test-drawer-model.mjs` (+4, lista kluczy dynamicznych). Writer, harness, teksty prefiksu, wendor bez zmian. `styles/builder-drawer.css` ma cudze niezacommitowane zmiany: nie ruszane.
+
+### Co zmienione
+- W5-A-V1: `talentShifts` (eksport) w trybie replace zwraca `[]` (writer zapisuje kolejność listy), więc wynik `submit_proposal` replace nie niesie fałszywego `talent.role.shift` i nie wywołuje rundy poprawki W5-B-1. Tryb ops bez zmian (ostrzeżenie zostaje).
+- W5-A-V1 (rozszerzone, ta sama przyczyna): rzutowanie walidatora w replace dostaje kolejność zapisu (`talentOrderPlan`: te same kroki co writer, `talentOrderOf` z `writer.mjs` + `movePlan` z `undo.mjs`; przenoszone talenty na koniec w kolejności propozycji), więc reguły czytają role po zapisie. Bez tego zostawało fałszywe `talent.occ.list` (też ostrzeżenie „do poprawy”): w przypadku dry6 [nowy talent bohatera, zachowany talent zawodu] rzutowanie czytało zachowany jako talent bohatera, nowy jako talent zawodu (test; mutacja bez przestawienia pada).
+- W5-A-V2: `applyConfirm` (`applyConfirmList(proj, reorders)`) wymienia `reorder talent "X" hero -> occupation` dla zachowanego talentu, który writer odtwarza w innej roli (te same przypadki co `plan.reorders[].roleChange`; test porównuje walidator z writerem na 5 listach). Odtworzenia bez zmiany roli i nowe talenty: nie. Przesunięcie roli wynikające tylko z usunięcia (bez odtworzenia) też nie (jak writer: potwierdzane jest usunięcie).
+- W5-A-V3 / szuflada: okno potwierdzenia Apply przez `confirmItems` (remove/swap/reorder; „Przestaw talent Quick Wits: talent bohatera → talent zawodu”); karta: zwinięta sekcja „Kolejność talentów (n)” z `plan.reorders` podglądu `pack.plan` (`reorderRows`: zmiana roli pogrubiona, „zostaje jako …”, „nowy, …”); lista potwierdzeń karty = `applyConfirm` walidatora (z `reorder`, po angielsku jak pozostałe wpisy); baner po Apply: najpierw `vitals` („Nowa budowa: bieżące Zdrowie 6 → 14, Determinacja 5 → 7 (max).”) i `reordered`, potem ostrzeżenia, najwyżej 6 linii (`applyResultLines`).
+- W5-B-6 (weryfikacja po W5-A): `ops[]` zwięzłego wyniku ma nową nazwę dla `updateItem` (notatka, nazwa gearu) i dla zamiany poziomu z notatką (nowy test na `conciseApplyResult`: nazwa op = nazwa przedmiotu na karcie po zapisie). `confirm` (`swap`) i dziennik undo zostają przy nazwie sprzed zmiany (W3-A-5, zamierzone). `message` i op aktora: nowa nazwa (jak w W5-B). Punkt 6 zamknięty.
+
+### Wybory (zachowanie tymczasowe)
+| # | Pytanie | Wybór |
+|---|---------|-------|
+| W5-C-a | V1: `[]` czy rzutowanie w kolejności propozycji | Oba: `talentShifts` = `[]` w replace i rzutowanie w kolejności zapisu (inaczej role talentów w regułach, np. `talent.occ.list`, błędne). |
+| W5-C-b | `budget.perOp` w replace | Bez zmian: etykiety per op („hero talent (free)” / „extra talent -1 pt”) liczone w kolejności op, nie zapisu; suma i `budget.after` zgodne (liczba darmowych talentów ta sama). Może mylić przy przestawieniu; do decyzji. |
+| W5-C-c | Język wpisów karty „Potwierdzisz to przy zastosowaniu” | Zostają angielskie stringi walidatora (jak dotąd `remove` / `level swap`); okno dialogowe Apply jest lokalizowane. |
+| W5-C-d | Baner po Apply | `message` pakietu (EN, zawiera też witalność i kolejność) zostaje nagłówkiem; lokalizowane linie pod nim powtarzają te fakty. |
+
+### Texts for W5-T (nie zmienione tutaj)
+- W5-C-T1 `APPLY_CONFIRM_NOTE` (`validate.mjs`, wynik submitu): „(removals and level swaps)” -> „(removals, level swaps and kept talents moved to another role)”. Test W3-10 sprawdza `/the GM confirms these at Apply/i` (zostaje prawdą).
+- W5-C-T2 `TOOL_DESC.submit_proposal`: „(applyConfirm: the removals and level swaps the GM confirms at Apply)” -> dopisać „and kept talents a replace moves to another role”; `dev/test-prompt-texts.mjs:251` sprawdza obecne zdanie: zmienić razem.
+- W5-C-T3 (= W5-A-T1, nadal potrzebne) `rules-digest.mjs:53`: „a new talent is always added last … (warning talent.role.shift)” prawdziwe tylko w ops; w replace kolejność listy = wynik, `talent.role.shift` w replace już nie przychodzi.
+- W5-C-T4 (= W5-A-T3) `PROPOSAL_GUIDE` replace `talents`: dopisać sens „this order is written as is (kept talents are re-ordered; the GM confirms a kept talent changing role)”.
+- W5-A-T2 (podpowiedź `talent.role.shift`) nieaktualne: ostrzeżenie jest już tylko w ops, gdzie obecna podpowiedź pasuje.
+
+### Testy
+- `test-build-validate-invincible` 56 (+2: V1/V2 przez `submit_proposal`: odwrócona lista = brak shiftu, `applyConfirm` z `reorder`, brak rundy poprawki wg `actionableWarnings`; ta sama kolejność = nic; przypadek dry6 = usunięcie + reorder; nowy talent zawodu = tylko usunięcie; czyste helpery; ops zachowuje shift. Kolejność zapisu w regułach: `talent.occ.list` tylko gdy zapisana kolejność naprawdę jest zła; mutacja sprawdzona).
+- `test-build-ops` 54 (+2: walidator vs writer na 5 listach talentów, `reorder` = `plan.reorders` z `roleChange`, co najmniej 2 przypadki ze zmianą roli; nazwa op zamiany poziomu z notatką w `conciseApplyResult`).
+- `test-build-snapshot` 37 (asercja W2-3 replace: brak shiftu przy odwróconej liście).
+- `test-drawer-model` 13 (+4: `confirmItems` z prawdziwym pl.json, `reorderRows`, `applyResultLines` z limitem, szablon/aplikacja używają funkcji modelu; klucze dynamiczne `Confirm.reorder`, `Role.*`, `Result.health/resolve` w kontroli en/pl).
+- Wszystkie `dev/test-*.mjs` zielone: ops 54, snapshot 37, validate 56, catalog 25, drawer-model 13, dry-relay 13, dry-transport 12, enhance 22, harness 40, migrate-id 18, packs 23, prompt-texts 22, transport 27, vendor load 9, vendor-sync ALL OK.
+
+### Niezweryfikowane
+- Bez toru: render szuflady (sekcja „Kolejność talentów”, dialog z `reorder`, linie banera) nie oglądany na żywo; tylko model w node i `node --check`.
+- Prawdziwy model: czy po V1 runda poprawki przestaje się włączać w replace (powinna: oba fałszywe ostrzeżenia znikają).
+- Zgodność walidatora z writerem sprawdzona na atrapie (`hero()` + `convW5`) i fiksturze `typicalHero`; nie na prawdziwym katalogu (np. talenty z notatką / odmiany Knowledgeable dopasowane przez `srcItems`).

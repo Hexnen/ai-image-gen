@@ -153,7 +153,7 @@ await test("lang: every MAIG.Drawer key used in code and template exists in en.j
   const src = ["scripts/build/drawer-app.mjs", "scripts/build/drawer-model.mjs", "templates/builder-drawer.hbs"].map((f) => readFileSync(join(ROOT, f), "utf8")).join("\n");
   const used = new Set([...src.matchAll(/MAIG\.Drawer\.[A-Za-z0-9.-]+[A-Za-z0-9]/g)].map((m) => m[0]));
   // keys built at runtime: Profile.<p>, Profile.hint.<p>, Mode.<m>, State.<s>, Event.<s>, Confirm.<a>, Undo.drift.<w>
-  for (const k of ["Profile.creation", "Profile.in-play", "Profile.hint.creation", "Profile.hint.in-play", "Mode.superhero", "Mode.npc", "State.pending", "State.applied", "State.discarded", "Event.pending", "Event.applied", "Event.discarded", "Confirm.remove", "Confirm.swap", "Undo.drift.edited", "Undo.drift.missing"]) used.add(`MAIG.Drawer.${k}`);
+  for (const k of ["Profile.creation", "Profile.in-play", "Profile.hint.creation", "Profile.hint.in-play", "Mode.superhero", "Mode.npc", "State.pending", "State.applied", "State.discarded", "Event.pending", "Event.applied", "Event.discarded", "Confirm.remove", "Confirm.swap", "Confirm.reorder", "Role.hero", "Role.occupation", "Role.extra", "Result.health", "Result.resolve", "Undo.drift.edited", "Undo.drift.missing"]) used.add(`MAIG.Drawer.${k}`);
   // a template-literal prefix (`MAIG.Drawer.Confirm.${...}`) is a namespace of real keys, not a key
   const partial = [...used].filter((k) => !(k in en) && Object.keys(en).some((x) => x.startsWith(`${k}.`)));
   for (const k of [...used].filter((x) => !partial.includes(x))) {
@@ -161,6 +161,74 @@ await test("lang: every MAIG.Drawer key used in code and template exists in en.j
     assert.ok(k in pl, `pl.json misses ${k}`);
   }
   for (const k of Object.keys(en).filter((x) => x.startsWith("MAIG.Drawer."))) assert.ok(k in pl, `pl.json misses ${k}`);
+});
+
+await test("W5-C: Apply confirm names the 'reorder' action (kept talent into another role) next to remove / swap", () => {
+  const items = M.confirmItems([
+    { opId: "r1", action: "remove", name: "Knowledgeable" },
+    { opId: "u1", action: "swap", name: "Iron Hide" },
+    { opId: "_order", action: "reorder", name: "Quick Wits", itemId: "q", from: "hero", to: "occupation" },
+    null
+  ], L);
+  assert.deepEqual(items, [
+    'MAIG.Drawer.Confirm.remove{"name":"Knowledgeable"}',
+    'MAIG.Drawer.Confirm.swap{"name":"Iron Hide"}',
+    'MAIG.Drawer.Confirm.reorder{"name":"Quick Wits","from":"MAIG.Drawer.Role.hero","to":"MAIG.Drawer.Role.occupation"}'
+  ]);
+  assert.deepEqual(M.confirmItems(undefined, L), []);
+  assert.equal(M.roleLabel("extra", L), "MAIG.Drawer.Role.extra");
+  assert.equal(M.roleLabel("weird", L), "weird");
+  // with the real lang files
+  const pl = JSON.parse(readFileSync(join(ROOT, "lang/pl.json"), "utf8"));
+  const Lpl = (k, d = {}) => String(pl[k] ?? k).replace(/\{(\w+)\}/g, (_, x) => String(d[x] ?? ""));
+  assert.equal(M.confirmItems([{ action: "reorder", name: "Quick Wits", from: "hero", to: "occupation" }], Lpl)[0], "Przestaw talent Quick Wits: talent bohatera → talent zawodu");
+});
+
+await test("W5-C: plan reorders -> card rows (role change, same role, new talent)", () => {
+  const rows = M.reorderRows([
+    { id: "q", opId: null, name: "Quick Wits", from: "hero", to: "occupation", roleChange: true },
+    { id: "s", opId: null, name: "Streetwise", from: "occupation", to: "occupation", roleChange: false },
+    { id: null, opId: "a1", name: "Steady Hands", from: null, to: "extra", roleChange: false },
+    { itemId: "c", name: "Compelling", from: "extra", to: "extra", roleChange: false }
+  ], L);
+  assert.deepEqual(rows.map((r) => r.roleChange), [true, false, false, false]);
+  assert.equal(rows[0].text, 'MAIG.Drawer.Card.reorderChange{"name":"Quick Wits","from":"MAIG.Drawer.Role.hero","to":"MAIG.Drawer.Role.occupation"}');
+  assert.equal(rows[1].text, 'MAIG.Drawer.Card.reorderSame{"name":"Streetwise","role":"MAIG.Drawer.Role.occupation"}');
+  assert.equal(rows[2].text, 'MAIG.Drawer.Card.reorderNew{"name":"Steady Hands","role":"MAIG.Drawer.Role.extra"}');
+  assert.equal(rows[3].text, 'MAIG.Drawer.Card.reorderSame{"name":"Compelling","role":"MAIG.Drawer.Role.extra"}');
+  assert.deepEqual(M.reorderRows(null, L), []);
+});
+
+await test("W5-C: apply result lines: vitals and reordered first, then warnings, capped", () => {
+  const r = {
+    ok: true, message: "Applied.",
+    vitals: { health: { from: 6, to: 14 }, resolve: { from: null, to: 7 } },
+    reordered: [{ itemId: "q", name: "Quick Wits", from: "hero", to: "occupation" }, { itemId: "s", name: "Streetwise", from: "occupation", to: "occupation" }, { itemId: "n" }],
+    warnings: [{ code: "a", message: "w1" }, { code: "b" }, { code: "c", message: "w2" }]
+  };
+  const lines = M.applyResultLines(r, L);
+  assert.deepEqual(lines, [
+    'MAIG.Drawer.Result.vitals{"list":"MAIG.Drawer.Result.health{\\"from\\":6,\\"to\\":14}, MAIG.Drawer.Result.resolve{\\"from\\":\\"?\\",\\"to\\":7}"}',
+    'MAIG.Drawer.Result.reordered{"list":"Quick Wits (MAIG.Drawer.Role.hero → MAIG.Drawer.Role.occupation), Streetwise, n"}',
+    "w1", "w2"
+  ]);
+  assert.equal(M.applyResultLines({ ...r, warnings: Array.from({ length: 9 }, (_, i) => ({ message: `w${i}` })) }, L, 6).length, 6);
+  assert.deepEqual(M.applyResultLines({ ok: true, warnings: [] }, L), []);
+  assert.deepEqual(M.applyResultLines(null, L), []);
+  // only one vital, real Polish texts
+  const pl = JSON.parse(readFileSync(join(ROOT, "lang/pl.json"), "utf8"));
+  const Lpl = (k, d = {}) => String(pl[k] ?? k).replace(/\{(\w+)\}/g, (_, x) => String(d[x] ?? ""));
+  assert.deepEqual(M.applyResultLines({ vitals: { health: { from: 3, to: 10 } } }, Lpl), ["Nowa budowa: bieżące Zdrowie 3 → 10 (max)."]);
+});
+
+await test("W5-C: the card template shows plan reorders; the app uses confirmItems / applyResultLines / plan reorders", () => {
+  const hbs = readFileSync(join(ROOT, "templates/builder-drawer.hbs"), "utf8");
+  assert.match(hbs, /card\.reorders\.length/);
+  const app = readFileSync(join(ROOT, "scripts/build/drawer-app.mjs"), "utf8");
+  assert.match(app, /M\.confirmItems\(r\.confirm, L\)/);
+  assert.match(app, /M\.applyResultLines\(r, L/);
+  assert.match(app, /M\.reorderRows\(pv\?\.reorders, L\)/);
+  assert.doesNotMatch(app, /c\.action === "swap" \? "swap" : "remove"/, "no second copy of the confirm text logic");
 });
 
 await test("module.json registers the drawer stylesheet; module.mjs loads the drawer dynamically", () => {

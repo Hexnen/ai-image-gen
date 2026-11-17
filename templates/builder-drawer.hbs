@@ -86,6 +86,7 @@
     </details>
     {{#if card.errors.length}}<div class="maig-issues is-error"><h4>{{localize "MAIG.Drawer.Card.errors"}}</h4><ul>{{#each card.errors}}<li>{{text}}</li>{{/each}}</ul></div>{{/if}}
     {{#if card.confirm.length}}<div class="maig-issues is-confirm"><h4>{{localize "MAIG.Drawer.Card.confirm"}}</h4><ul>{{#each card.confirm}}<li>{{this}}</li>{{/each}}</ul></div>{{/if}}
+    {{#if card.reorders.length}}<details class="maig-issues is-info"><summary>{{localize "MAIG.Drawer.Card.reorders" n=card.reorders.length}}</summary><p class="maig-hint">{{localize "MAIG.Drawer.Card.reordersHint"}}</p><ul>{{#each card.reorders}}<li>{{#if roleChange}}<strong>{{text}}</strong>{{else}}{{text}}{{/if}}</li>{{/each}}</ul></details>{{/if}}
     {{#if card.warnings.length}}<div class="maig-issues is-warn"><h4>{{localize "MAIG.Drawer.Card.warnings"}}</h4><ul>{{#each card.warnings}}<li>{{text}}{{#if gm}}<span class="maig-gm"><strong>{{localize "MAIG.Drawer.Card.gm"}}</strong> {{gm}}</span>{{/if}}</li>{{/each}}</ul></div>{{/if}}
     {{#if card.info.length}}<details class="maig-issues is-info"><summary>{{localize "MAIG.Drawer.Card.info" n=card.info.length}}</summary><ul>{{#each card.info}}<li>{{text}}{{#if gm}}<span class="maig-gm"><strong>{{localize "MAIG.Drawer.Card.gm"}}</strong> {{gm}}</span>{{/if}}</li>{{/each}}</ul></details>{{/if}}
     {{#if card.previewError}}<p class="maig-hint is-error">{{card.previewError}}</p>{{/if}}

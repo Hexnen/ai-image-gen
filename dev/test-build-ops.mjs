@@ -1332,6 +1332,27 @@ await test("W5-A-3: dry6 case through the writer group: new hero talent + kept o
   assert.deepEqual(ids(a), before); assert.equal(a._source.system.derived.health.value, 3);
 });
 
+await test("W5-A-V1/V2: the validator's replace result agrees with the writer: no talent.role.shift, 'reorder' confirms = plan.reorders with roleChange", async () => {
+  if (!T5?.validateProposal) { console.log("     (skipped: validate.mjs not present)"); return; }
+  const { makeLookup } = await import("./fixtures/invincible-sheets.mjs");
+  const w = mkWriter({ toOps: convW5 });
+  const lists = [["Streetwise", "Quick Wits"], ["Quick Wits", "Streetwise"], ["Steady Hands", "Streetwise"], ["Steady Hands", "Quick Wits"], ["Streetwise", "Steady Hands", "Quick Wits"]];
+  let named = 0;
+  for (const names of lists) {
+    const a = hero();
+    const P = heroReplace({ talents: names.map((n) => ({ ref: refOf("talent", n) })) });
+    const v = await T5.validateProposal(a, { target: "this", mode: "replace", rationale: "x", proposal: P }, { catalog: cat, lookup: makeLookup(), itemCheck: () => null, profile: "in-play", rank: "global" });
+    assert.equal(v.warnings.some((x) => x.code === "talent.role.shift"), false, `${names}: no shift warning in a replace`);
+    const p = await w.plan(a, { mode: "replace", proposal: P });
+    assert.equal(p.ok, true, JSON.stringify(p.errors));
+    const want = (p.reorders ?? []).filter((r) => r.roleChange).map((r) => `reorder talent "${r.name}" ${r.from} -> ${r.to}`);
+    assert.equal(v.ok, true, `${names}: ${JSON.stringify(v.errors)}`);
+    assert.deepEqual((v.applyConfirm ?? []).filter((s) => s.startsWith("reorder")), want, names.join(", "));
+    if (want.length) named++;
+  }
+  assert.ok(named >= 2, `role changes covered: ${named}`);
+});
+
 await test("W5-A-3: ops mode never re-orders; the chargen-state replace (replace.mjs) carries talentOrder too", async () => {
   const p = await W.plan(hero(), { ops: [{ opId: "r", kind: "removeItem", itemId: byName(hero(), "Quick Wits")?.id ?? "x" }] });
   assert.deepEqual(p.reorders ?? [], []);
@@ -1373,6 +1394,21 @@ await test("W5-B 6d: an updateItem op carries the new name (note change, gear re
   assert.equal(p.ok, true, JSON.stringify(p.errors));
   assert.deepEqual(p.ops.map((o) => o.name), ["Lean Times (rent)", "Tiny Camera", "Spark Bolt"]);
   assert.deepEqual(p.updates.map((u) => u.name), ["Lean Times (rent)", "Tiny Camera", "Spark Bolt"]);
+});
+
+await test("W5-C (W5-B-6 after W5-A): written ops name the new name also for a level swap with a note and in the concise apply result", async () => {
+  const { conciseApplyResult } = await import("../scripts/systems/invincible/writer-group.mjs");
+  const a = hero();
+  const r1 = await W.apply(a, { ops: [{ opId: "p", kind: "addItem", ref: refOf("power", "Iron Hide"), level: "basic", sourceItemId: byName(a, "Strange Meteor").id }] });
+  assert.equal(r1.ok, true, r1.message);
+  const lean = byName(a, "Lean Times");
+  const r = await W.apply(a, { ops: [{ opId: "u", kind: "updateItem", itemId: r1.idMap.p, set: { level: "major", note: "skin of steel" } }, { opId: "n", kind: "updateItem", itemId: lean.id, set: { note: "rent" } }] }, { confirmed: true });
+  assert.equal(r.ok, true, r.message);
+  const c = conciseApplyResult(r);
+  const byOp = Object.fromEntries(c.ops.map((o) => [o.opId, o]));
+  assert.equal(byOp.u.action, "swap"); assert.equal(byOp.u.name, a.items.get(r1.idMap.p).name, "swap op = the name on the sheet after the write");
+  assert.match(byOp.u.name, /skin of steel/);
+  assert.equal(byOp.n.name, "Lean Times (rent)"); assert.equal(a.items.get(lean.id).name, "Lean Times (rent)");
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", some FAILED" : ""}`);

@@ -22,7 +22,9 @@
 // the baseline are tolerated (info), any NEW error blocks. Structural rules (7.5.2) are never relaxed for NEW issues.
 
 import * as rules from "./vendor/chargen/rules.mjs";
-import { chargenStateFromActor, readItem, getCatalogLookup, talentRoleShifts, talentRolesOf } from "./reader.mjs";
+import { chargenStateFromActor, readItem, getCatalogLookup, talentRoleShifts, talentRolesOf, talentRoles } from "./reader.mjs";
+import { movePlan } from "./undo.mjs";
+import { talentOrderOf } from "./writer.mjs";
 import { getCatalog, slug, effectsOf, placeholderKeys } from "./catalog.mjs";
 import {
   PROPOSAL_SCHEMA, PROPOSAL_GUIDE, LEVEL_WORDS, normalize, project, replaceToOps, selectOps, expectFor, checkStale, toPlainActor, asDoc,
@@ -463,6 +465,15 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
   // ---- L1 (projection)
   const proj = project(null, ops, { catalog, plain: basePlain });
   res.opInfo = proj.opInfo;
+  // W5-A-V1: a replace writes the proposal's talent order (writer W5-A-3: the moved talents re-created last). The projection
+  // takes the same order, so the rules read the written roles (hero / occupation talent, talent.occ.list, perOp is per op);
+  // the kept talents that change role go to applyConfirm (W5-A-V2)
+  const talentOrder = P.mode === "replace" && isHero ? talentOrderPlan(basePlain, proj.actor, conv) : { move: [], reorders: [] };
+  if (talentOrder.move.length && Array.isArray(proj.actor?.items)) {
+    const at = new Map(proj.actor.items.map((i) => [String(i._id), i]));
+    const moved = talentOrder.move.map((id) => at.get(id)).filter(Boolean);
+    proj.actor.items = [...proj.actor.items.filter((i) => !talentOrder.move.includes(String(i._id))), ...moved];
+  }
   const newLinkErrors = proj.errors.filter((e) => !e.params?.preexisting);
   acc.errors.push(...newLinkErrors);
   // custom / gear numbers (L1-level shape of the whitelisted gear fields)
@@ -522,8 +533,8 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
     }
   }
   // W2-3: a talent's role is its place in the collection (new items go last); say when the change gives a talent another role
-  // (ops: compared with the sheet now; replace: compared with the role its place in proposal.talents asks for). Before the L2
-  // stop, so the model sees it together with rule errors.
+  // (ops: compared with the sheet now). W5-A-V1: never in a replace (the writer writes the proposal's talent order, W5-A-3, so
+  // the list order IS the result). Before the L2 stop, so the model sees it together with rule errors.
   if (isHero) for (const s of talentShifts(basePlain, proj.actor, P, catalog)) {
     acc.warnings.push({ code: "talent.role.shift", path: `items.${s.itemId}`, ...(s.itemId.startsWith(NEW_PREFIX) ? { opId: s.itemId.slice(NEW_PREFIX.length) } : {}), params: s });
   }
@@ -606,27 +617,52 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
 
   // W3-10 (finding 5): removals and level swaps need the GM's confirmation at Apply (writer: plan.needConfirm); the model is told
   // in the submit result. Same set as the writer's plan.deletes (removeItem + cascade) and plan.swaps (split-level power change).
-  res.applyConfirm = applyConfirmList(proj);
+  // W5-A-V2: plus the kept talents a replace re-creates into another role (writer plan.reorders roleChange)
+  res.applyConfirm = applyConfirmList(proj, talentOrder.reorders);
 
   res.expect = expectFor(doc ?? asDoc(basePlain), ops, proj);
   res.summary = [...summarize({ ops }, proj, res.budget), ...keptLine(conv, ops), ...(isHero && res.budget.after ? [`budget ${res.budget.after.points} spent ${res.budget.after.spent} slots ${res.budget.after.slots}/${res.budget.after.rankPowers}`] : [])].join("\n");
   return finish("L4", acc, { rank });
 }
-/** W2-3 role shifts -> [{ itemId, name, from, to, listed }] (see reader.mjs talentRoles) */
-function talentShifts(basePlain, after, P, catalog) {
-  if (P.mode !== "replace") return talentRoleShifts(basePlain, after).map((x) => ({ ...x, listed: false }));
+/**
+ * W2-3 role shifts -> [{ itemId, name, from, to, listed }] (see reader.mjs talentRoles). ops only: W5-A-V1, a replace writes the
+ * proposal's talent order (writer W5-A-3), so the projection's "kept in place, new last" order is not the result and no
+ * shift happens -> [].
+ */
+export function talentShifts(basePlain, after, P) {
+  if (P?.mode === "replace") return [];
+  return talentRoleShifts(basePlain, after).map((x) => ({ ...x, listed: false }));
+}
+/**
+ * W5-A-V2: the kept talents a replace re-creates into ANOTHER role, the way the writer plans it (writer.mjs W5-A-3: talents of
+ * the projection = kept in place + new last; desired = the proposal's order, unnamed ones after; movePlan; roleChange = a kept
+ * talent in the moved tail whose role on the sheet now differs from its role in the written order).
+ * basePlain = sheet now, after = projection, conv = replaceToOps result -> [{ itemId, name, from, to }]
+ */
+export function talentReorders(basePlain, after, conv) {
+  return talentOrderPlan(basePlain, after, conv).reorders;
+}
+/** talentReorders + `move` = the talent ids (projection ids, new ones "new:<opId>") the writer re-creates last, in that order */
+export function talentOrderPlan(basePlain, after, conv) {
+  const none = { move: [], reorders: [] };
+  const order = talentOrderOf(conv);
+  if (!order) return none;
   const fin = talentRolesOf(after);
-  const hasOcc = !!String(getPath(after, "system.occupation") ?? "").trim();
-  const want = (P.proposal?.talents ?? []).map((t) => norm(catalog?.get?.(t?.ref)?.name ?? t?.name ?? ""));
-  const out = [];
-  fin.items.forEach((t, n) => {
-    let i = want.indexOf(norm(t.name));
-    if (i < 0) i = want.indexOf(norm(baseName(t.name)));
-    if (i < 0 || i === n) return;
-    const from = i === 0 ? "hero" : i === 1 && hasOcc ? "occupation" : "extra", to = fin.roles.get(String(t.id));
-    if (from !== to) out.push({ itemId: String(t.id), name: String(t.name ?? ""), from, to, listed: true });
-  });
-  return out;
+  const before = fin.items.map((t) => String(t.id));
+  const desired = [...new Set(order.map((t) => (t?.itemId != null ? String(t.itemId) : t?.opId != null ? NEW_PREFIX + t.opId : "")).filter((id) => before.includes(id)))];
+  desired.push(...before.filter((id) => !desired.includes(id)));
+  const { keep, move } = movePlan(before, desired);
+  if (!move.length) return none;
+  const was = talentRolesOf(basePlain).roles;
+  const will = talentRoles([...keep, ...move].map((id) => ({ id })), !!String(getPath(after, "system.occupation") ?? "").trim());
+  const nameOf = new Map(fin.items.map((t) => [String(t.id), String(t.name ?? "")]));
+  const reorders = [];
+  for (const id of move) {
+    if (id.startsWith(NEW_PREFIX)) continue;
+    const from = was.get(id) ?? null, to = will.get(id) ?? null;
+    if (from && to && from !== to) reorders.push({ itemId: id, name: nameOf.get(id) ?? id, from, to });
+  }
+  return { move, reorders };
 }
 /** W2-5 (D-Q): a replace whose reputation / resources already match the sheet makes no op for them; say they are set */
 function keptLine(conv, ops) {
@@ -635,14 +671,18 @@ function keptLine(conv, ops) {
   const act = ops.find((o) => o.op === "updateActor")?.opId;
   return [`${act ?? "actor"}: kept ${k.map(([f, v]) => `${f} ${v}`).join(", ")} (already on the sheet)`];
 }
-/** W3-10: what the GM confirms at Apply -> ["remove talent \"X\"", "remove boost \"Y\" (with \"Z\")", "level swap power \"W\" major -> massive"] */
-export function applyConfirmList(proj) {
+/**
+ * W3-10: what the GM confirms at Apply -> ["remove talent \"X\"", "remove boost \"Y\" (with \"Z\")", "level swap power \"W\" major -> massive",
+ * "reorder talent \"Q\" hero -> occupation" (W5-A-V2: `reorders` = talentReorders, a replace only)]
+ */
+export function applyConfirmList(proj, reorders = []) {
   const out = [];
   for (const info of Object.values(proj?.opInfo ?? {})) {
     if (info.kind === "remove") out.push(`remove ${info.type} "${info.name}"`);
     for (const c of info.cascade ?? []) out.push(`remove ${c.type} "${c.name}" (with "${info.name}")`);
     if (info.splitSwap && info.splitSwap.from !== info.splitSwap.to) out.push(`level swap ${info.type} "${baseName(info.name)}" ${info.splitSwap.from} -> ${info.splitSwap.to}`);
   }
+  for (const r of reorders ?? []) out.push(`reorder talent "${baseName(r.name)}" ${r.from} -> ${r.to}`);
   return out;
 }
 export const APPLY_CONFIRM_NOTE = "The GM confirms these at Apply (removals and level swaps); nothing to do for you.";

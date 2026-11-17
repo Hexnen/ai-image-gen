@@ -415,5 +415,18 @@
   "MAIG.Drawer.Usage.line": "Conversation {usd} · {tokens} tokens · cache {hit}",
   "MAIG.Drawer.Usage.tip": "Model {model}, effort {effort}. Uncached input {input}, cache write {write}, cache read {read}, output {output}; {requests} requests.",
   "MAIG.Drawer.Usage.turn": "Request {requests}/{maxRequests} · tools {tools}/{maxTools} · {usd} of {maxUsd}",
-  "MAIG.Drawer.Live.fixRound": "Checking the warnings: one fix step"
+  "MAIG.Drawer.Live.fixRound": "Checking the warnings: one fix step",
+  "MAIG.Drawer.Confirm.reorder": "Move talent {name}: {from} → {to}",
+  "MAIG.Drawer.Role.hero": "hero talent",
+  "MAIG.Drawer.Role.occupation": "occupation talent",
+  "MAIG.Drawer.Role.extra": "extra talent",
+  "MAIG.Drawer.Card.reorders": "Talent order ({n})",
+  "MAIG.Drawer.Card.reordersHint": "Apply writes the talents in the proposal's order: these are re-created after the others with the same ids.",
+  "MAIG.Drawer.Card.reorderChange": "{name}: {from} → {to}",
+  "MAIG.Drawer.Card.reorderSame": "{name}: stays the {role}",
+  "MAIG.Drawer.Card.reorderNew": "{name}: new, {role}",
+  "MAIG.Drawer.Result.vitals": "New build: current {list} (max).",
+  "MAIG.Drawer.Result.health": "Health {from} → {to}",
+  "MAIG.Drawer.Result.resolve": "Resolve {from} → {to}",
+  "MAIG.Drawer.Result.reordered": "Talents in the proposal's order (same ids): {list}."
 }

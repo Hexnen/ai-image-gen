@@ -415,5 +415,18 @@
   "MAIG.Drawer.Usage.line": "Rozmowa {usd} · {tokens} tok. · cache {hit}",
   "MAIG.Drawer.Usage.tip": "Model {model}, wysiłek {effort}. Wejście bez cache {input}, zapis cache {write}, odczyt cache {read}, wyjście {output}; żądań: {requests}.",
   "MAIG.Drawer.Usage.turn": "Żądanie {requests}/{maxRequests} · narzędzia {tools}/{maxTools} · {usd} z {maxUsd}",
-  "MAIG.Drawer.Live.fixRound": "Sprawdza uwagi: jeden krok poprawki"
+  "MAIG.Drawer.Live.fixRound": "Sprawdza uwagi: jeden krok poprawki",
+  "MAIG.Drawer.Confirm.reorder": "Przestaw talent {name}: {from} → {to}",
+  "MAIG.Drawer.Role.hero": "talent bohatera",
+  "MAIG.Drawer.Role.occupation": "talent zawodu",
+  "MAIG.Drawer.Role.extra": "talent dodatkowy",
+  "MAIG.Drawer.Card.reorders": "Kolejność talentów ({n})",
+  "MAIG.Drawer.Card.reordersHint": "Zastosowanie zapisze talenty w kolejności propozycji: te zostaną odtworzone za pozostałymi, z tymi samymi id.",
+  "MAIG.Drawer.Card.reorderChange": "{name}: {from} → {to}",
+  "MAIG.Drawer.Card.reorderSame": "{name}: zostaje jako {role}",
+  "MAIG.Drawer.Card.reorderNew": "{name}: nowy, {role}",
+  "MAIG.Drawer.Result.vitals": "Nowa budowa: bieżące {list} (max).",
+  "MAIG.Drawer.Result.health": "Zdrowie {from} → {to}",
+  "MAIG.Drawer.Result.resolve": "Determinacja {from} → {to}",
+  "MAIG.Drawer.Result.reordered": "Talenty w kolejności propozycji (te same id): {list}."
 }

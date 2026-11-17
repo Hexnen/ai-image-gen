@@ -173,6 +173,58 @@ export function budgetRows(budget, L = (k) => k) {
   return rows;
 }
 
+/** Talent role key ("hero" | "occupation" | "extra", reader.mjs TALENT_ROLES) -> localized label; unknown keys as they are. */
+export function roleLabel(role, L = (k2) => k2) {
+  return ["hero", "occupation", "extra"].includes(role) ? L(`MAIG.Drawer.Role.${role}`) : String(role ?? "?");
+}
+
+/**
+ * Apply confirmation list (pack.apply concise `confirm`: [{ action: "remove"|"swap"|"reorder", name, from?, to? }]) -> lines for
+ * the dialog. "reorder" (W5-A-3) = a kept talent the replace re-creates into another role: "Quick Wits: hero -> occupation".
+ */
+export function confirmItems(confirm, L = (k2) => k2) {
+  return (confirm ?? []).filter(Boolean).map((c) => {
+    const name = String(c.name ?? "?");
+    if (c.action === "reorder") return L("MAIG.Drawer.Confirm.reorder", { name, from: roleLabel(c.from, L), to: roleLabel(c.to, L) });
+    return L(`MAIG.Drawer.Confirm.${c.action === "swap" ? "swap" : "remove"}`, { name });
+  });
+}
+
+/**
+ * Plan talent re-orders (writer plan `reorders` [{ id|itemId, opId, name, from, to, roleChange }], W5-A-3: a replace writes the
+ * proposal's talent order by re-creating talents with their ids) -> card rows { name, text, roleChange }.
+ * A kept talent changing role, a kept one that keeps its role, a new talent placed in the order.
+ */
+export function reorderRows(reorders, L = (k2) => k2) {
+  return (reorders ?? []).filter(Boolean).map((r) => {
+    const name = String(r.name ?? "?");
+    const isNew = !(r.id ?? r.itemId) && !!r.opId;
+    const text = r.roleChange || (r.from && r.to && r.from !== r.to)
+      ? L("MAIG.Drawer.Card.reorderChange", { name, from: roleLabel(r.from, L), to: roleLabel(r.to, L) })
+      : isNew || !r.from ? L("MAIG.Drawer.Card.reorderNew", { name, role: roleLabel(r.to, L) })
+        : L("MAIG.Drawer.Card.reorderSame", { name, role: roleLabel(r.to, L) });
+    return { name, text, roleChange: !!r.roleChange };
+  });
+}
+
+/**
+ * Lines under the Apply banner (pack.apply concise result): the build's Health / Resolve (`vitals`, W3-3 / W5-A-1), the talents
+ * re-created into the proposal's order (`reordered`, W5-A-3), then the warnings. At most `max` lines.
+ */
+export function applyResultLines(r, L = (k2) => k2, max = 6) {
+  const out = [];
+  const v = r?.vitals ?? {};
+  const parts = ["health", "resolve"].filter((k2) => v[k2]).map((k2) => L(`MAIG.Drawer.Result.${k2}`, { from: v[k2].from ?? "?", to: v[k2].to ?? "?" }));
+  if (parts.length) out.push(L("MAIG.Drawer.Result.vitals", { list: parts.join(", ") }));
+  const re = (r?.reordered ?? []).filter(Boolean);
+  if (re.length) {
+    const list = re.map((x) => (x.from && x.to && x.from !== x.to ? `${x.name} (${roleLabel(x.from, L)} → ${roleLabel(x.to, L)})` : String(x.name ?? x.itemId ?? "?"))).join(", ");
+    out.push(L("MAIG.Drawer.Result.reordered", { list }));
+  }
+  for (const w of r?.warnings ?? []) if (w?.message) out.push(String(w.message));
+  return out.slice(0, max);
+}
+
 /** Messages (validator issues) -> { text, hint, gm } with the GM-only `gm` text kept (it never goes to the model). */
 export function issueRows(list) {
   return (list ?? []).filter(Boolean).map((m) => ({ code: String(m.code ?? ""), text: String(m.message ?? m.code ?? ""), gm: m.gm ? String(m.gm) : "" }));

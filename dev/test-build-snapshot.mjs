@@ -494,13 +494,10 @@ await test("W2-3: validation warns talent.role.shift (ops: hero replaced; replac
   // ops: hero replaced AND the occupation talent re-added after it -> roles as intended, no shift on kept items
   const r3 = await V(a, ops({ op: "removeItem", opId: "r1", itemId: id("Quick Wits") }, { op: "removeItem", opId: "r2", itemId: id("Streetwise") }, { op: "addItem", opId: "a1", ref: ref("Steady Hands") }, { op: "addItem", opId: "a2", ref: ref("Streetwise") }));
   assert.deepEqual(shift(r3), []);
-  // replace: both talents kept, listed the other way round -> the sheet keeps its order, both listed roles differ
+  // replace: both talents kept, listed the other way round. W5-A-V1: the writer writes the proposal's order (W5-A-3), so no
+  // shift warning (applyConfirm "reorder": test-build-validate-invincible W5-A-V2)
   const rp = (talents) => ({ target: "this", mode: "replace", rationale: "t", proposal: { talents: talents.map((n) => ({ ref: ref(n) })) } });
-  const listed = shift(await V(a, rp(["Streetwise", "Quick Wits"])));
-  // (the path is the item, or its proposal.talents[i] entry once W2-2 maps replace paths back)
-  assert.deepEqual(listed.map((w) => w.message.match(/Talent "([^"]+)" is listed as the (\w+) talent but will be the (\w+)/).slice(1).join(">")), ["Quick Wits>occupation>hero", "Streetwise>hero>occupation"]);
-  assert.ok(listed.every((w, k) => [`items.${id(["Quick Wits", "Streetwise"][k])}`, `proposal.talents[${[1, 0][k]}]`].includes(w.path)), JSON.stringify(listed.map((w) => w.path)));
-  assert.ok(listed.every((w) => /is listed as the/.test(w.message)));
+  assert.deepEqual(shift(await V(a, rp(["Streetwise", "Quick Wits"]))), []);
   // replace keeping the order -> nothing
   assert.deepEqual(shift(await V(a, rp(["Quick Wits", "Streetwise"]))), []);
 });

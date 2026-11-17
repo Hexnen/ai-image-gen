@@ -166,6 +166,8 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
         budget: M.budgetRows(v?.budget, L),
         errors: M.issueRows(v?.errors), warnings: M.issueRows(v?.warnings ?? card.warnings), info: M.issueRows(v?.info),
         confirm: (v?.applyConfirm ?? []).map(String),
+        // W5-A-3: the talents the writer re-creates into the proposal's order (plan.reorders; only a replace)
+        reorders: M.reorderRows(pv?.reorders, L),
         previewError: pv?.error ?? null,
         rankName: ranks.find((r) => r.key === eff.rank)?.name ?? eff.rank,
         profileName: L(`MAIG.Drawer.Profile.${eff.profile}`)
@@ -211,13 +213,14 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
       let v = null, error = null;
       try { v = typeof pack?.validate === "function" ? await pack.validate(this.actor, card.input, { rank: eff.rank, profile: eff.profile }) : null; }
       catch (e) { error = String(e?.message ?? e); }
-      let expect = null;
+      let expect = null, reorders = [];
       try {
         const p = typeof pack?.plan === "function" ? await pack.plan(this.actor, card.input, { rank: eff.rank, profile: eff.profile }) : null;
         expect = p?.expect ?? null;
-      } catch { expect = null; }
+        reorders = Array.isArray(p?.reorders) ? p.reorders : [];
+      } catch { expect = null; reorders = []; }
       if (this.#previewKey !== key) return;
-      this.#preview = { key, v, expect, error, at: Date.now() };
+      this.#preview = { key, v, expect, reorders, error, at: Date.now() };
       this.#queue("card");
     })();
     this.#previewP = run;
@@ -504,7 +507,7 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
         const yes = await confirmDialog({
           title: L("MAIG.Drawer.Confirm.title"),
           lead: L("MAIG.Drawer.Confirm.lead", { name: this.actor.name }),
-          items: r.confirm.map((c) => L(`MAIG.Drawer.Confirm.${c.action === "swap" ? "swap" : "remove"}`, { name: c.name })),
+          items: M.confirmItems(r.confirm, L),
           yes: L("MAIG.Drawer.Confirm.yes"), no: L("MAIG.Drawer.Confirm.no")
         });
         if (!yes) { this.#setFlash("info", L("MAIG.Drawer.Flash.notApplied")); return; }
@@ -512,8 +515,8 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
       }
       if (r?.ok) {
         await s.markProposal(card.proposalId, "applied", { runId: r.runId });
-        const extra = (r.warnings ?? []).map((w) => w.message).filter(Boolean);
-        this.#setFlash("ok", r.message || L("MAIG.Drawer.Flash.applied"), extra.slice(0, 6));
+        // W5-A: the build's Health / Resolve and the re-ordered talents first, then the warnings
+        this.#setFlash("ok", r.message || L("MAIG.Drawer.Flash.applied"), M.applyResultLines(r, L, 6));
       } else {
         const why = r?.unsaved ? L("MAIG.Drawer.Flash.unsaved") : r?.stale ? L("MAIG.Drawer.Flash.stale") : r?.busy ? L("MAIG.Drawer.Flash.writerBusy") : "";
         this.#setFlash("error", [why, r?.message].filter(Boolean).join(" ") || L("MAIG.Drawer.Flash.applyFailed"), (r?.errors ?? []).map((e) => e.message).filter(Boolean).slice(0, 6));
@@ -576,7 +579,7 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 }
 
-/** Foundry confirm dialog with a list (remove / swap items, drift). -> true | false */
+/** Foundry confirm dialog with a list (remove / swap / reorder items, drift). -> true | false */
 async function confirmDialog({ title, lead, items = [], yes, no }) {
   const esc = foundry.utils.escapeHTML;
   const content = `<div class="maig-confirm"><p>${esc(lead)}</p>${items.length ? `<ul>${items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : ""}</div>`;
