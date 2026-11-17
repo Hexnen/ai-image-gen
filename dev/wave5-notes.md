@@ -176,3 +176,25 @@ Pliki: `scripts/systems/invincible/validate.mjs`, `scripts/build/drawer-model.mj
 - Bez toru: render szuflady (sekcja „Kolejność talentów”, dialog z `reorder`, linie banera) nie oglądany na żywo; tylko model w node i `node --check`.
 - Prawdziwy model: czy po V1 runda poprawki przestaje się włączać w replace (powinna: oba fałszywe ostrzeżenia znikają).
 - Zgodność walidatora z writerem sprawdzona na atrapie (`hero()` + `convW5`) i fiksturze `typicalHero`; nie na prawdziwym katalogu (np. talenty z notatką / odmiany Knowledgeable dopasowane przez `srcItems`).
+
+## W5-D: szuflada przylega do arkusza (bez szczeliny)
+
+### Przyczyna
+- Nie cień ani ramka arkusza: `sheet.getBoundingClientRect()` jest dokładny, `dockGeometry` daje `left = rect.right` (szczelina w geometrii 0 px).
+- Szczelina była w CSS: siatka szuflady ma kolumnę zakładki 32 px (`DOCK.tab`), a powierzchnia panelu (`::before`) i wszystkie części poza zakładką stały tylko w kolumnie 2. Pod zakładką (wysoka ~100 px, z marginesem 14 px) kolumna 1 była przezroczysta, więc między arkuszem a panelem prześwitywała mapa (zrzut 05).
+
+### Poprawka (tylko `styles/builder-drawer.css`, bez zmian w JS/modelu/hbs)
+- Otwarta szuflada: `::before` na `grid-column: 1 / -1`, obszary `log`/`card`/`composer` na całą szerokość (`"log log"` itd., też dla `flip`).
+- Otwarta zakładka staje się krawędzią panelu obok nagłówka: `align-self: stretch`, bez marginesu, ramki, zaokrąglenia i cienia (niebieski pasek przy niebieskim pasku tytułu); hover = `--maig-accent-hover`.
+- Zwinięta zakładka (sama, z kropką propozycji) bez zmian: i tak stała przy krawędzi arkusza.
+
+### Próba na żywo (tor 8, kod z żywego folderu, świat przywrócony, slot oddany; bez relay, bez klucza)
+- Viewport 1400x850, aktor `ZZ-AIGEN-flush` (usunięty), pomiar `getBoundingClientRect`:
+  - prawa strona: arkusz right 820, szuflada left 820, zakładka left 820, log left 820 -> szczelina 0 px (`dev/screenshots/09-flush-right.png`);
+  - lewa strona (`flip`): arkusz left 600, szuflada right 600, zakładka right 600, log right 600 -> 0 px (`10-flush-left.png`);
+  - po przesunięciu i zmianie rozmiaru (`setPosition`) 0 px; minimalizacja chowa szufladę, przywrócenie: 0 px;
+  - wąsko (po obu stronach po 330 px): panel min 300 + zakładka 32 = 332 px, przyciśnięty do ekranu -> nachodzi 2 px na arkusz (bez szczeliny; zachowanie `dockGeometry` bez zmian); arkusz przy prawej krawędzi -> `flip`, szczelina 0 px.
+- Testy: wszystkie `dev/test-*.mjs` zielone (drawer-model 13).
+
+### Niezweryfikowane
+- Jasny motyw (świat toru ma ciemny); przeciąganie rogu arkusza myszą (sprawdzone `setPosition`, ten sam obserwator).

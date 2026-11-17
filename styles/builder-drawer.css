@@ -78,6 +78,11 @@ body.theme-dark .maig-drawer, .maig-drawer.theme-dark {
   box-shadow: 4px 6px 18px rgba(0, 0, 0, 0.35);
 }
 .maig-drawer.flip::before { grid-column: 1; border: 1px solid var(--maig-line); border-right: 0; border-radius: var(--maig-radius) 0 0 var(--maig-radius); box-shadow: -4px 6px 18px rgba(0, 0, 0, 0.35); }
+/* W5-D flush dock: open, the panel surface spans the tab column too, so it starts right at the sheet edge (no strip of
+   map between them); the tab becomes the panel's edge strip beside the head, and log/card/composer use the full width. */
+.maig-drawer.open { grid-template-areas: "tab head" "log log" "card card" "composer composer"; }
+.maig-drawer.open.flip { grid-template-areas: "head tab" "log log" "card card" "composer composer"; }
+.maig-drawer.open::before, .maig-drawer.open.flip::before { grid-column: 1 / -1; }
 .maig-drawer:not(.open)::before, .maig-drawer:not(.open) > :not(.maig-tab) { display: none; }
 .maig-drawer:not(.open) { grid-template-rows: auto; }
 
@@ -110,6 +115,8 @@ body.theme-dark .maig-drawer, .maig-drawer.theme-dark {
 .maig-drawer.flip .maig-tab { border: 1px solid var(--maig-line); border-right: 0; border-radius: var(--maig-radius) 0 0 var(--maig-radius); box-shadow: -4px 2px 8px rgba(0, 0, 0, 0.3); }
 .maig-drawer .maig-tab:hover { background: var(--maig-surface-2); }
 .maig-drawer.open .maig-tab { background: var(--maig-accent); color: var(--maig-accent-ink); border-color: var(--maig-accent); }
+.maig-drawer.open .maig-tab, .maig-drawer.open.flip .maig-tab { align-self: stretch; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
+.maig-drawer.open .maig-tab:hover { background: var(--maig-accent-hover); }
 .maig-drawer .maig-tab i { font-size: 14px; }
 .maig-drawer .maig-tab-label { writing-mode: vertical-rl; text-orientation: mixed; }
 .maig-drawer .maig-tab-badge { width: 10px; height: 10px; border-radius: 50%; background: var(--maig-focus); border: 2px solid var(--maig-ink); }
