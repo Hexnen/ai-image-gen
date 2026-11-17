@@ -141,3 +141,51 @@ Commit `36f0ed5` (agent W2-1/2/5) objął wczesne hunki W2-3 w `validate.mjs` be
 - `test-catalog-invincible` 20 (+1: `archetypeFacts` z refami, poziomem dokumentu podzielonego, boostem, notatką, brakującą mocą; get_entries bez plus-ultra; zmienione: get_entries bez `slotNote`/`levels` dla niedzielonych, automatyzacje jako nazwy; P1-F: linia zawodu z Resources/talentami, `-` bez danych, get_entries zawodu).
 - Wszystkie `dev/test-*.mjs` zielone; `sync.mjs --check` OK.
 - Niesprawdzone: zachowanie prawdziwego modelu z `role=` i nowymi polami (powtórka próby na sucho, W2-13); `count_tokens` (T8); szuflada T7.
+
+## W2-8: jeden przebieg po tekstach prefiksu (D-E, D-M/D-N, D-O, D-P tekstem)
+
+Data: 2026-11-17. Pliki: `scripts/build/harness-prompt.mjs` (system[0], wersja 3), `rules-digest.mjs` (`DIGEST_VERSION` 3), `tools.mjs` (opisy `get_entries`, `search_catalog`, `read_rules`), `proposal.mjs` (`PROPOSAL_GUIDE`), `validate.mjs` (`TOOL_DESC.submit_proposal`, `toolResult` bez `budget.note`), `pack.mjs` (re-eksport `RANK_NAMES`); testy `dev/test-prompt-texts.mjs`, `dev/test-harness.mjs`. Wendor bez zmian (`sync.mjs --check` OK). Bez toru, bez sieci.
+
+### Co zmienione (listy „teksty do zmiany w W2-8” z sekcji W2-7, W2-1/2/5, W2-3/4)
+- Legenda budżetu (skrót): punkty liczą 2 za każdy niewykorzystany slot rangi (pusta karta startuje wysoko); perOp: `points`/`slots` = zmiana tej op, `spentAfter` = suma atrybutów po niej, `label` = co kosztuje albo opłaca. Usunięte „running changes in list order”.
+- Hard Times (skrót): bez liczby z książki; to samo co komunikat dla modelu („lowers ... by 1 through its effect”). Test sprawdza zgodność i brak liczby.
+- Talenty (skrót): rola widoczna jako `role=hero|occupation|extra`, kolejność 1. bohater, 2. zawód, reszta extra; nowy talent zawsze na końcu, zamiana przesuwa role (`talent.role.shift`; jak zachować role mówi podpowiedź ostrzeżenia, nie skrót).
+- Zawód (skrót): linia indeksu podaje Resources i talenty zawodu, czytanie zbędne. Archetyp: opis `get_entries` (rola, atrybuty, moce z refami).
+- `get_entries`: bez notatki slot/koszt, `levels` tylko dla mocy dzielonych (inaczej `maxLevel`), nazwy automatyzacji, archetyp/zawód z danymi strukturalnymi. Usunięte „Read an entry before you pick it” (reguła jest raz, w system[0]).
+- `search_catalog`: pusty wynik `forPower` ma `note` z powodem.
+- Znacznik propozycji (system[0]): `<proposal id="..." status="..."/>`: pending = MG nie zdecydował (nie wysyłaj ponownie, zmieniaj tylko na prośbę); applied = zapisane, dalej ops; discarded = nie ponawiaj bez prośby; brak znacznika = bez zmian.
+- Replace (`PROPOSAL_GUIDE`): błędy mają ścieżki `proposal.*` i wpis (`entry`), `opId` = id z `summary`.
+- Moc dzielona: „ref mocy z indeksu + level, albo ref poziomu” (skrót i przewodnik). Limit mocy tylko Basic opłaca boost (skrót i przewodnik). `name` = imię bohatera (przewodnik; skrót „hero name (name)”).
+- D-E (system[0]): linia, której `sheet_update` nie podaje (także VALID), jest bez zmian.
+- D-O (system[0]): mało wywołań; wpisy czytaj jednym wywołaniem i nigdy dwa razy w rozmowie; czytaj główne wybory, których efekt decyduje o budowie (moce, archetyp, z którego budujesz); inne wpisy tylko, gdy podsumowanie nie rozstrzyga.
+- D-P tekstem (D-5 otwarte, auto-koniec tury NIE zrobiony): rationale = podsumowanie dla MG (co, dlaczego, główna alternatywa); po udanym submit jedno krótkie zdanie i stop (system[0] i opis `submit_proposal`). Reguła D-6 nazywa alternatywę „w rationale”.
+- D-M/D-N/D-12 tymczasowo (D-7): odpowiedzi, rationale i każdy tekst swobodny (opisy, słowa osobowości, notatki) w języku wiadomości MG; nazwy przedmiotów i katalogu bez zmian; `texts.occupation` nadal angielska nazwa z katalogu. Przewodnik: notatka i słowa osobowości „in the GM's language”. Sekcja „## Names” skrótu usunięta (reguła raz, w system[0]).
+
+### Rozmiar (znaki / tokeny znaki/3,5, `dev/test-prompt-texts.mjs`)
+| Blok | Przed | Po |
+|---|---|---|
+| tools (6, JSON) | 19 397 / 5 542 | 19 314 / 5 519 |
+| system[0] | 2 772 / 792 | 3 262 / 932 |
+| system[1] skrót | 5 846 / 1 671 | 5 799 / 1 657 |
+| razem bez indeksu | 28 015 / 8 005 | 28 375 / 8 108 (+360 zn., ~+103 tok) |
+
+check+submit: 15 477 -> 15 506 znaków (próg testu 16 000). Indeks (system[2]) niezmieniony przez W2-8: 53 232 znaków (pomiar W2-4, tor 8), więc cały prefiks ~81,2k -> ~81,6k znaków (~23,2k -> ~23,3k tok). Po stronie historii: każdy wynik check/submit bohatera krótszy o `budget.note` (196 znaków, ~56 tok).
+
+### Wybory (zachowanie tymczasowe)
+| # | Pytanie | Zachowanie tymczasowe |
+|---|---------|------------------------|
+| W8-1 | `budget.note` (W5-2) | Legenda w skrócie (prefiks, cache); `toolResult` (kopia dla modelu) usuwa `note`, wynik MG (`pack.validate`, podgląd) ją zachowuje. |
+| W8-2 | Zakres „czytaj przed wyborem” (D-O) | Moce i archetyp, z którego się buduje; reszta tylko, gdy podsumowanie nie wystarcza; zawód nigdy (indeks). Jedno wywołanie, nigdy dwa razy. |
+| W8-3 | D-P bez D-5 | Tylko tekst: jedno zdanie i stop. Ostatnie żądanie (tekst po submit) NADAL jest wysyłane; tekst skraca tylko jego wyjście. Wycięcie żądania = D-5 (kod harnessu), nie zrobione. |
+| W8-4 | Język notatek i słów osobowości (D-7, D-12) | Język wiadomości MG; notatka trafia w nawias nazwy przedmiotu, sama nazwa z katalogu zostaje angielska. |
+| W8-5 | Znacznik w system[0] | Opisany literalnie z wypełniaczami `id="..." status="..."`. Test `test-harness` (W2-7) zawężony: w system[] nie może być PRAWDZIWEGO znacznika (id inne niż `...`); kontrola dodatnia regexu sprawdzona ręcznie. |
+| W8-6 | `RANK_NAMES` w dwóch plikach | Jedna kopia w `rules-digest.mjs` (eksport), `pack.mjs` ją re-eksportuje. Bajty skrótu z tego powodu bez zmian. |
+| W8-7 | Co usunięte jako zbędne | Zdanie skrótu „Using fewer slots ... gives frees 2 ...” (błąd gramatyczny, powtarza wzór i legendę); „Personality = exactly 2 words” złożone w listę wymaganych pól; w opisie submit zdania o trybach ops/replace i „Nothing is written until Apply” (są w przewodniku i system[0]); powtórzone zdanie o indeksie w `search_catalog` skrócone; „Read an entry before you pick it” z `get_entries`. |
+| W8-8 | Reguła rangi w skrócie i w system[0] | Zostaje w obu (działała w R2, D-11; oszczędność ~60 znaków nie warta ryzyka). |
+| W8-9 | Komunikaty poza prefiksem (np. podpowiedź `talent.hero.missing`) | Bez zmian (nadal prawdziwe; nie są w prefiksie). |
+
+### Testy
+- `test-prompt-texts` 15 (+4: system[0] W2-8, narzędzia + przewodnik, skrót, `toolResult` bez `budget.note`); zmienione asercje starych sformułowań (opis zawodu w `get_entries`, pusta lista `forPower`, ref mocy dzielonej w przewodniku i skrócie, kolejność talentów).
+- `test-harness` 31 (asercja „no marker in system[]” zawężona do prawdziwego znacznika, W8-5).
+- Reszta zielona: ops 34, snapshot 32, validate 41, catalog 20, dry-transport 12, enhance 22, migrate-id 18, packs 23, transport 27, vendor-sync 22 + load 9; `sync.mjs --check` OK.
+- NIE sprawdzone: zachowanie prawdziwego modelu (czy czyta mniej, nie powtarza propozycji przy pending, pisze notatki/słowa w języku MG, kończy jednym zdaniem): powtórka próby na sucho (runda 3); `count_tokens` (T8).
