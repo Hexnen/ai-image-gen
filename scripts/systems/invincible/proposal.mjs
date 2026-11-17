@@ -794,7 +794,8 @@ export function summarize(normalized, projection, budget) {
     if (!info) continue;
     const c = budget?.perOp?.find((x) => x.opId === op.opId);
     if (info.kind === "actor") {
-      let s = `${op.opId}: actor ${info.changed.map((ch) => ch.path.replace(/^system\.|\.value$/g, "").replace(/^attributes\./, "")).join(", ")}`;
+      // W2-5 (D-Q): reputation / resources with their value (the model checks them against the rank / occupation)
+      let s = `${op.opId}: actor ${info.changed.map((ch) => { const f = ch.path.replace(/^system\.|\.value$/g, "").replace(/^attributes\./, ""); return f === "reputation" || f === "resources" ? `${f} ${ch.to}` : f; }).join(", ")}`;
       if (c?.label && (c.points || c.slots)) s += ` cost: ${c.label}`;
       lines.push(s);
     } else {

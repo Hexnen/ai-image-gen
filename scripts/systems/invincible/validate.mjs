@@ -12,7 +12,9 @@
 //
 // Result (also the tool result the model sees, minus the GM-only fields):
 //   { ok, layer, errors:[{ code, path?, opId?, message, hint, suggest? }], warnings:[...], info:[...], autoFixed:[...],
-//     budget: { before, after, perOp:[{ opId, points, slots, spent }] } | { kind:"npc"|"item", note } }
+//     budget: { before, after, note, perOp:[{ opId, points, slots, label?, spentAfter? }] } | { kind:"npc"|"item", note } }
+//   (W2-5: perOp points/slots = the change that op makes; spentAfter = the attribute sum after an op that changed it.)
+// Issues may carry `gm` (GM-only text, e.g. the book's Hard Times number); toolResult drops it from the model's copy.
 // GM-only extras of validate(): normalized, ops (the final op list, replace converted), opInfo, expect, selection, summary.
 //
 // Profiles (spec 7.5.3, O23): `creation` = the projection must pass rules.validate completely; `in-play` = "no new errors"
@@ -90,9 +92,11 @@ export const MESSAGES = Object.freeze({
   "talent.hero.missing": () => ({ message: "The hero talent is missing.", hint: "Add a talent (the first talent on the sheet is the hero talent)." }),
   "talent.duplicate": (p) => ({ message: `Talent "${p.name}" is taken more often than allowed.`, hint: "Most talents only once (Windfall any number, Durable/Determined up to 5)." }),
   "drawback.duplicate": (p) => ({ message: `Drawback "${p.name}" is taken twice.`, hint: "Each drawback once (Hard Times may repeat)." }),
+  // W2-5 / D-3 provisional: the model sees only the stored and effective values (the -1 the system applies); the book's -2 is a
+  // GM-only remark (`gm`), so the model is not tempted to write the lowered number
   "drawback.hardTimes": (p) => (Number.isInteger(p.stored)
-    ? { message: `Hard Times: Resources stays stored at ${p.stored} (the occupation's value); the pack effect applies -1 per Hard Times, so the sheet shows ${p.effective} (the book text says -2 each: ${p.book}).`, hint: "Nothing to fix: write resources = the occupation's value, never the lowered number." }
-    : { message: "Hard Times lowers Resources (the pack effect applies -1).", hint: "Nothing to fix." }),
+    ? { message: `Hard Times: Resources stays stored at ${p.stored} (the occupation's value); each Hard Times lowers it by 1 through its effect, so the sheet shows ${p.effective}.`, hint: "Nothing to fix: write resources = the occupation's value, never the lowered number.", gm: `The book text says -2 per Hard Times (Resources would be ${p.book}); the builder follows the system's effect (-1), owner decision D-3.` }
+    : { message: "Hard Times lowers Resources by 1 through its effect.", hint: "Nothing to fix.", gm: "The book text says -2 per Hard Times; the builder follows the system's effect (-1), owner decision D-3." }),
   "drawback.note.missing": (p) => ({ message: `Drawback "${p.name}" needs a choice (${p.kind === "source" ? "a power source" : "defined when taken"}) in its note.`, hint: "Add note: \"...\" (shown in brackets in the name)." }),
   "attr.invalid": (p) => ({ message: `Attribute ${A(p.attr)} is not a whole number.`, hint: "Attributes are integers." }),
   "attr.low": (p) => ({ message: `Attribute ${A(p.attr)} is below ${p.min}.`, hint: `Every attribute is at least ${p.min}.` }),
@@ -154,6 +158,7 @@ export function describe(issue, ctx = {}) {
   out.message = issue.message ?? t.message;
   out.hint = issue.hint ?? t.hint;
   if (issue.suggest) out.suggest = issue.suggest;
+  if (t.gm) out.gm = t.gm;   // GM-only (dropped from the model's tool result)
   return out;
 }
 
@@ -452,7 +457,7 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
   // budget after + per-op cost (spec 7.5.4)
   if (isHero) {
     const afterB = budgetOf(after.state);
-    res.budget = { before, after: afterB, perOp: perOpCost(basePlain, ops, catalog, rank, before) };
+    res.budget = { before, after: afterB, note: BUDGET_NOTE, perOp: perOpCost(basePlain, ops, catalog, rank, before) };
     if (profile === "in-play" && (afterB.points !== before.points || afterB.spent !== before.spent)) {
       acc.info.push({ code: "budget.delta", path: "attrs", params: { delta: (afterB.points - afterB.spent) - (before.points - before.spent), before: before.points, after: afterB.points, spentBefore: before.spent, spentAfter: afterB.spent } });
     }
@@ -523,7 +528,7 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
   }
 
   res.expect = expectFor(doc ?? asDoc(basePlain), ops, proj);
-  res.summary = [...summarize({ ops }, proj, res.budget), ...(isHero && res.budget.after ? [`budget ${res.budget.after.points} spent ${res.budget.after.spent} slots ${res.budget.after.slots}/${res.budget.after.rankPowers}`] : [])].join("\n");
+  res.summary = [...summarize({ ops }, proj, res.budget), ...keptLine(conv, ops), ...(isHero && res.budget.after ? [`budget ${res.budget.after.points} spent ${res.budget.after.spent} slots ${res.budget.after.slots}/${res.budget.after.rankPowers}`] : [])].join("\n");
   return finish("L4", acc, { rank });
 }
 /** W2-3 role shifts -> [{ itemId, name, from, to, listed }] (see reader.mjs talentRoles) */
@@ -541,6 +546,13 @@ function talentShifts(basePlain, after, P, catalog) {
     if (from !== to) out.push({ itemId: String(t.id), name: String(t.name ?? ""), from, to, listed: true });
   });
   return out;
+}
+/** W2-5 (D-Q): a replace whose reputation / resources already match the sheet makes no op for them; say they are set */
+function keptLine(conv, ops) {
+  const k = Object.entries(conv?.kept ?? {});
+  if (!k.length) return [];
+  const act = ops.find((o) => o.op === "updateActor")?.opId;
+  return [`${act ?? "actor"}: kept ${k.map(([f, v]) => `${f} ${v}`).join(", ")} (already on the sheet)`];
 }
 const opIdOf = (proj, info) => Object.entries(proj.opInfo).find(([, v]) => v === info)?.[0];
 const planIssue = (e) => (typeof e === "string" ? { code: "plan.error", message: e, hint: "Check the sheet and resubmit." } : { code: String(e?.code ?? "plan.error"), path: e?.path, opId: e?.opId, params: e?.params ?? {}, ...(MESSAGES[e?.code] ? {} : { message: String(e?.message ?? e?.code ?? "plan error"), hint: String(e?.hint ?? "Check the sheet and resubmit.") }) });
@@ -610,6 +622,8 @@ function opBlame(ops, proj) {
   };
 }
 
+/** W2-5: what `before` means (the dry run read 40 points on an empty Global sheet as an error) */
+export const BUDGET_NOTE = "points = attribute points available; every unused rank slot adds 2 (an empty sheet starts high, each slot then costs 2). perOp points/slots = that op's change; spentAfter = attribute sum after it.";
 /**
  * per-op cost (spec 7.5.4, P1-C): cumulative projections, each op's delta of budget points, slots and spent points, plus a
  * readable `label`. Evaluation order: actor-field ops FIRST, then the rest in list order (the occupation decides which talent
@@ -624,7 +638,7 @@ export function perOpCost(basePlain, ops, catalog, rank, before) {
   for (let k = 0; k < order.length; k++) {
     const p = project(null, order.slice(0, k + 1), { catalog, plain: basePlain });
     const b = budgetOf(stateOf(p.actor, rank));
-    byOp.set(order[k].opId, { opId: order[k].opId, points: b.points - prev.points, slots: b.slots - prev.slots, spent: b.spent - prev.spent, slotsAfter: b.slots, rankPowers: b.rankPowers });
+    byOp.set(order[k].opId, { opId: order[k].opId, points: b.points - prev.points, slots: b.slots - prev.slots, spentBefore: prev.spent, spentAfter: b.spent, slotsAfter: b.slots, rankPowers: b.rankPowers });
     prev = b;
   }
   const fin = project(null, ops, { catalog, plain: basePlain });
@@ -632,20 +646,38 @@ export function perOpCost(basePlain, ops, catalog, rank, before) {
   const ctx = {
     talents: fin.actor.items.filter((x) => x.type === "talent").map((x) => x._id),
     sources: fin.actor.items.filter((x) => x.type === "powerSource").map((x) => x._id),
-    occupation: !!st.occupation
+    occupation: !!st.occupation,
+    // W2-5: a limit's power and what it pays for (`grants` as given, else the reader's heuristic: level above Basic, else boost)
+    limitOf: (itemId) => {
+      const all = [...fin.actor.items, ...basePlain.items];
+      const l = all.find((x) => x._id === itemId);
+      const pw = l ? all.find((x) => x._id === l.system?.power) : null;
+      if (!pw) return null;
+      return { power: baseName(pw.name), grants: l.system?._grants ?? (LEVEL_WORDS.indexOf(powerLevel(pw.system)) > 0 ? "level" : "boost") };
+    }
   };
   return ops.map((op) => {
-    const { slotsAfter, rankPowers, ...c } = byOp.get(op.opId);
-    const label = costLabel({ ...c, slotsAfter, rankPowers }, fin.opInfo[op.opId], ctx);
-    return label ? { ...c, label } : c;
+    const { slotsAfter, rankPowers, spentBefore, spentAfter, ...c } = byOp.get(op.opId);
+    const label = costLabel({ ...c, slotsAfter, rankPowers, spentBefore, spentAfter }, fin.opInfo[op.opId], ctx);
+    const out = label ? { ...c, label } : { ...c };
+    if (spentAfter !== spentBefore) out.spentAfter = spentAfter;   // W2-5: absolute, only where the op changed it
+    return out;
   });
 }
 const signed = (n, unit) => `${n > 0 ? "+" : ""}${n} ${unit}${Math.abs(n) === 1 ? "" : "s"}`;
 /** -> "hero talent (free)", "occupation talent (free)", "extra talent -1 pt", "drawback +1 pt", "extra power source -1 pt",
-    "+1 slot (slots 3/4) -2 pts", "-1 slot (slots 2/4) +2 pts", "+1 pt" ... ; "" when the op costs nothing and has no role */
+    "+1 slot (slots 3/4) -2 pts", "pays for a boost of \"X\" (no slot for it; slots 2/4) +2 pts", "attributes spent 12 -> 34",
+    "+1 pt" ... ; "" when the op costs nothing and has no role */
 export function costLabel(c, info, ctx) {
   if (!c) return "";
   const pts = c.points ? signed(c.points, "pt") : "";
+  // W2-5: an attribute change says the sum it leaves (the old delta "spent 22" read like a total)
+  const spent = Number.isInteger(c.spentAfter) && c.spentAfter !== c.spentBefore ? `attributes spent ${c.spentBefore} -> ${c.spentAfter}` : "";
+  if (info?.kind === "actor" && spent) return [spent, c.slots ? `${signed(c.slots, "slot")} (slots ${c.slotsAfter}/${c.rankPowers})` : "", pts].filter(Boolean).join(", ");
+  // W2-5: a limit pays for one level or boost of its power: say so instead of "-1 slot", which read like a slot refund
+  const lim = info?.type === "limit" && c.slots && ctx.limitOf ? ctx.limitOf(info.itemId) : null;
+  if (lim && info.kind === "add" && c.slots < 0) return `pays for a ${lim.grants} of "${lim.power}" (no slot for it; slots ${c.slotsAfter}/${c.rankPowers})${pts ? ` ${pts}` : ""}`;
+  if (lim && info.kind === "remove" && c.slots > 0) return `limit gone: the ${lim.grants} of "${lim.power}" it paid for needs a slot again (slots ${c.slotsAfter}/${c.rankPowers})${pts ? ` ${pts}` : ""}`;
   const role = (name) => (c.points ? `${name} ${pts}` : `${name} (free)`);
   if (info?.kind === "add" && info.type === "talent" && !c.slots) {
     const i = ctx.talents.indexOf(info.itemId);
@@ -675,9 +707,11 @@ export function toolResult(name, r, doc) {
     out.proposalId = `prop-${hash(`${doc?.uuid ?? ""}|${stableJson(r.normalized)}`)}`;
     out.summary = r.summary ?? "";
   }
-  if (r.errors.length) out.errors = r.errors;
-  out.warnings = r.warnings;
-  if (r.info.length) out.info = r.info;
+  // GM-only remarks (`gm`, W2-5) never reach the model
+  const model = (list) => list.map((i) => { if (!i?.gm) return i; const { gm, ...rest } = i; return rest; });
+  if (r.errors.length) out.errors = model(r.errors);
+  out.warnings = model(r.warnings);
+  if (r.info.length) out.info = model(r.info);
   if (r.autoFixed.length) out.autoFixed = r.autoFixed;
   out.budget = r.budget;
   if (!r.ok) out.layer = r.layer;

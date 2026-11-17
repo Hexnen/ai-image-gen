@@ -103,7 +103,7 @@ await test("add a power in creation: attr.over with a reconciled suggestion; ado
   assert.match(e.message, /2 attribute points too many/);
   assert.ok(e.hint && e.suggest?.updateActor?.attributes);
   assert.equal(r1.budget.after.points, 31);
-  assert.deepEqual(r1.budget.perOp, [{ opId: "p1", points: -2, slots: 1, spent: 0, label: "+1 slot (slots 5/4, over the rank) -2 pts" }]);
+  assert.deepEqual(r1.budget.perOp, [{ opId: "p1", points: -2, slots: 1, label: "+1 slot (slots 5/4, over the rank) -2 pts" }]);   // W2-5: no spent delta
   const sug = e.suggest.updateActor.attributes;
   assert.equal(rules.attrSum(sug), 31);
   const r2 = await V(a, ops(add, { op: "updateActor", opId: "a1", set: { attributes: sug } }));
@@ -806,8 +806,50 @@ await test("P1-F: reputation defaults to the rank's value in a creation replace 
 
 await test("P1-F: Hard Times info names the stored and the effective Resources (D-3 provisional)", async () => {
   const d = describe({ code: "drawback.hardTimes", params: { n: 1, stored: 3, effective: 2, book: 1 } });
-  assert.match(d.message, /stored at 3/); assert.match(d.message, /sheet shows 2/); assert.match(d.message, /-2 each: 1/);
-  assert.equal(describe({ code: "drawback.hardTimes", params: {} }).message, "Hard Times lowers Resources (the pack effect applies -1).");
+  assert.match(d.message, /stored at 3/); assert.match(d.message, /sheet shows 2/);
+  // W2-5: the book's -2 is a GM-only remark (`gm`), never in the model's message / hint
+  assert.doesNotMatch(d.message + d.hint, /-2|book/); assert.match(d.gm, /-2 per Hard Times \(Resources would be 1\)/);
+  const d0 = describe({ code: "drawback.hardTimes", params: {} });
+  assert.equal(d0.message, "Hard Times lowers Resources by 1 through its effect."); assert.match(d0.gm, /-2/);
+});
+
+await test("W2-5: Hard Times in a submit result: the model's copy has no book number, the GM's validate result keeps it", async () => {
+  const R = rows(); R.drawbacks.push({ _id: "drwHardTimes0000", name: "Hard Times", system: { description: "<p>Invented placeholder drawback.</p>" } });
+  const catHT = await buildCatalog(fixtureSource(R));
+  const P = fullBuild({ drawbacks: [{ ref: catHT.findByName("drawback", "Hard Times").ref }] });
+  const gm = await validateProposal(blankHero(), rep(P), { catalog: catHT, lookup, itemCheck: () => null, rank: "global" });
+  const ht = gm.info.find((i) => i.code === "drawback.hardTimes") ?? assert.fail(JSON.stringify(gm.info));
+  assert.match(ht.gm, /-2 per Hard Times/);
+  const model = await validateGroup(() => null, { catalog: catHT, lookup, itemCheck: () => null }).runProposalTool("submit_proposal", rep(P), { doc: blankHero(), options: { rank: "global" } });
+  const mt = model.info.find((i) => i.code === "drawback.hardTimes");
+  assert.ok(mt && !("gm" in mt)); assert.doesNotMatch(JSON.stringify(model), /-2 per|book/);
+});
+
+await test("W2-5: readable budget: budget.note, spentAfter instead of the spent delta, limit pays for X, kept reputation/resources", async () => {
+  const r = await VO(blankHero(), rep(fullBuild()), { rank: "global" });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.match(r.budget.note, /every unused rank slot adds 2/);
+  assert.ok(r.budget.perOp.every((c) => !("spent" in c)), "no spent delta any more");
+  const act = r.budget.perOp.find((c) => c.opId === "act1");
+  assert.equal(act.spentAfter, 33); assert.equal(act.label, `attributes spent ${r.budget.before.spent} -> 33`);
+  assert.ok(r.budget.perOp.filter((c) => c.opId !== "act1").every((c) => !("spentAfter" in c)));
+  const lim = r.budget.perOp.find((c) => r.opInfo[c.opId].type === "limit");
+  assert.equal(lim.label, 'pays for a level of "Spark Bolt" (no slot for it; slots 3/4) +2 pts');
+  assert.equal(r.budget.perOp.reduce((s, c) => s + c.points, 0), r.budget.after.points - r.budget.before.points);
+  assert.match(r.summary, /act1: actor .*resources 3, reputation 2/);
+  assert.match(r.summary, /cost: pays for a level of "Spark Bolt"/);
+  // a rebuild of the same hero: reputation / resources already on the sheet make no op, the summary says they are kept
+  const th = typicalHero();
+  const same = await VO(th, rep(fullBuild({ reputation: th._source.system.reputation, resources: th._source.system.resources })), { rank: "global", profile: "in-play" });
+  assert.ok(same.summary.includes(`act1: kept resources ${th._source.system.resources}, reputation ${th._source.system.reputation} (already on the sheet)`), same.summary);
+  // removing a limit: its level needs a slot again
+  const rm = await V(th, ops({ op: "removeItem", opId: "r", itemId: idOf(th, "Needs Charging") }), { profile: "in-play", rank: "global" });
+  assert.equal(rm.budget.perOp[0].label, 'limit gone: the level of "Spark Bolt" it paid for needs a slot again (slots 5/4) -2 pts');
+  // a limit added in ops mode with grants boost on a Basic power
+  const b = blankHero();
+  const lb = await V(b, ops({ op: "addItem", opId: "s", ref: ref("powerSource", "Strange Meteor") }, { op: "addItem", opId: "p", ref: ref("power", "Glide Wings"), sourceOpId: "s" },
+    { op: "addItem", opId: "bo", ref: ref("boost", "Silent Flight", "Glide Wings"), powerOpId: "p" }, { op: "addItem", opId: "li", ref: ref("limit", "Loud", "Glide Wings"), powerOpId: "p", grants: "boost" }), { profile: "in-play", rank: "global" });
+  assert.equal(lb.budget.perOp.find((c) => c.opId === "li").label, 'pays for a boost of "Glide Wings" (no slot for it; slots 1/4) +2 pts');
 });
 
 await test("P1-F: creation + replace shows warnings the blank actor already had (npc.name.blank hint reaches the model)", async () => {
