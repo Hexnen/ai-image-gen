@@ -43,3 +43,44 @@ Data: 2026-11-17.
 - `test-build-ops` 34 (+2: zwięzły wynik apply z `needsConfirm`/`confirm`, `ops.outcome`, budżet, verbose, wynik bez walidatora; `ranks()` = tabela wendorowana + nazwy zgodne ze skrótem).
 - `test-catalog-invincible` +1 (PA1: brak boostów / nieznana moc / filtr słów / ref mocy).
 - Pozostałe `dev/test-*.mjs` zielone poza `test-build-snapshot` (2 porażki w kodzie W2-3 w toku: kolejność talentów i linia talentu; nie moje pliki).
+
+## W2-1, W2-2, W2-5: moc dzielona, ścieżki błędów replace, czytelny budżet (D-A, D-B, D-F, D-K, D-Q)
+
+Data: 2026-11-17. Pliki: `proposal.mjs`, `validate.mjs`, testy w `dev/test-build-validate-invincible.mjs`; spec 7.5 pkt 4 (zmiana semantyki kosztu per op). `catalog.mjs` i `writer.mjs` bez zmian (niepotrzebne). Wendor bez zmian (`sync.mjs --check` OK).
+
+### Defekty sprawdzone przed zmianą
+- D-A: potwierdzone w kodzie (`catalog.mjs:359` daje dokumentowi bazowemu `levelOf` = "basic"; `buildAdded` zgłaszał `ref.level.conflict`) i w próbie `dry2-allmight` (req 0003-0007: dwa błędy `ref.level.conflict` dla Major przez ref bazowy). Writer (`resolveRef`) przyjmował to od zawsze.
+- D-B: potwierdzone: ten sam wynik `dry2-allmight` miał `path: "ops[2].level", opId: "pw3"` dla propozycji replace.
+- D-F: potwierdzone w `dry2-spider` (`act1 spent 22` przy sumie 34), `dry2-nightcrawler` (`before.points 24` na pustej karcie), `dry2-daredevil` (limit "-1 slot (slots 1/3) +2 pts" czytany jak zwrot slotu).
+- D-K: potwierdzone (`dry2-spider`: "the book text says -2 each: 2" w info dla modelu).
+- D-Q: potwierdzone w kodzie (`replaceToOps` zapisywał tylko różniące się pola aktora).
+
+### Co zmienione
+- W2-1: `splitRefLevel(catalog, ref, entry)` (`proposal.mjs`): główny ref mocy (jej dokument bazowy = ref z indeksu) + `level` = ten poziom; konflikt tylko dla refu INNEGO poziomu z innym `level`. Domyślny poziom bez `level` = poziom refu (jak dotąd). Podpowiedź `ref.level.conflict` podaje główny ref (`mainRef`). Walidator, konwersja replace i writer są teraz zgodne.
+- W2-2: `replaceToOps` zwraca też `src` (opId -> `{ path: "proposal.powers[0]" | "proposal.powers[0].boosts[1]" | "proposal.talents[2]" | "proposal", name }`), `srcItems` (zachowany przedmiot karty -> wpis propozycji) i `kept`. `validate.mjs replacePath` w trybie replace przepisuje ścieżki WSZYSTKICH błędów/ostrzeżeń/info (L1 projekcja `ops[i].pole`, L2 ścieżki stanu chargen `attrs.x`/`occupation`/`heroTalent`..., `items.<id>`, L3 planu) na ścieżki propozycji i dodaje pole `entry` (nazwa wpisu). `opId` zostaje (łączy z `summary`/`perOp` i podglądem MG). Tryb ops bez zmian.
+- W2-5: `perOp` = `{ opId, points, slots, label, spentAfter? }`: usunięta delta `spent`; op zmieniający atrybuty ma `spentAfter` i etykietę "attributes spent 12 -> 34". Dodany limit: "pays for a boost|level of "X" (no slot for it; slots 1/3) +2 pts"; usunięty limit: "limit gone: the level of "X" it paid for needs a slot again (...)". `budget.note` (stała `BUDGET_NOTE`): punkty liczą 2 za każdy niewykorzystany slot rangi. `drawback.hardTimes`: tekst dla modelu bez liczby z książki; liczba w polu `gm` (tylko MG), które `toolResult` usuwa z kopii dla modelu (ogólny mechanizm: każdy komunikat może mieć `gm`). Podsumowanie: linia aktora pokazuje `reputation N` / `resources N`; replace z wartościami już na karcie dodaje linię "act1: kept resources 3, reputation 2 (already on the sheet)". D-3 bez zmian (-1 zostaje).
+
+### Teksty do zmiany w W2-8 (prefiks; tu NIE ruszane)
+- `rules-digest.mjs` l. 38 (legenda VALID/budżetu): "per-op values are running changes in list order" -> per-op `points`/`slots` = zmiana tej op, `spentAfter` = suma atrybutów po niej, etykieta limitu "pays for ... (no slot for it)", `budget.note`. Zdanie o pustej karcie może zastąpić `budget.note` (wtedy usunąć notę z wyniku, wybór W5-2).
+- `rules-digest.mjs` l. 51 (Hard Times): "(the book prints 2; the builder follows the system's effect)" kłóci się z D-K (liczba z książki tylko dla MG). Propozycja: "each Hard Times lowers the effective Resources by 1 through its item effect", bez wzmianki o książce.
+- `rules-digest.mjs` l. 45 i `PROPOSAL_GUIDE` (moc dzielona: "the basic ref + level, or the level's own ref"): po W2-1 PRAWDZIWE, zmiana niepotrzebna; można dopisać, że "basic ref" = ref z indeksu.
+- `PROPOSAL_GUIDE` / `TOOL_DESC.submit_proposal` (opcjonalnie): w replace błędy mają ścieżki `proposal.*` i pole `entry`; `opId` w błędzie replace to id z `summary`, nie z propozycji.
+
+### Otwarte wybory (zachowanie tymczasowe)
+| # | Pytanie | Zachowanie tymczasowe |
+|---|---------|------------------------|
+| W1-1 | Ref poziomu innego niż bazowy + inny `level` | Nadal błąd `ref.level.conflict` (writer by przyjął: wygrywa `level`). Zgodne ze skrótem "(level omitted or the same)". |
+| W2-a | `entry` i ścieżki propozycji tylko w replace | Tak; w ops model sam nadał opId. `talent.role.shift` (W2-3) w replace dostaje `proposal.talents[i]` (przez `srcItems`), w ops zostaje `items.<id>`. Pozostałości usuwane przez replace zostają `items.<id>` + `entry`. |
+| W5-1 | `spent` w perOp | Usunięte (nie przemianowane); `spentAfter` tylko na op, które zmieniają atrybuty. |
+| W5-2 | Notatka budżetu | `budget.note` w każdym wyniku proposal dla bohatera (~45 tokenów historii na wynik). Alternatywa: tylko legenda w skrócie (W2-8) i usunięcie noty. |
+| W5-3 | Co opłaca limit w etykiecie | `grants` z propozycji, inaczej heurystyka czytnika (moc powyżej Basic = poziom, inaczej boost). |
+| W5-4 | Pola `kept` w podsumowaniu | Osobna linia z opId op aktora (albo "actor:", gdy op aktora brak); tylko reputacja i Resources. |
+| W5-5 | Pole `gm` | Ogólne: każdy komunikat może mieć `gm`; wynik `pack.validate` (MG) je zachowuje, `runProposalTool` (model) usuwa. T7 może je pokazać. |
+
+### Incydent z commitem (do wiadomości W2-3)
+Mój commit W2-2 (`36f0ed5`, `git commit <ścieżki>`) objął `validate.mjs` razem z ówczesnymi hunkami agenta W2-3 (import `talentRoleShifts, talentRolesOf` z `reader.mjs`, komunikat `talent.role.shift`, `talentShifts`). `reader.mjs` z tymi eksportami nie był wtedy w commicie, więc `validate.mjs` z HEAD sam się nie zaimportuje, dopóki W2-3 nie zacommituje `reader.mjs`. Commit W2-5 (`2893f36`) zrobiony przez osobny indeks, bez dalszych hunków W2-3 (ich przeniesienie bloku przed stop L2 zostało w drzewie roboczym). Historii nie przepisywałem.
+
+### Testy
+- `test-build-validate-invincible` 41 (+3: W2-1 ref bazowy + level w ops/replace, konflikt odwrotny z `mainRef`; W2-2 ścieżki L1/L2/wynik narzędzia/pozostałości, ops bez zmian; W2-5 Hard Times bez liczby z książki w wyniku modelu i z `gm` u MG; budżet: nota, `spentAfter`, etykiety limitu dodanego i usuniętego, `kept`). Zmienione: asercja `perOp` bez `spent`, test Hard Times P1-F, `deepEqual` wyniku `replaceToOps` (nowe pola).
+- Reszta `dev/test-*.mjs` zielona (ops 34, snapshot 32, catalog 20, harness 31, packs 23, prompt-texts 11, transport 27, dry-transport 12, enhance 22, migrate-id 18, vendor OK).
+- Nie sprawdzone na żywo (tor nieużyty): prawdziwy katalog (czy każdy prawdziwy podzielony Major/Massive ma dokument bazowy jako ref indeksu; tak wynika z `catalog.mjs:281`), prawdziwy model.

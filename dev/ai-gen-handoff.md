@@ -63,3 +63,9 @@
 - `session.markProposal(id, status, { runId })`: znacznik `<proposal id status/>` przed tekstem MG w następnej wiadomości (tylko messages; prefiks bez zmian, test). PA1: `search_catalog` z pustym `forPower` ma `note` (brak boostów vs nieznana moc).
 - RUNBOOK krok 6a: przepis Apply/Discard/Undo zastępcy, weryfikacja przez `pack.snapshot(...).text`. Opis `nextSheetBlock(held, snap)` w `pack.mjs`; spec 3.2 uzupełniona (sekcja API).
 - Teksty prefiksu do W2-8 i wybory W7-1..W7-6: `dev/wave2-notes.md` (sekcja W2-7).
+
+## 2026-11-17 W2-1 / W2-2 / W2-5: moc dzielona, błędy replace, czytelny budżet (analiza próby na sucho 2)
+- W2-1 (D-A): główny ref mocy dzielonej + `level` = ten poziom (walidator zgodny z writerem); konflikt tylko dla refu innego poziomu; podpowiedź podaje główny ref.
+- W2-2 (D-B): w replace wszystkie błędy/ostrzeżenia mają ścieżki propozycji (`proposal.powers[0].level`, `proposal.attributes`, `proposal.talents[1]`) i `entry` (nazwa); `opId` zostaje. `replaceToOps` zwraca `src`, `srcItems`, `kept`.
+- W2-5 (D-F, D-K, D-Q): perOp bez delty `spent` (`spentAfter` + etykieta "attributes spent a -> b"), limit "pays for a boost/level of X (no slot for it)", `budget.note`; Hard Times bez liczby z książki dla modelu (pole `gm` tylko dla MG); podsumowanie z wartościami reputacji/Resources i linią "kept". Spec 7.5 pkt 4 zaktualizowany.
+- Commity `3ed9750`, `36f0ed5` (UWAGA: zawiera też wczesne hunki W2-3 w `validate.mjs`), `2893f36`. Teksty dla W2-8, wybory W1-1/W2-a/W5-1..W5-5, testy: `dev/wave2-notes.md` (sekcja W2-1/W2-2/W2-5).
