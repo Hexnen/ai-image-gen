@@ -124,3 +124,51 @@ Data: 2026-11-17. Pliki: `scripts/systems/invincible/writer.mjs`, `writer-group.
 - Undo jednej budowy: stan czysty, 13 zmian cofniętych, 0 przedmiotów, nazwa, atrybuty 2 i Health/Resolve 2/2 wrócone.
 - Edycja zbudowanego bohatera (Health ustawione na 3, op tekstu): Health zostaje 3 (O25).
 - Nie sprawdzone na żywo: tryb replace przez grupę (tylko testy node), budowa w in-play, NPC, serwer ignorujący keepId (tylko mock); wyścig kolejności bez keepId nie był odtworzony na żywo (wynika z kodu serwera).
+
+## W3-14 (grupa C3: jeden przebieg po tekstach prefiksu + D-9)
+
+Data: 2026-11-17. Pliki: `scripts/build/harness-prompt.mjs` (system[0], wersja 4), `scripts/build/harness.mjs` (tylko `isSubmitCall`), `scripts/systems/invincible/rules-digest.mjs` (`DIGEST_VERSION` 4), `proposal.mjs` (`PROPOSAL_SCHEMA.dryRun`, `PROPOSAL_GUIDE`, `normalize` usuwa `dryRun`), `validate.mjs` (`TOOL_DESC`, `MODEL_TOOL_NAMES`, `isDryRun`, `toolResult`, `runProposalTool`), `tools.mjs` (opis `search_catalog`), `pack.mjs` (komentarz); testy `dev/test-prompt-texts.mjs`, `dev/test-build-validate-invincible.mjs`, `dev/test-harness.mjs`; `dev/ai-gen-spec.md` (dwie linie o `check_proposal`). Wendor bez zmian. Indeks (`catalog.mjs`) nietknięty. Bez toru, bez sieci.
+
+### Co zmienione (listy W3-A-T*, W3-B-1..5, W3-C-1..9 + zakres W3-14)
+- D-9: model widzi JEDNO narzędzie propozycji `submit_proposal` z polem `dryRun` (boolean). `dryRun: true` = dawny check: ten sam wynik + `dryRun: true`, bez `proposalId`, bez `applyConfirm`, `rationale` niewymagane, nigdy pending. `check_proposal` zostaje wewnętrznym aliasem `runProposalTool` (testy, ewentualne stare wywołania); nie ma go w `proposalToolDefs()`, więc `prompt.mjs` go nie wysyła ani nie uruchamia z modelu. Harness: `isSubmitCall(name, input, res)` = `submit_*` bez `input.dryRun === true` i bez `res.dryRun === true`; tylko takie wywołania ustawiają propozycję pending, kończą turę (W3-4) i liczą się do limitów błędnych submitów. `normalize` usuwa `dryRun`, więc `proposalId` jest ten sam z `dryRun:false` i bez pola.
+- system[0] (W3-B-1, W3-B-4, W3-B-5, D-15, drobne): usunięte „write one short sentence and stop” i „Submit directly; check tool...”; nowe: błędy blokują / ostrzeżenia nie (popraw w tym samym submicie, nigdy nie wysyłaj ponownie tylko z powodu ostrzeżenia); udany submit wysłany bez innych narzędzi kończy turę, nic po nim nie pisać, rationale = odpowiedź dla MG; wynik submitu przychodzi na początku następnej wiadomości MG; tekst przed wywołaniem narzędzia = notatka postępu; formy bezosobowe zamiast rodzaju gramatycznego (przykład „Dodano”).
+- Skrót (W3-C-3, W3-C-6, W3-C-7, W3-C-8, zakres): sekcja `## Profiles (sheet header profile=)` (creation: wydaj WSZYSTKIE punkty; in-play: blokują tylko nowe błędy, budżet tylko informacyjny, limit atrybutu rangi nadal błąd, zasady rozwoju nieegzekwowane); „ALL available points” tylko raz (w creation); przykład slotów liczony z wendorowanych liczb („an empty Cosmic Champion sheet has 38 + 2 x 5 = 48 points”); D-18 (punkty zwolnione przy „resztę zostaw” -> atrybuty wg koncepcji, nazwać w rationale, bez pytania); D-10 (brakujące źródło archetypu -> najbliższe źródło z katalogu + zdanie w rationale); kolumna `fx` (wady mogą obniżać atrybuty, `(disabled)`/`(not transferred)` = brak efektu); `texts.role` = angielski klucz z listy ról; minions/challenges/vehicles poza zakresem, jedno zdanie; D-15 (przy budowie wypełnić oczekiwane teksty, jeden oryginalny NPC); D-16 (solo: team/teamBase puste, zdanie w rationale, nigdy „Solo”); D-17 (koszt gearu = info, MG decyduje).
+- Opis `submit_proposal` (W3-B-2, W3-C-4): `ok:true` kończy turę, MG widzi podgląd; usunięcia i zamiany poziomów (`applyConfirm`) potwierdza MG przy Apply; `dryRun` tylko do porównania wariantów / wyceny, nigdy przed submitem.
+- `PROPOSAL_GUIDE` (W3-C-1, W3-C-5, W3-A-T1, D-19, zakres): limit opłaca poziom swojej mocy (moc tylko Basic: boost), `grants` opcjonalne i nie zmienia kosztu; `limits [{ref}]` w replace; notatka tylko dla prawdziwego wyboru (bez ozdobnych), otwarty wybór efektu (`bonus.[attribute]`) w notatce, MG ustawia efekt; `role` = angielski klucz roli; budowa sama ustawia Health/Resolve na max; replace nigdy nie rusza gearu (gear przez ops); `rationale` wymagane poza `dryRun`.
+- `search_catalog` (W3-C-2): indeks ma wszystko oprócz przykładowych bohaterów (`kinds ["sampleHero"]`).
+- Pominięte: W3-C-9 (legenda podsumowania nie jest opisana w prefiksie, nic do zmiany); W3-A-T2 (strona MG, nie prefiks); finding 12 (opId w wynikach) bez osobnego zdania (replace już mówi „their opId is the summary's”).
+
+### Rozmiar (znaki / tokeny znaki/3,5; indeks 48 198 znaków z pomiaru W3-13 na torze 8, niezmieniony)
+| Blok | Przed | Po |
+|---|---|---|
+| system[0] | 3 262 / 932 | 3 467 / 991 |
+| system[1] skrót | 5 799 / 1 657 | 6 723 / 1 921 |
+| tools (JSON) | 19 314 / 5 518 (check 6 387 + submit 9 116 + 4 odczytu) | 13 504 / 3 858 (submit 9 648 + 4 odczytu) |
+| razem bez indeksu | 28 375 / 8 107 | 23 694 / 6 770 |
+| system[2] indeks | 48 198 / 13 771 | 48 198 / 13 771 |
+| cały prefiks | 76 573 / 21 878 | 71 892 / 20 541 (-4 681 zn., ~-1 337 tok, -6,1 %) |
+
+Prefiks zmienia się raz (nowy fingerprint, jeden zimny zapis cache); między wywołaniami bajt w bajt stały (test w procesie i w dwóch świeżych procesach). Bez dynamicznych tekstów (przykład slotów z wendorowanych stałych).
+
+### Wybory (zachowanie tymczasowe)
+| # | Pytanie | Wybór |
+|---|---------|-------|
+| W3-T-1 | `grants`: usunąć ze schematu czy opisać | Zostaje w schemacie (stare wejścia, replay, `replaceToOps`, testy); przewodnik: opcjonalne, nie zmienia kosztu; z listy `limits` w replace usunięte. Usunięcie ze schematu oszczędziłoby ~100 znaków, ale L0 odrzucałby stare wejścia z `grants`. |
+| W3-T-2 | Gdzie harness rozpoznaje dry run | `input.dryRun === true` LUB `res.dryRun === true` (`isSubmitCall`); wynik walidatora zawsze niesie `dryRun: true` przy sprawdzeniu. Nieudany dry run nie liczy się do `invalidSubmits` / `identicalInvalid` (jak dawny check). |
+| W3-T-3 | Dry run + prawdziwy submit w jednej partii | Prawdziwy staje się pending, ale partia nie jest „tylko submity”, więc tura trwa (model widzi wynik dry runu). |
+| W3-T-4 | Próg 16 000 znaków w teście | Teraz obejmuje WSZYSTKIE definicje narzędzi (13 504), nie tylko narzędzia propozycji (9 648); sufit prefiksu bez indeksu obniżony z 8 500 do 7 500 tok (jest 6 770). |
+| W3-T-5 | „Submit directly” w system[0] | Usunięte (jedno narzędzie; „never before a submit” jest w opisie `dryRun`). |
+| W3-T-6 | Przykład slotów | Liczony z `RANKS` najwyższej rangi (deterministyczny); test pilnuje też dosłownego „38 + 2 x 5 = 48”. |
+| W3-T-7 | Gear w replace | Schemat replace nie ma tablicy gear (kod bez zmian); tekst: „gear is never touched (add it with ops)”. Test pilnuje, że schemat nadal nie ma `proposal.gear`. |
+| W3-T-8 | Rodzaj gramatyczny | Jedno zdanie w system[0] (bez nazwy systemu gry): formy bezosobowe, przykład polski „Dodano”. |
+
+### Testy
+- `test-prompt-texts` 19 (+4 W3-14: system[0], skrót, narzędzia + przewodnik, wynik dry runu; zmienione: system[0] bez „check tool”, D-9 jedno narzędzie zamiast check/submit, dawne linie 148/160 bez „one short sentence”, `grants`, próg 16 000 na wszystkie narzędzia, sufit 7 500 tok).
+- `test-build-validate-invincible` 48 (zmienione: lista narzędzi `["submit_proposal"]`, `dryRun` w schemacie, `submit_proposal` + `dryRun` = ten sam wynik co alias `check_proposal`, bez rationale, ten sam `proposalId` z `dryRun:false`, dry run bez `applyConfirm`).
+- `test-harness` 36 (+1: dry run nie jest pending, nie kończy tury, nieudany nie trafia w limit (kontrola: prawdziwy trafia), znacznik `dryRun` w wyniku wystarcza, dry run + submit w jednej partii).
+- Reszta zielona: ops 39, snapshot 32, catalog 21, dry-transport 12, enhance 22, migrate-id 18, packs 23, transport 27, vendor-sync OK, vendor load 9; `sync.mjs --check` OK.
+
+### Niezweryfikowane
+- Zachowanie prawdziwego modelu (i zastępcy) z nowymi tekstami: czy nie pisze nic po submicie, czy nie wysyła ponownie z powodu ostrzeżeń, czy używa `dryRun` rzadko, formy bezosobowe, solo/NPC/D-18/D-10 w praktyce: runda 4 próby na sucho.
+- Rzeczywiste tokeny (`count_tokens`) i przyjęcie schematu strict z `dryRun` przez API: T8. Indeks na żywo nie mierzony ponownie (kod indeksu nietknięty, liczba z W3-13).
+- Szuflada T7: wywołanie z `dryRun: true` pokazane jak zwykłe narzędzie (nie sprawdzane w UI).
