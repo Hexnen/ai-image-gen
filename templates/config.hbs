@@ -292,13 +292,14 @@
     </div>
     </div>
 
-    {{!-- W6-G: depth settings (stored in cfg.depth, nothing reads them yet: every card says "coming soon"). --}}
+    {{!-- W6-G: depth settings (cfg.depth). W6-I: read by "Dodaj głębię" (browser + generative engines); ComfyUI and the parallax window are still "coming soon". --}}
     <div class="aiimg-tabpanel aiimg-depth" role="tabpanel" id="aiimg-panel-depth" aria-labelledby="aiimg-tab-depth" data-tab="depth" {{#unless tabDepth}}hidden{{/unless}}>
       <p class="aiimg-depth-banner" role="note"><i class="fa-solid fa-person-digging" aria-hidden="true"></i> <span>{{localize "AIIMG.Depth.Banner"}}</span></p>
+      {{#if isGM}}<p class="aiimg-depth-try"><button type="button" data-action="depthTry"><i class="fa-solid fa-layer-group" aria-hidden="true"></i> {{localize "AIIMG.DepthRun.Try"}}</button> <span class="hint">{{localize "AIIMG.DepthRun.TryHint"}}</span></p>{{/if}}
       <div class="aiimg-cols">
         <div class="aiimg-col">
           <section class="aiimg-card" aria-labelledby="aiimg-c-dmain">
-            <h3 id="aiimg-c-dmain">{{localize "AIIMG.Depth.CardMain"}} <em class="aiimg-tag aiimg-soon">{{localize "AIIMG.Depth.Soon"}}</em></h3>
+            <h3 id="aiimg-c-dmain">{{localize "AIIMG.Depth.CardMain"}}</h3>
             <div class="aiimg-field">
               <label class="aiimg-check">
                 <input type="checkbox" name="depth.enabled" {{#if depth.enabled}}checked{{/if}} {{#unless isGM}}disabled{{/unless}}>
@@ -309,32 +310,74 @@
           </section>
 
           <section class="aiimg-card" aria-labelledby="aiimg-c-dengine">
-            <h3 id="aiimg-c-dengine">{{localize "AIIMG.Depth.CardEngine"}} <em class="aiimg-tag aiimg-soon">{{localize "AIIMG.Depth.Soon"}}</em></h3>
+            <h3 id="aiimg-c-dengine">{{localize "AIIMG.Depth.CardEngine"}}</h3>
             <div class="aiimg-field">
-              <span class="aiimg-lbl" id="aiimg-l-dengine">{{localize "AIIMG.Depth.Engine"}}</span>
+              <span class="aiimg-lbl" id="aiimg-l-dengine">{{localize "AIIMG.Depth.EngineLabel"}}</span>
               <div class="aiimg-seg" role="radiogroup" aria-labelledby="aiimg-l-dengine">
                 {{#each depth.engines}}
                 <label class="aiimg-seg-item">
                   <input type="radio" name="depth.engine" value="{{id}}" {{#if selected}}checked{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
-                  <span>{{label}}</span>
+                  <span>{{label}}{{#if soon}} <em class="aiimg-tag aiimg-soon">{{localize "AIIMG.Depth.Soon"}}</em>{{/if}}{{#if experimental}} <em class="aiimg-tag aiimg-exp">{{localize "AIIMG.Depth.Experimental"}}</em>{{/if}}</span>
                 </label>
                 {{/each}}
               </div>
+              {{#if depth.isGenerative}}
+              <p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> {{localize "AIIMG.Depth.GenWarn"}}</p>
+              {{/if}}
               {{#if depth.isBrowser}}
               <p class="hint" data-role="webgpu" data-state="{{#if depth.webgpu}}yes{{else}}no{{/if}}">{{depth.webgpuText}}</p>
               <label class="aiimg-check">
                 <input type="checkbox" name="depth.fallback" {{#if depth.fallback}}checked{{/if}} {{#unless isGM}}disabled{{/unless}}>
                 <span>{{localize "AIIMG.Depth.Fallback"}}</span>
               </label>
-              {{else}}
+              {{/if}}
+              {{#if depth.isComfy}}
               <label class="aiimg-lbl" for="aiimg-dcomfy">{{localize "AIIMG.Depth.ComfyUrl"}}</label>
               <input id="aiimg-dcomfy" type="text" name="depth.comfyUrl" value="{{depth.comfyUrl}}" spellcheck="false" inputmode="url" aria-describedby="aiimg-dcomfy-hint" {{#unless isGM}}disabled{{/unless}}>
               <p class="hint" id="aiimg-dcomfy-hint">{{localize "AIIMG.Depth.ComfyUrlHint"}}</p>
               {{/if}}
             </div>
 
+            {{#if depth.isGenerative}}
             <div class="aiimg-field">
-              <span class="aiimg-lbl" id="aiimg-l-dmodel">{{localize "AIIMG.Depth.Model"}}</span>
+              <label class="aiimg-lbl" for="aiimg-dgprov">{{localize "AIIMG.Depth.GenProvider"}}</label>
+              <select id="aiimg-dgprov" name="depth.gen.provider" {{#unless isGM}}disabled{{/unless}}>
+                {{#each depth.gen.providers}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+              </select>
+              {{#unless depth.gen.hasKey}}<p class="hint aiimg-warn">{{localize "AIIMG.Depth.GenNoKey"}}</p>{{/unless}}
+            </div>
+            <div class="aiimg-field">
+              <label class="aiimg-lbl" for="aiimg-dgmodel">{{localize "AIIMG.Depth.GenModel"}}</label>
+              <select id="aiimg-dgmodel" name="depth.gen.model" {{#unless isGM}}disabled{{/unless}}>
+                {{#each depth.gen.models}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+              </select>
+            </div>
+            {{#if depth.gen.qualities}}
+            <div class="aiimg-field">
+              <label class="aiimg-lbl" for="aiimg-dgq">{{localize "AIIMG.Depth.GenQuality"}}</label>
+              <select id="aiimg-dgq" name="depth.gen.quality" {{#unless isGM}}disabled{{/unless}}>
+                {{#each depth.gen.qualities}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+              </select>
+            </div>
+            {{/if}}
+            {{#if depth.gen.sizes}}
+            <div class="aiimg-field">
+              <label class="aiimg-lbl" for="aiimg-dgs">{{localize "AIIMG.Depth.GenSize"}}</label>
+              <select id="aiimg-dgs" name="depth.gen.imageSize" {{#unless isGM}}disabled{{/unless}}>
+                {{#each depth.gen.sizes}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+              </select>
+            </div>
+            {{/if}}
+            <div class="aiimg-field">
+              <label class="aiimg-lbl" for="aiimg-dgprompt">{{localize "AIIMG.Depth.GenPrompt"}}</label>
+              <textarea id="aiimg-dgprompt" name="depth.gen.prompt" rows="5" maxlength="2000" {{#unless isGM}}disabled{{/unless}}>{{depth.gen.prompt}}</textarea>
+              {{#if depth.gen.estimate}}<p class="hint">{{depth.gen.estimate}}</p>{{/if}}
+              <p class="hint">{{localize "AIIMG.Depth.GenConfirmHint"}}</p>
+            </div>
+            {{/if}}
+
+            <div class="aiimg-field">
+              <span class="aiimg-lbl" id="aiimg-l-dmodel">{{#if depth.isGenerative}}{{localize "AIIMG.Depth.GenLocalModel"}}{{else}}{{localize "AIIMG.Depth.Model"}}{{/if}}</span>
               <div class="aiimg-depth-models" role="radiogroup" aria-labelledby="aiimg-l-dmodel">
                 {{#each depth.models}}
                 <label class="aiimg-depth-model">
@@ -383,7 +426,7 @@
 
         <div class="aiimg-col">
           <section class="aiimg-card" aria-labelledby="aiimg-c-dmask">
-            <h3 id="aiimg-c-dmask">{{localize "AIIMG.Depth.CardMask"}} <em class="aiimg-tag aiimg-soon">{{localize "AIIMG.Depth.Soon"}}</em></h3>
+            <h3 id="aiimg-c-dmask">{{localize "AIIMG.Depth.CardMask"}}</h3>
             <div class="aiimg-field">
               <label class="aiimg-check">
                 <input type="checkbox" name="depth.mask.enabled" {{#if depth.mask.enabled}}checked{{/if}} {{#unless isGM}}disabled{{/unless}}>
@@ -401,7 +444,7 @@
           </section>
 
           <section class="aiimg-card" aria-labelledby="aiimg-c-dpost">
-            <h3 id="aiimg-c-dpost">{{localize "AIIMG.Depth.CardPost"}} <em class="aiimg-tag aiimg-soon">{{localize "AIIMG.Depth.Soon"}}</em></h3>
+            <h3 id="aiimg-c-dpost">{{localize "AIIMG.Depth.CardPost"}}</h3>
             <div class="aiimg-field">
               <label class="aiimg-check">
                 <input type="checkbox" name="depth.post.normalize" {{#if depth.post.normalize}}checked{{/if}} {{#unless isGM}}disabled{{/unless}}>
@@ -426,9 +469,9 @@
           </section>
 
           <section class="aiimg-card" aria-labelledby="aiimg-c-dout">
-            <h3 id="aiimg-c-dout">{{localize "AIIMG.Depth.CardOutput"}} <em class="aiimg-tag aiimg-soon">{{localize "AIIMG.Depth.Soon"}}</em></h3>
+            <h3 id="aiimg-c-dout">{{localize "AIIMG.Depth.CardOutput"}}</h3>
             <div class="aiimg-field">
-              <span class="aiimg-lbl" id="aiimg-l-dfmt">{{localize "AIIMG.Depth.Format"}}</span>
+              <span class="aiimg-lbl" id="aiimg-l-dfmt">{{localize "AIIMG.Depth.FormatLabel"}}</span>
               <div class="aiimg-seg" role="radiogroup" aria-labelledby="aiimg-l-dfmt" aria-describedby="aiimg-dfmt-hint">
                 {{#each depth.outputs}}
                 <label class="aiimg-seg-item">

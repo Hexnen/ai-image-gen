@@ -1,0 +1,55 @@
+<section class="aiimg-depthrun-body">
+  <div class="aiimg-depthrun-src">
+    <label for="aiimg-depthrun-path">{{localize "AIIMG.DepthRun.Source"}}</label>
+    <div class="aiimg-depthrun-row">
+      <input id="aiimg-depthrun-path" type="text" name="path" value="{{path}}" spellcheck="false" {{#if busy}}disabled{{/if}}>
+      <button type="button" data-action="pick" {{#if busy}}disabled{{/if}}><i class="fa-solid fa-file-image" aria-hidden="true"></i> {{localize "AIIMG.DepthRun.Pick"}}</button>
+    </div>
+  </div>
+
+  <div class="aiimg-depthrun-row">
+    <label for="aiimg-depthrun-engine">{{localize "AIIMG.Depth.EngineLabel"}}</label>
+    <select id="aiimg-depthrun-engine" name="engine" {{#if busy}}disabled{{/if}}>
+      {{#each engines}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+    </select>
+    {{#if generative}}<em class="aiimg-tag aiimg-exp">{{localize "AIIMG.Depth.Experimental"}}</em>{{/if}}
+  </div>
+  <p class="hint">{{setLine}}{{#if typeKey}} · <code>{{typeKey}}</code>{{/if}}</p>
+  {{#if generative}}<p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> {{localize "AIIMG.DepthRun.GenWarn"}}</p>{{/if}}
+
+  <div class="aiimg-depthrun-row">
+    <button type="button" class="primary" data-action="run" {{#if busy}}disabled{{/if}} {{#unless path}}disabled{{/unless}}>
+      <i class="fa-solid {{#if busy}}fa-spinner fa-spin{{else}}fa-layer-group{{/if}}" aria-hidden="true"></i> {{localize "AIIMG.DepthRun.Run"}}
+    </button>
+    <span class="aiimg-depthrun-status" data-role="status" role="status" aria-live="polite">{{statusText}}</span>
+  </div>
+  <progress data-role="progress" hidden></progress>
+
+  {{#if error}}<p class="aiimg-error" role="alert"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i> {{error}}</p>{{/if}}
+
+  {{#if result}}
+  <div class="aiimg-depthrun-views" role="group" aria-label="{{localize 'AIIMG.DepthRun.Views'}}">
+    {{#each views}}<button type="button" data-action="view" data-view="{{id}}" aria-pressed="{{#if active}}true{{else}}false{{/if}}" class="{{#if active}}active{{/if}}">{{label}}</button>{{/each}}
+  </div>
+  {{#if compare}}
+  <div class="aiimg-depthrun-compare">
+    <figure><img src="{{compare.a.url}}" alt="{{compare.a.label}}"><figcaption>{{compare.a.label}}</figcaption></figure>
+    <figure><img src="{{compare.b.url}}" alt="{{compare.b.label}}"><figcaption>{{compare.b.label}}</figcaption></figure>
+  </div>
+  {{else}}
+  <figure class="aiimg-depthrun-preview">
+    {{#if showBefore}}<img src="{{src}}" alt="{{localize 'AIIMG.DepthRun.Before'}}">{{/if}}
+    {{#if showAfter}}<img src="{{result.url}}" alt="{{localize 'AIIMG.DepthRun.After'}}">{{/if}}
+    {{#if showMask}}<img src="{{result.maskUrl}}" alt="{{localize 'AIIMG.DepthRun.Mask'}}">{{/if}}
+  </figure>
+  {{/if}}
+  <dl class="aiimg-depthrun-facts">
+    <dt>{{localize "AIIMG.DepthRun.Model"}}</dt><dd>{{result.model}} · {{result.device}} · {{result.dtype}}{{#if result.cost}} · {{result.cost}}{{/if}}</dd>
+    {{#if result.maskLine}}<dt>{{localize "AIIMG.DepthRun.Mask"}}</dt><dd>{{result.maskLine}}</dd>{{/if}}
+    <dt>WebGPU</dt><dd>{{result.gpuLine}}</dd>
+    <dt>{{localize "AIIMG.DepthRun.File"}}</dt><dd><code>{{result.depthPath}}</code> · {{result.size}} · {{result.bytes}}{{#if result.maskPath}}<br><code>{{result.maskPath}}</code>{{/if}}<br><code>{{result.metaPath}}</code></dd>
+    <dt>{{localize "AIIMG.DepthRun.Timings"}}</dt><dd>{{#each timings}}<span class="aiimg-depthrun-t">{{label}} {{value}}</span>{{/each}}</dd>
+    {{#each result.notes}}<dt></dt><dd class="hint">{{this}}</dd>{{/each}}
+  </dl>
+  {{/if}}
+</section>

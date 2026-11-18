@@ -633,3 +633,39 @@ Prośba właściciela (2026-11-18): «ma być wszędzie ... przy każdym logowan
 - Wszystkie 22 testy dev/test-*.mjs przechodzą (stan roboczy razem z niezacommitowaną pracą agenta głębi).
 - Nie commitowane (pliki zawierają też niezacommitowane zmiany agenta głębi): lang/en.json, lang/pl.json, templates/config.hbs, templates/depth.hbs (nieśledzony). Zmiana nazw leży w drzewie roboczym i wejdzie do historii razem z ich commitem.
 - Niezweryfikowane na żywo (port 30000 nietykalny; serwer lane nie był potrzebny, dowodem jest test węzłowy + prawdziwy `expandObject`).
+
+## W6-I: „Dodaj głębię” (krok 2: mapa głębi w przeglądarce MG + silnik generatywny, eksperymentalny)
+
+Zakres: tylko mapa głębi (bez shadera/okna paralaksy). Przycisk na wygenerowanych obrazach i na dowolnym obrazie wybranym przez MG, respektuje `cfg.depth` danego typu.
+
+### Pliki
+- `vendor/transformers/`: `@huggingface/transformers` 4.3.2 (`dist/transformers.min.js`, w środku ORT JS 1.31.0-dev.20260914) + `ort-wasm-simd-threaded.asyncify.{mjs,wasm}` z `onnxruntime-web`; `LICENSE` (Apache-2.0), `LICENSE-onnxruntime.txt` (MIT), `VENDOR.md` (źródła + sha256). `ATTRIBUTION.md`: biblioteki + licencje modeli (DA2 Large CC BY-NC 4.0, DA2 Small Apache-2.0, BiRefNet_lite-ONNX MIT).
+- `scripts/depth/post.mjs` (czyste): postprocessing wg badań §7.2 w kolejności: normalizacja percentylowa → wypełnianie „latających pikseli” (Sobel + BFS) → filtr prowadzony (He, luminancja, r = clamp(2·scale, 2, 8), eps 1e-3) → przyciąganie do maski (sufit tła, wygładzone pole tła, dylatacja postaci, mieszanie edgeSnap) → wygładzanie wnętrz klas → gamma. Własny bezstratny enkoder PNG (Paeth + CompressionStream deflate): 16-bit szary albo RG16 (R = starszy, G = młodszy bajt, B = maska). `depthPathsFor` (obok źródła; URL, `..` i foldery systemowe → `${DATA_ROOT}/_depth`).
+- `scripts/depth/plan.mjs` (czyste): model/urządzenie/precyzja + rezerwy, pliki HF. `engine.mjs` (przeglądarka): ładowanie biblioteki z WASM lokalnie (nigdy jsDelivr), sonda WebGPU, cache, potoki. `generative.mjs` (czyste + wstrzykiwane zależności), `run.mjs` (cały przebieg + zapis przez FilePicker.upload + sidecar `_depth.json`), `depth-app.mjs` + `templates/depth.hbs` (okno), `entry.mjs` (przycisk + `api.depth`).
+- Zmienione: `depth-settings.mjs` (schemat v2: silnik `generative` + `gen`; stare zapisy ważne), `sheet-button.mjs`, `config-app.mjs`, `templates/config.hbs` (przycisk „Wypróbuj”; „wkrótce” zdjęte z kart Główne/Silnik/Maska/Postproces/Wyjście; zostaje przy ComfyUI i Paralaksie), `styles/module.css`, `lang/*.json` (80 kluczy).
+- Testy: `dev/test-depth-post.mjs` (23), `dev/test-depth-gen.mjs` (7), `dev/test-depth-settings.mjs` (14).
+
+### Użycie
+Przycisk z warstwami obok różdżki na arkuszu (gdy głębia włączona w ustawieniach typu) albo „Wypróbuj” w zakładce Głębia ustawień, albo `game.modules.get("moinens-ai-gen").api.depth.open(path)`. Okno: wybór obrazu, silnik (przeglądarka / generatywny), Uruchom; podgląd przed/po/maska/porównanie, czasy, użyty model, notatki i błędy. Przy pierwszym użyciu okno pokazuje rozmiar plików modeli i pyta MG o zgodę; rezerwowy model, którego nie ma w cache, też wymaga osobnej zgody.
+
+### Pomiary na żywo (lane 8, panel przeglądarki Claude, Chrome 152, RTX 3070 Ti)
+- WebGPU: dostępne (nvidia/ampere, shader-f16, bezpieczny kontekst). `maxStorageBuffersPerShaderStage` = 16.
+- DA2 Large q4f16 webgpu, obraz 941×1672, rozdzielczość modelu 518: ładowanie modelu (pobranie 235 MB + kompilacja) 38,9 s; inferencja 1,8 s; postproces 1,8 s; PNG 279 ms; odczyt 77 ms; upload 30 ms; razem ~67 s (z pobraniem). Zapis: `portret_depth.png` 1,3 MB + `.json`.
+- Maska BiRefNet_lite-ONNX: NIE działa na tej karcie. WebGPU: „Too many storage buffers in shader. Current: 17, Max is 16”. WASM fp32: `std::bad_alloc`. Model ma STAŁE wejście 1024² (512 → „invalid dimensions … Expected: 1024”). Obie porażki psują runtime ONNX strony do przeładowania (potem padały też Large, Small webgpu i Small wasm). Decyzja: maska tylko na adapterze z ≥ 17 buforami; inaczej pomijana z góry (notatka `maskUnsupported`, bez pobierania), mapa powstaje bez niej. `runtimeBroken` zatrzymuje łańcuch rezerw i prosi o przeładowanie.
+- Incydent (naprawiony): po zatrutym runtime rezerwy pobrały bez pytania Small fp16 (49,6 MB) i fp32 (99 MB). Teraz rezerwa spoza cache wymaga zgody, a zatruty runtime przerywa łańcuch.
+- Cache Storage panelu przeglądarki gubił wpisy między przeładowaniami (na koniec pusty; `storage.persisted` = false); w panelu modele pobierały się ponownie. Przyczyna nieznana; w zwykłym Chrome/Electron niezweryfikowane.
+- Upload na lane: „User [] does not have permission to upload files”: wspólne ciasteczko sesji localhost nadpisały inne agenty. Obejście tylko w teście (ponowny /join przed /upload w stronie), bez zmian w module.
+
+### Wygląd mapy (ocena wzrokowa, zrzuty tylko w scratchpad)
+Kolejność głębi poprawna, czyste rozdzielenie postaci od tła. Ale dużo bardziej miękka niż referencja właściciela: twarz płaska, prawie bez rysów; kosmyki włosów rozmyte w miękkie halo. Prawdopodobne przyczyny: q4f16, 518 px, filtr prowadzony + wygładzanie bez maski. Porównanie surowe vs postproces nie zostało zrobione (zatruty runtime). Do sprawdzenia: fp16, wyższa rozdzielczość, słabsze wygładzanie.
+
+### Silnik generatywny (eksperymentalny)
+Obraz źródłowy jako referencja do dostawców modułu (OpenAI 2.6/2.5, Gemini, OpenRouter) przez `executeGeneration` (klucze przez `getKey`), prompt mapy głębi (ustawialny, max 2000 znaków). Rozmiar dopasowany do proporcji źródła (`fitSizeFor`), referencja wg W6-D (`purposes ["max"]`), koszt z matematyki kosztów obrazu. ZAWSZE szacunek + potwierdzenie przed każdym płatnym wywołaniem (tylko `=== true` przepuszcza), nigdy automatycznie, nigdy batch. Wynik przechodzi przez ten sam postproces i zapis; okno pozwala porównać obok wyniku lokalnego. Żadne prawdziwe płatne wywołanie nie zostało wykonane: test z podmienionym fetch przez prawdziwych dostawców (kształt żądania OpenAI `/v1/images/edits`, hosty Gemini/OpenRouter, szacunek, wymagane potwierdzenie, błędy).
+
+### Sieć
+Silnik przeglądarkowy łączy się tylko z `https://huggingface.co/` (pliki modeli). Biblioteka i WASM z modułu. Test statyczny w `test-depth-post.mjs` sprawdza, że kod `scripts/depth/` nie ma innych hostów ani wywołań API generacji poza ścieżką generatywną.
+
+### Zweryfikowane / niezweryfikowane
+- Zweryfikowane: wszystkie dev/test-*.mjs zielone + `node --check`; na żywo: WebGPU, Large q4f16 i czasy, zapis PNG + JSON, porażki maski (WebGPU i WASM) i stałe wejście 1024.
+- Niezweryfikowane na żywo: maska na karcie z ≥ 17 buforami; fp16 Large; Small wasm na maszynie bez WebGPU; okno po zmianie `maskUnsupported` (tylko testy); silnik generatywny (zero płatnych wywołań); Electron/Foundry desktop.
+- Lane 8 przywrócony, slot oddany, kopia obrazu testowego usunięta.

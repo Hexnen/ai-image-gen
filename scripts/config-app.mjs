@@ -11,7 +11,8 @@ import * as providers from "./providers/index.mjs";
 import { getUsage } from "./limits.mjs";
 import { saveRefFile, saveTestExampleEx } from "./save-image.mjs";
 import { getKey } from "./settings.mjs";
-import { buildTestPrompt, fitTestConfig, estimateTest, estimateTestInfo, generateTest } from "./generate-flow.mjs";
+import { buildTestPrompt, fitTestConfig, estimateTest, estimateTestInfo, generateTest, estimateInfo } from "./generate-flow.mjs";
+import { genDepthConfig, genEstimate, genModelsFor } from "./depth/generative.mjs";
 import { sourceTag } from "./cost-learning.mjs";
 import { TestDrawerApp } from "./test-drawer-app.mjs";
 import { aspectInfo } from "./aspect.mjs";
@@ -55,7 +56,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       uploadRefs: ImageConfigApp.#onUploadRefs,
       removeRef: ImageConfigApp.#onRemoveRef,
       save: ImageConfigApp.#onSave,
-      reset: ImageConfigApp.#onReset
+      reset: ImageConfigApp.#onReset,
+      depthTry: ImageConfigApp.#onDepthTry
     }
   };
 
@@ -312,12 +314,15 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       ...dp,
       ranges: RANGES,
       isBrowser: dp.engine === "browser",
+      isComfy: dp.engine === "comfyui",
+      isGenerative: dp.engine === "generative",
+      gen: this.#genContext(dp),
       webgpu: env.webgpu,
       webgpuText: L(env.webgpu ? "AIIMG.Depth.WebGPUYes" : "AIIMG.Depth.WebGPUNo"),
-      engines: ENGINES.map((id) => ({ id, label: L(`AIIMG.Depth.Engine.${id}`), selected: id === dp.engine })),
-      models: modelsFor(dp.engine).map((m) => ({
+      engines: ENGINES.map((id) => ({ id, label: L(`AIIMG.Depth.Engine.${id}`), selected: id === dp.engine, soon: id === "comfyui", experimental: id === "generative" })),
+      models: modelsFor(dp.engine === "generative" ? "browser" : dp.engine).map((m) => ({
         key: m.key, id: m.id, file: m.file ?? "", label: m.label, selected: m.key === dp.model,
-        isDefault: m.key === defaultModelKey(dp.engine, env), experimental: !!m.experimental,
+        isDefault: m.key === defaultModelKey(dp.engine === "generative" ? "browser" : dp.engine, env), experimental: !!m.experimental,
         download: F("AIIMG.Depth.Download", { sizes: sizeLine(m) }),
         licence: F("AIIMG.Depth.Licence", { lic: m.licence }),
         speed: F("AIIMG.Depth.SpeedLine", { speed: L(`AIIMG.Depth.Speed.${m.speed}`) }),
@@ -353,6 +358,30 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
         slider("sway", "depth.parallax.sway", dp.parallax.sway, "pct")
       ],
       parallaxToggles: ["light", "rim", "dust"].map((k) => ({ name: `depth.parallax.${k}`, label: L(`AIIMG.Depth.${k[0].toUpperCase()}${k.slice(1)}`), checked: dp.parallax[k] }))
+    };
+  }
+
+  /** W6-I: generative depth engine (experimental): provider, model, quality / size, prompt and a cost estimate for a 2:3 portrait. */
+  #genContext(dp) {
+    const L = (k) => game.i18n.localize(k);
+    const F = (k, d) => game.i18n.format(k, d);
+    const g = dp.gen;
+    let cfg = null, est = null;
+    try {
+      cfg = genDepthConfig(dp, { width: 1024, height: 1536 });
+      const info = estimateInfo(cfg, 1, "sync");
+      est = genEstimate(cfg, { width: 1024, height: 1536 }, info.display, estimateSettings());
+    } catch (e) { console.warn(`${MODULE_ID} | depth estimate`, e); }
+    const provider = cfg?.provider ?? g.provider;
+    const model = providers.getModel(provider, cfg?.model ?? g.model);
+    return {
+      providers: Object.entries(providers.PROVIDERS).map(([id, p]) => ({ id, label: p.label ?? id, selected: id === provider })),
+      models: genModelsFor(provider).map((m) => ({ id: m.id, label: m.label ?? m.id, selected: m.id === cfg?.model })),
+      qualities: provider === "openai" ? (model?.qualities ?? ALL_QUALITIES).map((q) => ({ id: q, selected: q === cfg?.quality, label: game.i18n.has(`AIIMG.Quality.${q}`) ? L(`AIIMG.Quality.${q}`) : q })) : null,
+      sizes: provider === "gemini" ? (model?.sizes ?? ALL_IMAGE_SIZES).map((s) => ({ id: s, selected: s === cfg?.imageSize, label: s })) : null,
+      prompt: g.prompt,
+      hasKey: !!getKey(provider),
+      estimate: est ? F("AIIMG.Depth.GenEstimate", { usd: fmtUsd(est.usd), w: est.size.width, h: est.size.height, rw: est.ref.width, rh: est.ref.height }) : ""
     };
   }
 
@@ -547,8 +576,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
   #wireDepth(el) {
     const panel = el.querySelector("#aiimg-panel-depth");
     if (!panel) return;
-    for (const name of ["depth.engine", "depth.model"]) {
-      panel.querySelectorAll(`input[name="${name}"]`).forEach((r) => r.addEventListener("change", () => {
+    for (const name of ["depth.engine", "depth.model", "depth.gen.provider", "depth.gen.model", "depth.gen.quality", "depth.gen.imageSize"]) {
+      panel.querySelectorAll(`input[name="${name}"], select[name="${name}"]`).forEach((r) => r.addEventListener("change", () => {
         this.#focusDepth = name;
         this.#readForm(); // normalisation moves model / precision / resolution to values the new choice has
         this.render();
@@ -575,7 +604,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       } else if (!ev.target.checked) badge?.remove();
     });
     if (this.#focusDepth) {
-      panel.querySelector(`input[name="${this.#focusDepth}"]:checked`)?.focus();
+      panel.querySelector(`input[name="${this.#focusDepth}"]:checked, select[name="${this.#focusDepth}"]`)?.focus();
       this.#focusDepth = null;
     }
   }
@@ -1031,6 +1060,13 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       ui.notifications.error(safeMessage(e.message));
     }
     this.render();
+  }
+
+  /** W6-I: open "Dodaj głębię" with this type's settings as they are in the editor now (unsaved edits included). */
+  static async #onDepthTry() {
+    this.#readForm();
+    const { DepthApp } = await import("./depth/depth-app.mjs");
+    DepthApp.open({ typeKey: this.selectedKey, depth: this.draft?.depth ?? getConfig(this.selectedKey).depth });
   }
 
   static async #onReset() {

@@ -319,3 +319,25 @@ button.link:focus-visible { outline: 2px solid var(--color-warm-2, #c9593f); out
 .aiimg-depth .aiimg-range-row output { flex-basis: 3.6em; }
 .aiimg-depth [data-role=webgpu][data-state="no"] { color: var(--color-level-warning, #b37400); opacity: 1; }
 .aiimg-depth .aiimg-seg-item span { white-space: normal; }
+
+/* W6-I: "Dodaj głębię" window + the sheet button next to the wand */
+.aiimg-depthrun .aiimg-depthrun-body { display: flex; flex-direction: column; gap: 8px; padding: 8px; overflow: auto; }
+.aiimg-depthrun .aiimg-depthrun-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.aiimg-depthrun .aiimg-depthrun-row input[type=text] { flex: 1 1 260px; min-width: 0; font-family: var(--font-monospace, monospace); }
+.aiimg-depthrun .aiimg-depthrun-row button { flex: 0 0 auto; width: auto; }
+.aiimg-depthrun .aiimg-depthrun-status { opacity: .85; }
+.aiimg-depthrun progress { width: 100%; }
+.aiimg-depthrun .aiimg-depthrun-views { display: flex; gap: 4px; }
+.aiimg-depthrun .aiimg-depthrun-views button { width: auto; flex: 0 0 auto; }
+.aiimg-depthrun .aiimg-depthrun-views button[aria-pressed=true] { outline: 2px solid currentColor; outline-offset: -2px; }
+.aiimg-depthrun .aiimg-depthrun-preview { margin: 0; display: flex; justify-content: center; background: rgba(128, 128, 128, .15); border-radius: 4px; }
+.aiimg-depthrun .aiimg-depthrun-preview img { max-width: 100%; max-height: 52vh; object-fit: contain; border: 0; }
+.aiimg-depthrun .aiimg-depthrun-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.aiimg-depthrun .aiimg-depthrun-compare figure { margin: 0; text-align: center; }
+.aiimg-depthrun .aiimg-depthrun-compare img { max-width: 100%; max-height: 46vh; object-fit: contain; border: 0; }
+.aiimg-depthrun .aiimg-depthrun-facts { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 0; }
+.aiimg-depthrun .aiimg-depthrun-facts dd { margin: 0; overflow-wrap: anywhere; }
+.aiimg-depthrun .aiimg-depthrun-t { display: inline-block; margin-right: 10px; white-space: nowrap; }
+.aiimg-depth .aiimg-depth-try { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.aiimg-depth .aiimg-depth-try button { width: auto; flex: 0 0 auto; }
+.aiimg-depth textarea[name="depth.gen.prompt"] { width: 100%; resize: vertical; }

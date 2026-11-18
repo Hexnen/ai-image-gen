@@ -4,10 +4,17 @@
 // Source of every model id, size and licence: dev/depth-model-research.md (commit 0ab5239) and the links it cites.
 // Sizes marked `estimated` and every speed class are OUR estimates (research tag [W]), not measurements.
 
-/** Schema version of `cfg.depth`; bump only with a migration in normalizeDepth. */
-export const DEPTH_SCHEMA = 1;
+/** Schema version of `cfg.depth`; bump only with a migration in normalizeDepth.
+ *  v2 (W6-I): engine "generative" + `gen` (provider, model, quality, imageSize, prompt). A v1 save normalises to v2 with the
+ *  generative defaults and keeps every v1 value. */
+export const DEPTH_SCHEMA = 2;
 
-export const ENGINES = Object.freeze(["browser", "comfyui"]);
+/** "generative" (W6-I, experimental) = an image model of the module's own providers draws the depth map (paid call). */
+export const ENGINES = Object.freeze(["browser", "comfyui", "generative"]);
+export const GEN_PROVIDERS = Object.freeze(["openai", "gemini", "openrouter"]);
+/** Default prompt of the generative engine. Kept short and literal: image models follow plain constraints best. */
+export const GEN_PROMPT_DEFAULT = "Convert this image into a depth map. Output only the depth map: a smooth grayscale image where white is nearest to the camera and black is farthest. Keep exactly the same framing, composition, proportions and outlines as the input image, pixel-aligned. No colour, no text, no labels, no borders, no lighting or shading changes, no added or removed objects, no stylisation.";
+export const GEN_PROMPT_MAX = 2000;
 export const PRECISIONS = Object.freeze(["fp16", "q4f16", "fp32"]);
 /** Lossless only: 16-bit grayscale PNG, or 16 bit packed into R (high) + G (low) of an 8-bit PNG (mask in B). */
 export const OUTPUT_FORMATS = Object.freeze(["png16", "png-rg16"]);
@@ -86,6 +93,7 @@ export const modelsFor = (engine) => DEPTH_MODELS.filter((m) => m.engine === eng
 /** Default model of an engine: in the browser V2 Large with WebGPU, V2 Small without it (research §1). */
 export function defaultModelKey(engine, { webgpu = true } = {}) {
   if (engine === "comfyui") return "da3-mono-large";
+  // generative: `model` keeps the local browser model (used for the side-by-side compare); the image model is in `gen`
   return webgpu ? "da2-large" : "da2-small";
 }
 
@@ -104,6 +112,7 @@ export function depthDefaults({ webgpu = true } = {}) {
     mask: { enabled: true, model: "birefnet-lite" },
     post: { normalize: true, lowPct: 1, highPct: 99, flyingPixels: true, guided: true, edgeSnap: 1, dilatePx: 3, smoothPx: 3, gamma: 0.8 },
     output: { format: "png16", maskChannel: true },
+    gen: { provider: "openai", model: "gpt-image-2.6-flare", quality: "medium", imageSize: "1K", prompt: GEN_PROMPT_DEFAULT },
     parallax: { strength: 0.5, sway: 0.3, light: true, rim: true, dust: false }
   };
 }
@@ -136,13 +145,18 @@ export function normalizeDepth(raw, env = {}) {
   const r = raw && typeof raw === "object" ? raw : {};
   const engine = pick(r.engine, ENGINES, d.engine);
   let model = modelByKey(r.model);
-  if (!model || model.engine !== engine) model = modelByKey(defaultModelKey(engine, env));
+  const modelEngine = engine === "generative" ? "browser" : engine;
+  if (!model || model.engine !== modelEngine) model = modelByKey(defaultModelKey(modelEngine, env));
   const precs = precisionsOf(model);
   const res = model.resolutions.map((x) => x.px);
   const p = r.post ?? {};
   const o = r.output ?? {};
   const x = r.parallax ?? {};
   const m = r.mask ?? {};
+  const g = r.gen ?? {};
+  const gid = (v, dflt) => (typeof v === "string" && /^[A-Za-z0-9._:/-]{1,120}$/.test(v.trim()) ? v.trim() : dflt);
+  const gprompt = typeof g.prompt === "string" && g.prompt.trim() ? g.prompt.trim().slice(0, GEN_PROMPT_MAX) : d.gen.prompt;
+  const gprovider = pick(g.provider, GEN_PROVIDERS, d.gen.provider);
   const post = {
     normalize: bool(p.normalize, d.post.normalize),
     lowPct: num(p.lowPct, RANGES.lowPct, d.post.lowPct),
@@ -166,6 +180,15 @@ export function normalizeDepth(raw, env = {}) {
     mask: { enabled: bool(m.enabled, d.mask.enabled), model: maskByKey(m.model) ? m.model : d.mask.model },
     post,
     output: { format: pick(o.format, OUTPUT_FORMATS, d.output.format), maskChannel: bool(o.maskChannel, d.output.maskChannel) },
+    // provider/model/quality are checked against the live provider catalogue where they are used (depth/generative.mjs):
+    // this module stays free of the provider code. A model id from another provider falls back there.
+    gen: {
+      provider: gprovider,
+      model: gid(g.model, gprovider === d.gen.provider ? d.gen.model : ""),
+      quality: gid(g.quality, d.gen.quality),
+      imageSize: gid(g.imageSize, d.gen.imageSize),
+      prompt: gprompt
+    },
     parallax: {
       strength: num(x.strength, RANGES.strength, d.parallax.strength),
       sway: num(x.sway, RANGES.sway, d.parallax.sway),

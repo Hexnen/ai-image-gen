@@ -3,6 +3,7 @@ import { MODULE_ID } from "./constants.mjs";
 import { resolveTypeKey } from "./image-types.mjs";
 import { GenerateDialog } from "./generate-dialog.mjs";
 import { assertCanApply } from "./generate-flow.mjs";
+import { depthButtonFor, registerDepth } from "./depth/entry.mjs";
 
 /** Selektory obrazka profilu — od najbardziej do najmniej pewnych. */
 const DEFAULT_SELECTORS = [
@@ -74,6 +75,9 @@ function inject(app, html) {
     GenerateDialog.open(doc);
   });
   anchor.after(btn);
+  // W6-I: "Dodaj głębię" next to the wand when the type has depth switched on (Depth tab) and the image is a real file
+  const depthBtn = depthButtonFor(doc);
+  if (depthBtn) btn.after(depthBtn);
 
   // Bottom-right corner of the image, measured against the button's offset parent. The image can move
   // without changing its own size (flex header, window resize, tab switch), so everything around it is watched.
@@ -85,6 +89,10 @@ function inject(app, html) {
     const o = op.getBoundingClientRect();
     btn.style.left = `${a.right - o.left + op.scrollLeft - op.clientLeft - btn.offsetWidth - 2}px`;
     btn.style.top = `${a.bottom - o.top + op.scrollTop - op.clientTop - btn.offsetHeight - 2}px`;
+    if (depthBtn?.isConnected) {
+      depthBtn.style.left = `${parseFloat(btn.style.left) - depthBtn.offsetWidth - 3}px`;
+      depthBtn.style.top = btn.style.top;
+    }
   };
   const settle = () => {
     const until = performance.now() + 700;
@@ -106,5 +114,6 @@ export function registerSheetButtons() {
   // ApplicationV2 (arkusze v13/v14, MacroConfig) oraz stare arkusze v1 (np. stonetop).
   Hooks.on("renderApplicationV2", (app, element) => inject(app, element));
   Hooks.on("renderDocumentSheet", (app, html) => inject(app, html));
+  registerDepth(); // W6-I: api.depth + nothing else at init (the depth code loads on first use)
   console.log(`${MODULE_ID} | sheet buttons registered`);
 }

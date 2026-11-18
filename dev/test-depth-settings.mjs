@@ -43,7 +43,38 @@ test("every model is well formed (engine, speed class, defaults inside its own l
     assert.ok(m.resolutions.some((r) => r.px === m.defaultResolution), m.key);
     for (const p of Object.keys(m.sizes)) assert.ok(PRECISIONS.includes(p), `${m.key} ${p}`);
   }
-  for (const e of ENGINES) assert.ok(modelsFor(e).length > 0, e);
+  // W6-I: the generative engine draws with the module's image providers (cfg.depth.gen), not with a depth model
+  for (const e of ENGINES) assert.ok(e === "generative" ? modelsFor(e).length === 0 : modelsFor(e).length > 0, e);
+});
+
+// ---------- W6-I: generative engine (schema v2) ----------
+test("v1 saves normalise to v2 with generative defaults; generative keeps a browser model for the compare", () => {
+  const v1 = { v: 1, enabled: true, engine: "browser", model: "da2-small", precision: "q4f16", post: { gamma: 0.75 } };
+  const n = normalizeDepth(v1);
+  assert.equal(n.v, DEPTH_SCHEMA);
+  assert.equal(DEPTH_SCHEMA, 2);
+  assert.equal(n.model, "da2-small");
+  assert.equal(n.precision, "q4f16");
+  assert.equal(n.post.gamma, 0.75);
+  assert.deepEqual(Object.keys(n.gen).sort(), ["imageSize", "model", "prompt", "provider", "quality"]);
+  assert.equal(n.gen.provider, "openai");
+  const g = normalizeDepth({ engine: "generative", model: "da2-small", gen: { provider: "gemini", model: "gemini-3.1-flash-image", prompt: "  depth please  " } });
+  assert.equal(g.engine, "generative");
+  assert.equal(g.model, "da2-small", "browser model kept for the local compare");
+  assert.equal(g.gen.provider, "gemini");
+  assert.equal(g.gen.model, "gemini-3.1-flash-image");
+  assert.equal(g.gen.prompt, "depth please");
+  assert.deepEqual(normalizeDepth(g), g, "idempotent");
+  const bad = normalizeDepth({ engine: "generative", model: "da3-mono-large", gen: { provider: "evil", model: "x y <script>", prompt: "" } });
+  assert.equal(bad.model, "da2-large", "a ComfyUI model is not a browser model");
+  assert.equal(bad.gen.provider, "openai");
+  assert.equal(bad.gen.model, "gpt-image-2.6-flare");
+  assert.ok(bad.gen.prompt.includes("white is nearest"));
+  assert.equal(normalizeDepth({ gen: { prompt: "x".repeat(5000) } }).gen.prompt.length, 2000);
+  const f = depthFromForm({ "depth.engine": "generative", "depth.gen.provider": "openrouter", "depth.gen.model": "openai/gpt-image-2.6-flare", "depth.gen.prompt": "p" }, n);
+  assert.equal(f.engine, "generative");
+  assert.equal(f.gen.provider, "openrouter");
+  assert.equal(f.gen.prompt, "p");
 });
 
 // ---------- defaults ----------
