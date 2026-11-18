@@ -13,6 +13,8 @@ import { TestDrawerApp } from "./test-drawer-app.mjs";
 import { aspectInfo } from "./aspect.mjs";
 import { createEnhanceStore, mountEnhance, resetEnhance, cancelEnhance } from "./enhance/ui.mjs";
 import { generatedSize, outputPreview, edgeIsNoop } from "./output-preview.mjs";
+import { refOptsFor, purposeOverride, measureRef, refLine, costBreakdown, estimateSettings, fmtUsd } from "./ref-convert.mjs";
+import { PURPOSE_IDS, REF_PURPOSES, REF_TIERS, usd, outputFamily, outputTokens } from "./image-cost.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin, DialogV2 } = foundry.applications.api;
 const MAX_TEST_VERSIONS = 4;
@@ -73,6 +75,11 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   /** The side panel docked to this window (GM only). */
   #drawer = null;
+
+  /** W6-D: tokeny referencji szkicu z ostatniego pomiaru (null = nieznane), do szacunku w karcie modelu bez re-renderu. */
+  #refTokens = [];
+  /** W6-D: indeks selecta przeznaczenia referencji do ponownego fokusu po re-renderze. */
+  #focusRefSelect = null;
 
   /** Różdżka (Claude) przy przykładowym opisie w szufladzie testu; cofnięcie czyści się przy zmianie typu. */
   #enhanceTest = createEnhanceStore();
@@ -227,6 +234,43 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     return game.i18n.format("AIIMG.Config.EstPerImage", { cost: Number(cost || 0).toFixed(3), source: tag });
   }
 
+  /** W6-D: rows of the reference list with original → sent size, tokens and cost (estimates), plus the total. */
+  async #refsContext(cfg) {
+    const L = (k) => game.i18n.localize(k);
+    const ro = refOptsFor(cfg);
+    const { inPrice } = estimateSettings();
+    const purposeLabel = (id) => `${L(`AIIMG.RefPurpose.${id}`)} · ${REF_PURPOSES[id]} px`;
+    const rows = await Promise.all(cfg.refs.map(async (path, index) => {
+      const override = purposeOverride(cfg, path);
+      const m = await measureRef(path, { ...ro, purpose: override || ro.purpose });
+      const line = refLine(m, inPrice);
+      return {
+        path, index, text: line.text, warn: line.warn, tokens: m?.error ? null : m?.tokens ?? null,
+        options: [{ id: "", label: game.i18n.format("AIIMG.RefPurpose.TypeDefault", { p: L(`AIIMG.RefPurpose.${ro.purpose}`) }), selected: !override },
+          ...PURPOSE_IDS.map((id) => ({ id, label: purposeLabel(id), selected: id === override }))]
+      };
+    }));
+    const tiles = ro.rules === "openai";
+    this.#refTokens = tiles ? rows.map((r) => r.tokens) : [];
+    const known = rows.filter((r) => r.tokens != null);
+    const sum = known.reduce((a, r) => a + r.tokens, 0);
+    return {
+      rows,
+      tiles,
+      purposes: PURPOSE_IDS.map((id) => ({ id, label: purposeLabel(id), selected: id === ro.purpose, hint: L(`AIIMG.RefPurpose.${id}Hint`) })),
+      purposeHint: L(`AIIMG.RefPurpose.${ro.purpose}Hint`),
+      maxEdges: REF_TIERS.map((v) => ({ value: v, label: `${v} px`, selected: v === ro.maxEdge })),
+      total: tiles && rows.length
+        ? game.i18n.format("AIIMG.RefSize.Total", { n: rows.length, tok: sum, usd: fmtUsd(usd(sum, inPrice)) }) + (known.length < rows.length ? ` ${L("AIIMG.Est.RefsPartial")}` : "")
+        : ""
+    };
+  }
+
+  /** W6-D: output + references estimate lines for the model card (null = no token table for this model). */
+  #breakdown(cfg) {
+    try { return costBreakdown(fitTestConfig(cfg), { refTokens: this.#refTokens }); } catch { return null; }
+  }
+
   async _prepareContext() {
     const types = detectImageTypes();
     if (!this.selectedKey || !types.some((t) => t.key === this.selectedKey)) {
@@ -251,11 +295,19 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const sizeId = `${cfg.width}x${cfg.height}`;
     const customSize = !!cfg.custom || !presets.some((s) => s.id === sizeId);
     const exactSize = cfg.provider === "openai"; // gpt-image-2.5: any WxH (x16)
+    // W6-D: per-preset output estimate in the chip tooltip (same quality), so the cheaper frame is visible before choosing.
+    const fam = outputFamily(cfg.provider, cfg.model);
+    const est = estimateSettings();
+    const sizeTip = (w, h) => {
+      const tok = fam ? outputTokens(fam, cfg.quality, w, h, { tables: est.tables }) : null;
+      return tok == null ? "" : game.i18n.format("AIIMG.Est.SizeTip", { tok, usd: fmtUsd(usd(tok, est.outPrice)) });
+    };
     const sizes = presets.map((s) => ({
-      ...s, label: `${s.width}×${s.height}`, selected: !customSize && s.id === sizeId
+      ...s, label: `${s.width}×${s.height}`, selected: !customSize && s.id === sizeId, tip: sizeTip(s.width, s.height)
     }));
     const supportsBatch = !!providers.PROVIDERS[cfg.provider]?.supportsBatch;
     const usage = getUsage();
+    const refInfo = this.selectedKey ? await this.#refsContext(cfg) : null;
 
     return {
       filters: [...new Set(["all", "Actor", "Item", "Macro", ...virtualGroups()])].map((g) => ({
@@ -315,7 +367,9 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       outQualityPct: Math.round((cfg.outQuality ?? 0.85) * 100),
       outOn: optimizeEnabled(),
       outVia: optimizerApi() ? game.i18n.format("AIIMG.Config.OutViaLmo", { v: game.modules.get(OPTIMIZER_ID)?.version ?? "" }) : game.i18n.localize("AIIMG.Config.OutViaBuiltin"),
-      refs: cfg.refs.map((path, index) => ({ path, index })),
+      refs: refInfo?.rows ?? [],
+      refInfo,
+      breakdown: this.#breakdown(cfg),
       usage: { day: usage.day.toFixed(2), month: usage.month.toFixed(2) },
       isGM: game.user.isGM
     };
@@ -339,6 +393,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     d.thinkingLevel = fd.thinkingLevel ?? d.thinkingLevel;
     if (fd.outMaxEdge !== undefined) d.outMaxEdge = Number(fd.outMaxEdge);
     d.outFormat = fd.outFormat ?? d.outFormat;
+    d.refPurpose = fd.refPurpose ?? d.refPurpose;
+    if (fd.refMaxEdge !== undefined && fd.refMaxEdge !== "") d.refMaxEdge = Number(fd.refMaxEdge);
     if (fd.outQualityPct !== undefined && fd.outQualityPct !== "") d.outQuality = Number(fd.outQualityPct) / 100;
     if (fd.size && fd.size !== "custom") {
       const [w, h] = fd.size.split("x").map(Number);
@@ -420,6 +476,30 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       this.#focusAfterRender = null;
     }
     this.#wireRefZone(el.querySelector(".aiimg-refs"));
+    // W6-D: reference sizing: type-wide purpose and limit, and per-image overrides (re-render: sizes are re-measured).
+    el.querySelectorAll("input[name=refPurpose]").forEach((r) => r.addEventListener("change", () => {
+      this.#focusAfterRender = "refPurpose";
+      this.#readForm();
+      this.render();
+    }));
+    el.querySelector("select[name=refMaxEdge]")?.addEventListener("change", () => {
+      this.#readForm();
+      this.render().then(() => this.element?.querySelector("select[name=refMaxEdge]")?.focus());
+    });
+    el.querySelectorAll("select[data-ref-purpose]").forEach((sel) => sel.addEventListener("change", () => {
+      this.#readForm();
+      const d = this.draft;
+      const path = d.refs[Number(sel.dataset.index)];
+      if (!path) return;
+      d.refPurposes = (d.refPurposes ?? []).filter((x) => x.path !== path);
+      if (sel.value) d.refPurposes.push({ path, purpose: sel.value });
+      this.#focusRefSelect = sel.dataset.index;
+      this.render();
+    }));
+    if (this.#focusRefSelect != null) {
+      el.querySelector(`select[data-ref-purpose][data-index="${this.#focusRefSelect}"]`)?.focus();
+      this.#focusRefSelect = null;
+    }
     el.querySelector("textarea[name=promptTemplate]")?.addEventListener("input", () => this.#onDraftInput());
     if (game.user.isGM) {
       this.#drawer ??= new TestDrawerApp(this);
@@ -485,6 +565,20 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     this.#updateOutput();
     const est = el.querySelector("[data-role=estPer]");
     if (est) est.textContent = this.#estPer(this.draft);
+    const bd = this.#breakdown(this.draft);
+    const lines = el.querySelector("[data-role=estLines]");
+    if (lines && bd) lines.textContent = bd.lines.join(" · ");
+    const hint = el.querySelector("[data-role=estHint]");
+    if (hint) { hint.textContent = bd?.hint ?? ""; hint.hidden = !bd?.hint; }
+    // size chip tooltips follow the quality chosen without a re-render
+    const fam = outputFamily(this.draft.provider, this.draft.model);
+    const es = estimateSettings();
+    for (const input of el.querySelectorAll("input[name=size]")) {
+      const [w, h] = String(input.value).split("x").map(Number);
+      const item = input.closest(".aiimg-seg-item");
+      const tok = fam && w && h ? outputTokens(fam, this.draft.quality, w, h, { tables: es.tables }) : null;
+      if (item && tok != null) item.dataset.tooltipText = game.i18n.format("AIIMG.Est.SizeTip", { tok, usd: fmtUsd(usd(tok, es.outPrice)) });
+    }
     const q = el.querySelector("input[name=outQualityPct]");
     const val = el.querySelector("[data-role=outQualityVal]");
     if (val && q) val.textContent = `${q.value}%`;
@@ -651,7 +745,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   static #onRemoveRef(event, target) {
     this.#readForm();
-    this.draft.refs.splice(Number(target.dataset.index), 1);
+    const [gone] = this.draft.refs.splice(Number(target.dataset.index), 1);
+    this.draft.refPurposes = (this.draft.refPurposes ?? []).filter((x) => x.path !== gone);
     this.render();
   }
 

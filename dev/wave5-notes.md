@@ -516,3 +516,31 @@ Polecenie właściciela (2026-11-18): «niech też pisze 2 akapitowe bio. domyś
 ### Niezweryfikowane
 - Prawdziwy model: czy pisze bio po polsku przy polskim MG, dokładnie 2 akapity, w realiach klasycznego komiksowego USA, i czy przy „akcja w Tokio” / „Polska lat 80.” idzie za MG bez pytania; czy w edycjach nie rusza bio. Do następnej rundy próbnej (przypadki budowy z rund 4-7 + jedna budowa z innym settingiem w wiadomości MG + jedna edycja bez wzmianki o bio).
 - Szuflada w Foundry (linie `¶` na karcie, Apply/Undo bio) tylko w node.
+
+
+## W6-D: reference images shrunk before sending + token/cost estimates (refs and output)
+
+Owner: «w ustawieniach obrazków referencyjnych … konwertować do maks 512, a jeśli mniejsze niż 512 to do jeszcze niższego progu, jakoś mądrze, i pokazywać rozmiar» + «tak samo przy generowaniu obrazków». Input: the owner's cost summary for gpt-image-2.6 (third-party figures, NOT verified by us).
+
+Files: `scripts/image-cost.mjs` (pure maths, no Foundry), `scripts/ref-convert.mjs` (thin canvas wrapper + UI text), wiring in `generate-flow.mjs` (`sendableRefs`, used by Fast, Test drawer, API and Batch), `config-store.mjs` (fields), `config-app.mjs` + `templates/config.hbs` (Reference images card, model-card estimate, size-chip tooltips), `generate-dialog.mjs` + `templates/generate.hbs` (per-extra-ref rows, estimate row), `settings.mjs` (3 world settings), `call-log.mjs` + `log-app.mjs` (real vs estimate), `styles/module.css`, `lang/en.json` + `lang/pl.json`. Tests: `dev/test-image-cost.mjs` (24), `dev/test-ref-convert.mjs` (6, stubbed canvas).
+
+Rules (OpenAI gpt-image, also `openai/*` via OpenRouter):
+- Purpose → tier: max 512, detail 384 (default), style 304, color 208. Per type (Reference images card) with a per-image override (select on each row; stored as `refPurposes: [{path, purpose}]`, an array because paths contain dots). Extra refs in the generate dialog get their own select (this run only).
+- Max long side per type (`refMaxEdge`, default 512), snapped to the ladder 512/384/304/208, so nothing in 513–1023 can be sent.
+- Target = min(purpose tier, max, largest tier ≤ source long side rounded UP to 16). So a source smaller than the tier drops to the next lower tier (450 → 384, 350 → 304), 300 → 304 and 200 → 208 (stretch < 1 tile, same tiles billed), a source ≤ 192 px is not resized at all (no upscale).
+- Short side: nearest multiple of 16 (not "round up": ≤ 8 px aspect error instead of ≤ 15 px, never a half-empty tile either way), never above the source's own tile count.
+- Aspect wider than 3:1: flagged in the row ("padding is billed"); not cropped.
+- Encoding: WebP q 0.9, alpha KEPT (no flatten on white: the module makes transparent-background images and a cut-out is meaningful). If nothing needs resizing and WebP is not smaller, the original bytes go. A conversion failure never blocks a run: original sent, console warning, token sum becomes unknown.
+- Gemini and Google via OpenRouter: unchanged behaviour (original bytes) except a conservative cap of 1536 px long side; no token estimate (only the sizes are shown).
+- Billing estimate of what is sent (`openaiInputTokens`): long ≤512 as is, 513–1023 → 512, ≥1024 → half; tiles ceil(/16); short side padded to ≥ long/3; cap 1536 tokens (shrunk tile by tile). Reproduces the summary: 512→1024, 384→576, 304→361, 208→169, ≥1248→1521 (seen 624), 4 strips 512x128 → 1408.
+- Output estimate (`outputTokens`): table per family, square (1024²) and wide (1536x1024 = 1024x1536) columns, log-interpolated between 1:1 and 3:2, wider = 3:2, >2.4 Mpx grows to 1.9× at 4K (as before), auto = high, partial images +100 each (module uses none). gpt-image-2.6 = owner's section 4. gpt-image-2.5 = catalogue square (`OPENAI_25_TOKENS`, the existing cautious upper bound) + wide low/medium/high from the summary's 2.5 row (170/357/1383); 2.5 wide xhigh/max unknown → = square.
+- Request: OpenAI Fast is one request with n → refs billed once, output ×n; OpenRouter/Batch → refs per image; Batch half rates.
+- Cheaper-frame hint: only for a (near-)square choice, compares 1536x1024 / 1024x1536 at the same quality, shows % and USD saved; never changes the size.
+- World settings (config, GM): `est.imageInPrice` 8, `est.imageOutPrice` 30, `est.outputTokens` (JSON overrides, invalid JSON ignored). They affect the displayed estimates only, NOT the budget limits or the real cost from usage.
+- Log: new field `estTokens {refs, out}`; `tokens` also keeps `img` (usage.input_tokens_details.image_tokens). Log details show "Reference tokens (real / estimate)" and "Output tokens (real / estimate)".
+
+Not changed on purpose: the existing Fast/Batch estimate and the budget limits still count each reference as 1536 tokens and 1024² output (cautious). So the old "Fast ~$x" number can be higher than the new breakdown line; both are shown.
+
+Doubts in the owner's summary: (1) the module's catalogue has only gpt-image-2.5 Flare/Sunburst, no 2.6 — the 2.6 table is dormant until a 2.6 model id is added (owner decision; ids unverified); (2) "624 px → 1521 tok" means 624 SEEN (≥1248 sent); 624 SENT is in the 513–1023 trap and costs 1024 (the tests pin both); (3) "2.6 Flare ~4× dearer than 2.5 at low/medium" vs the module's 2.5 square low 196 tok — consistent, but every figure is third-party; (4) "1536x1024 ~20% cheaper" is only from the two measured columns; nothing in between was measured, interpolation is ours; (5) cached input price and the 1–16 refs limit are unconfirmed; (6) the 2.5 square numbers in the catalogue (upper bound) and the summary's 2.5 1536x1024 numbers come from different testers.
+
+Verified: pure maths (node tests), wrapper wiring with stubbed canvas, template compile/render with Foundry's own Handlebars and fake contexts, all dev/test-*.mjs green, node --check. NOT verified: rendering/layout in a live Foundry (dark/light, narrow widths, focus return), real canvas WebP output sizes, real provider usage numbers vs these estimates, Gemini/OpenRouter behaviour with the 1536 cap.

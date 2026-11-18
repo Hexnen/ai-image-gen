@@ -56,7 +56,7 @@
             <span class="aiimg-lbl" id="aiimg-l-size">{{localize "AIIMG.Config.Resolution"}}</span>
             <div class="aiimg-seg wrap" role="radiogroup" aria-labelledby="aiimg-l-size">
               {{#each sizes}}
-              <label class="aiimg-seg-item">
+              <label class="aiimg-seg-item" {{#if tip}}data-tooltip-text="{{tip}}"{{/if}}>
                 <input type="radio" name="size" value="{{id}}" {{#if selected}}checked{{/if}}>
                 <span>{{label}}</span>
               </label>
@@ -142,6 +142,13 @@
           {{/if}}
 
           <p class="aiimg-est" role="status"><i class="fa-solid fa-coins" aria-hidden="true"></i> <span data-role="estPer">{{estPer}}</span></p>
+          {{#if breakdown}}
+          <div class="aiimg-est-detail">
+            <p class="aiimg-est-lines" role="status" aria-live="polite"><span class="aiimg-est-tag">{{localize "AIIMG.Est.Tag"}}</span> <span data-role="estLines">{{#each breakdown.lines}}{{#unless @first}} · {{/unless}}{{this}}{{/each}}</span></p>
+            <p class="aiimg-est-hint" data-role="estHint" role="status" {{#unless breakdown.hint}}hidden{{/unless}}><i class="fa-solid fa-lightbulb" aria-hidden="true"></i> {{breakdown.hint}}</p>
+            <p class="hint">{{localize "AIIMG.Est.Source"}}</p>
+          </div>
+          {{/if}}
         </section>
 
         <section class="aiimg-card" aria-labelledby="aiimg-c-mode">
@@ -208,21 +215,56 @@
           <p class="hint">{{localize "AIIMG.Config.PromptHint"}}</p>
         </section>
 
-        <section class="aiimg-card" aria-labelledby="aiimg-c-refs">
+        <section class="aiimg-card aiimg-refcard" aria-labelledby="aiimg-c-refs">
           <h3 id="aiimg-c-refs">{{localize "AIIMG.Config.Refs"}}</h3>
-          <div class="aiimg-refs" tabindex="0">
+          {{#if refInfo.tiles}}
+          <div class="aiimg-field">
+            <span class="aiimg-lbl" id="aiimg-l-refp">{{localize "AIIMG.RefPurpose.Label"}}</span>
+            <div class="aiimg-seg wrap" role="radiogroup" aria-labelledby="aiimg-l-refp" aria-describedby="aiimg-refp-hint">
+              {{#each refInfo.purposes}}
+              <label class="aiimg-seg-item" data-tooltip-text="{{hint}}">
+                <input type="radio" name="refPurpose" value="{{id}}" {{#if selected}}checked{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
+                <span>{{label}}</span>
+              </label>
+              {{/each}}
+            </div>
+            <p class="hint" id="aiimg-refp-hint">{{refInfo.purposeHint}}</p>
+          </div>
+          <div class="aiimg-field aiimg-refmax">
+            <label class="aiimg-lbl" for="aiimg-refmax">{{localize "AIIMG.RefSize.MaxEdge"}}</label>
+            <select id="aiimg-refmax" name="refMaxEdge" {{#unless isGM}}disabled{{/unless}}>
+              {{#each refInfo.maxEdges}}<option value="{{value}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+            </select>
+          </div>
+          <p class="hint">{{localize "AIIMG.RefSize.Rules"}}</p>
+          {{else}}
+          <p class="hint">{{localize "AIIMG.RefSize.GenericNote"}}</p>
+          {{/if}}
+          <div class="aiimg-refs" tabindex="0" aria-label="{{localize 'AIIMG.Config.Refs'}}">
             {{#each refs}}
-            <figure>
+            <figure class="aiimg-ref-row">
               <img src="{{path}}" alt="">
+              <figcaption>
+                <span class="aiimg-ref-size">{{text}}</span>
+                {{#if warn}}<span class="aiimg-ref-warn"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> {{warn}}</span>{{/if}}
+                {{#if @root.refInfo.tiles}}
+                <select data-ref-purpose data-index="{{index}}" aria-label="{{localize 'AIIMG.RefPurpose.PerImage'}}" {{#unless @root.isGM}}disabled{{/unless}}>
+                  {{#each options}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+                </select>
+                {{/if}}
+              </figcaption>
               <button type="button" data-action="removeRef" data-index="{{index}}" aria-label="{{localize 'AIIMG.Config.RemoveRef'}}" data-tooltip="AIIMG.Config.RemoveRef"><i class="fa-solid fa-xmark"></i></button>
             </figure>
             {{/each}}
-            <button type="button" class="aiimg-add" data-action="addRef" aria-label="{{localize 'AIIMG.Config.AddRef'}}" data-tooltip="AIIMG.Config.AddRef"><i class="fa-solid fa-plus"></i></button>
-            {{#if isGM}}
-            <button type="button" class="aiimg-add" data-action="uploadRefs" aria-label="{{localize 'AIIMG.Config.UploadRefsTip'}}" data-tooltip="AIIMG.Config.UploadRefsTip"><i class="fa-solid fa-upload"></i></button>
-            <input type="file" name="refUpload" accept="image/*" multiple hidden>
-            {{/if}}
+            <div class="aiimg-ref-adds">
+              <button type="button" class="aiimg-add" data-action="addRef" aria-label="{{localize 'AIIMG.Config.AddRef'}}" data-tooltip="AIIMG.Config.AddRef"><i class="fa-solid fa-plus"></i></button>
+              {{#if isGM}}
+              <button type="button" class="aiimg-add" data-action="uploadRefs" aria-label="{{localize 'AIIMG.Config.UploadRefsTip'}}" data-tooltip="AIIMG.Config.UploadRefsTip"><i class="fa-solid fa-upload"></i></button>
+              <input type="file" name="refUpload" accept="image/*" multiple hidden>
+              {{/if}}
+            </div>
           </div>
+          {{#if refInfo.total}}<p class="aiimg-ref-total" role="status">{{refInfo.total}}</p>{{/if}}
           {{#if isGM}}<p class="hint">{{localize "AIIMG.Config.RefsUploadHint"}}</p>{{/if}}
         </section>
       </div>

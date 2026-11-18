@@ -12,6 +12,8 @@ import { resolveTypeKey, detectImageTypes } from "./image-types.mjs";
 import { getConfig, setConfig, isConfigured, clampCount, fitConfig } from "./config-store.mjs";
 import { supportsTransparent } from "./providers/index.mjs";
 import { createEnhanceStore, mountEnhance, resetEnhance, cancelEnhance } from "./enhance/ui.mjs";
+import { refOptsFor, purposeOverride, measureRef, refLine, costBreakdown, estimateSettings, fmtUsd } from "./ref-convert.mjs";
+import { PURPOSE_IDS, REF_PURPOSES, usd } from "./image-cost.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
@@ -70,7 +72,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     return app;
   }
 
-  /** @type {{uid:string, blob:Blob, name:string, url:string}[]} dodatkowe referencje tylko na to wywołanie */
+  /** @type {{uid:string, blob:Blob, name:string, url:string, purpose:string}[]} dodatkowe referencje tylko na to wywołanie (purpose "" = domyślne typu) */
   extraRefs = [];
 
   /** Różdżka przy opisie (Claude): stan cofnięcia i trwającego żądania, przeżywa re-render. */
@@ -104,6 +106,34 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     return game.i18n.format("AIIMG.Gen.TitleFor", { name: this.document.name });
   }
 
+  /** W6-D: sizes of the type's and the extra references as they will be sent, and the token/cost estimate. */
+  async #refsInfo(cfg) {
+    const ro = refOptsFor(cfg);
+    const { inPrice } = estimateSettings();
+    const L = (k) => game.i18n.localize(k);
+    const typeM = await Promise.all((cfg.refs ?? []).map((p) => measureRef(p, { ...ro, purpose: purposeOverride(cfg, p) || ro.purpose })));
+    const extra = await Promise.all(this.extraRefs.map(async (x) => {
+      const m = await measureRef({ key: x.uid, blob: x.blob }, { ...ro, purpose: x.purpose || ro.purpose });
+      const line = refLine(m, inPrice);
+      return {
+        uid: x.uid, url: x.url, name: x.name, text: line.text, warn: line.warn, tokens: m?.error ? null : m?.tokens ?? null,
+        options: [{ id: "", label: game.i18n.format("AIIMG.RefPurpose.TypeDefault", { p: L(`AIIMG.RefPurpose.${ro.purpose}`) }), selected: !x.purpose },
+          ...PURPOSE_IDS.map((id) => ({ id, label: `${L(`AIIMG.RefPurpose.${id}`)} · ${REF_PURPOSES[id]} px`, selected: id === x.purpose }))]
+      };
+    }));
+    const typeTok = typeM.map((m) => (m?.error ? null : m?.tokens ?? null));
+    const tiles = ro.rules === "openai";
+    const sum = typeTok.reduce((a, t) => a + (t ?? 0), 0);
+    let typeLine = "";
+    if (typeM.length) {
+      const sent = typeM.filter((m) => m && !m.error);
+      const bytes = (k) => sent.reduce((a, m) => a + m[k].bytes, 0);
+      typeLine = game.i18n.format("AIIMG.RefSize.TypeRefs", { n: typeM.length, before: fmtBytes(bytes("src")), after: fmtBytes(bytes("sent")) })
+        + (tiles ? ` · ${game.i18n.format("AIIMG.RefSize.Tokens", { tok: sum, usd: fmtUsd(usd(sum, inPrice)) })}` : "");
+    }
+    return { extra, typeLine, tiles, refTokens: tiles ? [...typeTok, ...extra.map((e) => e.tokens)] : [] };
+  }
+
   async _prepareContext() {
     const r = readiness(this.document);
     const refsTotal = (r.cfg.refs?.length ?? 0) + this.extraRefs.length;
@@ -116,7 +146,13 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     const showBatch = r.canBatch;
     const sameSource = !showBatch || (fastI.source === batchI.source && fastI.n === batchI.n);
     const prompt = buildPrompt(this.document, this.description, r.cfg);
+    const ri = await this.#refsInfo(r.cfg);
+    let breakdown = null;
+    try { breakdown = costBreakdown(r.cfg, { refTokens: ri.refTokens, count: this.count, mode: "fast" }); } catch { /* no table */ }
     return {
+      refTypeLine: ri.typeLine,
+      refTiles: ri.tiles,
+      breakdown,
       description: this.description,
       descId: `${this.id}-description`,
       prompt,
@@ -138,7 +174,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       fastDefault: r.cfg.defaultMode === "fast",
       batchDefault: r.cfg.defaultMode === "batch" && r.canBatch,
       error: this.error,
-      extraRefs: this.extraRefs.map(({ uid, url, name }) => ({ uid, url, name })),
+      extraRefs: ri.extra,
       refsTotal,
       maxRefs: r.maxRefs,
       refsOver: refsTotal > r.maxRefs,
@@ -238,6 +274,13 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     });
     el.querySelector("input[name=transparent]")?.addEventListener("change", (ev) => { this.transparent = ev.target.checked; this.render(); });
     el.querySelector("input[name=saveRef]")?.addEventListener("change", (ev) => { this.saveRef = ev.target.checked; });
+    el.querySelectorAll("select[data-ref-purpose]").forEach((sel) => sel.addEventListener("change", () => {
+      const x = this.extraRefs.find((r) => r.uid === sel.dataset.uid);
+      if (!x) return;
+      x.purpose = sel.value;
+      const uid = x.uid;
+      this.render().then(() => this.element?.querySelector(`select[data-ref-purpose][data-uid="${uid}"]`)?.focus());
+    }));
     el.querySelector("input[name=refFiles]")?.addEventListener("change", (ev) => {
       this.#addFiles([...ev.target.files]);
       ev.target.value = "";
@@ -266,7 +309,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     for (const f of files) {
       if (!f.type.startsWith("image/")) { rejected.push(f.name); continue; }
       if (f.size > maxBytes) { rejected.push(`${f.name} (>${maxBytes / 1048576} MB)`); continue; }
-      this.extraRefs.push({ uid: foundry.utils.randomID(), blob: f, name: f.name || "pasted", url: URL.createObjectURL(f) });
+      this.extraRefs.push({ uid: foundry.utils.randomID(), blob: f, name: f.name || "pasted", url: URL.createObjectURL(f), purpose: "" });
     }
     if (rejected.length) ui.notifications.warn(game.i18n.format("AIIMG.Gen.RefsRejected", { files: rejected.join(", ") }));
     return this.render();
@@ -281,6 +324,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       return this.render();
     }
     const refs = this.extraRefs.map((r) => r.blob);
+    const extraRefPurposes = this.extraRefs.map((r) => r.purpose || "");
     const refsFiles = this.saveRef ? [...refs] : [];
     const count = this.count;
     const overrides = this.#overrides(readiness(this.document).cfg);
@@ -290,23 +334,23 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       if (mode === "fast") {
         if (count === 1 && !this.preview) {
           let saved = null;
-          await runFast(this.document, this.description, { extraRefs: refs, overrides, onSaved: (st) => { saved = st; } });
+          await runFast(this.document, this.description, { extraRefs: refs, extraRefPurposes, overrides, onSaved: (st) => { saved = st; } });
           ui.notifications.info(saved?.changed
             ? game.i18n.format("AIIMG.Gen.DoneSized", { name: esc(this.document.name), before: fmtBytes(saved.bytesBefore), after: fmtBytes(saved.bytesAfter) })
             : game.i18n.format("AIIMG.Gen.Done", { name: esc(this.document.name) }));
         } else {
           const description = this.description;
-          const res = await generateCandidates(this.document, description, { count, extraRefs: refs, overrides });
+          const res = await generateCandidates(this.document, description, { count, extraRefs: refs, extraRefPurposes, overrides });
           if (res.failed.length) {
             ui.notifications.warn(game.i18n.format("AIIMG.Gen.SomeFailed", { failed: res.failed.length, total: count, error: safeMessage(res.failed[0].error) }));
           }
           PickApp.open({
             document: this.document, candidates: res.candidates, meta: res.meta, source: "memory",
-            regenerate: () => generateCandidates(this.document, description, { count, extraRefs: refs, overrides })
+            regenerate: () => generateCandidates(this.document, description, { count, extraRefs: refs, extraRefPurposes, overrides })
           });
         }
       } else {
-        await runBatch(this.document, this.description, { count, extraRefs: refs, overrides });
+        await runBatch(this.document, this.description, { count, extraRefs: refs, extraRefPurposes, overrides });
         ui.notifications.info(game.i18n.format(count > 1 ? "AIIMG.Gen.QueuedMany" : "AIIMG.Gen.Queued", { name: esc(this.document.name), n: count }));
       }
       savePrefs({ count: this.count, preview: this.preview });

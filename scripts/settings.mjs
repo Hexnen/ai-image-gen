@@ -81,6 +81,27 @@ export function registerSettings() {
     onChange: () => syncOptimizerProfile()
   });
 
+  // W6-D: stawki i tabela tokenów wyjścia dla SZACUNKÓW pokazywanych w UI (referencje i obraz wyjściowy). Nie zmieniają
+  // rozliczenia z usage ani limitów budżetu; to tylko liczby z pomiarów osób trzecich, do nadpisania po własnych testach.
+  game.settings.register(MODULE_ID, "est.imageInPrice", {
+    name: "AIIMG.Settings.EstInPrice.Name",
+    hint: "AIIMG.Settings.EstInPrice.Hint",
+    scope: "world", config: true, restricted: true,
+    type: new NumberField({ initial: 8, min: 0, nullable: false })
+  });
+  game.settings.register(MODULE_ID, "est.imageOutPrice", {
+    name: "AIIMG.Settings.EstOutPrice.Name",
+    hint: "AIIMG.Settings.EstOutPrice.Hint",
+    scope: "world", config: true, restricted: true,
+    type: new NumberField({ initial: 30, min: 0, nullable: false })
+  });
+  game.settings.register(MODULE_ID, "est.outputTokens", {
+    name: "AIIMG.Settings.EstOutTokens.Name",
+    hint: "AIIMG.Settings.EstOutTokens.Hint",
+    scope: "world", config: true, restricted: true,
+    type: new StringField({ initial: "", blank: true })
+  });
+
   // Hidden state.
   game.settings.register(MODULE_ID, "usage", {
     scope: "world", config: false, type: new ObjectField({ initial: {} })

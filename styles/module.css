@@ -257,3 +257,29 @@ button.link:focus-visible { outline: 2px solid var(--color-warm-2, #c9593f); out
 .aiimg-keys .aiimg-keys-lead { margin: 0; }
 .aiimg-keys .form-fields input[type="password"], .aiimg-keys .form-fields input[type="text"] { flex: 1 1 auto; font-family: var(--font-monospace, monospace); }
 .aiimg-keys .aiimg-keys-reveal { flex: 0 0 2rem; width: 2rem; height: var(--input-height, 2rem); padding: 0; }
+
+/* W6-D: reference sizing (original -> sent, tokens, cost) and the token/cost estimate. Colours come from Foundry's theme
+   variables or currentColor, so the same rules read in the dark and the light theme. */
+.aiimg-refcard .aiimg-refs { flex-direction: column; flex-wrap: nowrap; gap: 6px; }
+.aiimg-refs figure.aiimg-ref-row { width: auto; height: auto; display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; gap: 8px; align-items: start; }
+.aiimg-ref-row img { width: 56px; height: 56px; }
+.aiimg-refs .aiimg-ref-row > button { position: static; width: 24px; height: 24px; }
+.aiimg-ref-row figcaption, .aiimg-extra-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: var(--font-size-12, 12px); line-height: 1.35; }
+.aiimg-ref-size { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.aiimg-ref-warn { color: var(--color-level-warning, #b37400); }
+.aiimg-ref-row select, .aiimg-extra-info select { width: auto; max-width: 100%; font-size: var(--font-size-12, 12px); }
+.aiimg-ref-adds { display: flex; gap: 8px; }
+.aiimg-ref-total { margin: 6px 0 0; font-size: var(--font-size-12, 12px); font-weight: 600; font-variant-numeric: tabular-nums; }
+.aiimg-refmax select { width: auto; min-width: 8em; }
+.aiimg-est-detail { font-size: var(--font-size-12, 12px); line-height: 1.4; }
+.aiimg-est-detail p { margin: 4px 0 0; }
+.aiimg-est-lines, .aiimg-ref-typeline { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.aiimg-est-tag { display: inline-block; padding: 0 4px; border: 1px solid currentColor; border-radius: 3px; font-size: var(--font-size-10, 10px); text-transform: uppercase; letter-spacing: .04em; opacity: .75; }
+.aiimg-est-hint { display: block; margin-top: 3px; }
+.aiimg-est-hint[hidden] { display: none; }
+.aiimg-est-src { display: block; margin-top: 3px; opacity: .7; }
+.aiimg-ref-typeline { margin: 4px 0 0; font-size: var(--font-size-11, 11px); opacity: .85; }
+.aiimg-extra-list { flex-direction: column; flex-wrap: nowrap; }
+.aiimg-extra-row { display: flex; gap: 8px; align-items: flex-start; }
+.aiimg-extra-row .aiimg-extra-ref { flex: 0 0 56px; }
+.aiimg-extra-info { font-size: var(--font-size-11, 11px); }

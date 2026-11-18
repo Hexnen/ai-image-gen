@@ -3,6 +3,7 @@ import * as providers from "./providers/index.mjs";
 import { DEFAULT_OUTPUT, MAX_EDGES, FORMATS } from "./optimize.mjs";
 import { defaultEdgeForKey } from "./output-preview.mjs";
 import { virtualDefaults } from "./image-types.mjs";
+import { DEFAULTS as EST, fitPurpose, clampMaxEdge, PURPOSE_IDS } from "./image-cost.mjs";
 
 export const DEFAULT_CONFIG = Object.freeze({
   provider: "openai",
@@ -20,8 +21,33 @@ export const DEFAULT_CONFIG = Object.freeze({
   // Output: co zapisujemy na dysk (nie zmienia żądania do API). outMaxEdge 0 = bez zmniejszania.
   outMaxEdge: DEFAULT_OUTPUT.maxEdge,
   outFormat: DEFAULT_OUTPUT.format,
-  outQuality: DEFAULT_OUTPUT.quality
+  outQuality: DEFAULT_OUTPUT.quality,
+  // W6-D: referencje są zmniejszane przed wysyłką (image-cost.mjs): przeznaczenie → próg, limit dłuższego boku,
+  // nadpisania per obraz [{path, purpose}] (tablica, bo ścieżki mają kropki, a ObjectField rozwija klucze z kropkami).
+  refPurpose: EST.purpose,
+  refMaxEdge: EST.maxEdge,
+  refPurposes: []
 });
+
+/** Nadpisania przeznaczenia per referencja: tylko dla ścieżek z listy refs i znanych przeznaczeń. */
+export function cleanRefPurposes(list, refs = []) {
+  const out = [];
+  for (const e of Array.isArray(list) ? list : []) {
+    const path = String(e?.path ?? "");
+    if (!refs.includes(path) || !PURPOSE_IDS.includes(e?.purpose) || out.some((x) => x.path === path)) continue;
+    out.push({ path, purpose: e.purpose });
+  }
+  return out;
+}
+
+/** Pola referencji w dozwolonym zakresie (stare zapisy bez nich dostają domyślne). */
+export function normalizeRefOpts(cfg = {}, refs = cfg.refs ?? []) {
+  return {
+    refPurpose: fitPurpose(cfg.refPurpose),
+    refMaxEdge: clampMaxEdge(cfg.refMaxEdge ?? EST.maxEdge),
+    refPurposes: cleanRefPurposes(cfg.refPurposes, refs)
+  };
+}
 
 /** Wszystkie wartości jakości (UI pokazuje podzbiór wg modelu: providers.modelCaps). */
 export const QUALITIES = providers.OPENAI_QUALITIES_25;
@@ -126,6 +152,7 @@ export function getConfig(key) {
   const dflt = vd ? { ...DEFAULT_CONFIG, ...vd, refs: cleanRefs(vd.refs) } : DEFAULT_CONFIG;
   const base = sk(key) in store ? dflt : { ...dflt, outMaxEdge: vd?.outMaxEdge ?? defaultEdgeForKey(key) };
   const cfg = { ...base, ...saved, refs: cleanRefs(saved.refs ?? (vd ? dflt.refs : undefined)) };
+  Object.assign(cfg, normalizeRefOpts(cfg));
   // Zapis z nieznanym dostawcą (usunięty/przemianowany) psułby każde renderowanie okien: wróć do domyślnego.
   if (!PROVIDER_IDS.includes(cfg.provider)) { cfg.provider = DEFAULT_CONFIG.provider; cfg.model = DEFAULT_CONFIG.model; }
   if (!QUALITIES.includes(cfg.quality)) cfg.quality = DEFAULT_CONFIG.quality; // old saves lack it
@@ -169,7 +196,8 @@ export async function setConfig(key, data) {
     transparent: !!data.transparent,
     imageSize: String(data.imageSize ?? DEFAULT_CONFIG.imageSize),
     thinkingLevel: String(data.thinkingLevel ?? ""),
-    ...normalizeOutput(data)
+    ...normalizeOutput(data),
+    ...normalizeRefOpts(data, cleanRefs(data.refs))
   };
   clean = fitConfig(clean);
   if (!providers.PROVIDERS[clean.provider]?.supportsBatch) clean.defaultMode = "fast";

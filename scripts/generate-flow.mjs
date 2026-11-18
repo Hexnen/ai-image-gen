@@ -10,6 +10,8 @@ import { estimateSyncCost, estimateBatchCost } from "./batch/cost.mjs";
 import { lookupLearned, learnedLimit } from "./cost-learning.mjs";
 import { logCall, updateCall, tokensFrom } from "./call-log.mjs";
 import { outputOptsFromConfig, statsPatch } from "./optimize.mjs";
+import { prepareRefs, purposeOverride, estimateSettings } from "./ref-convert.mjs";
+import { outputFamily, outputTokens } from "./image-cost.mjs";
 
 const FIELD = "img";
 
@@ -69,6 +71,23 @@ export async function loadRefs(paths = [], signal) {
     out.push(await normalizeRef(await res.blob(), p));
   }
   return out;
+}
+
+/**
+ * W6-D: zmniejsz referencje przed wysyłką (ref-convert.mjs) i policz szacunek tokenów do logu.
+ * Kolejność jak w żądaniu: najpierw referencje typu (cfg.refs, nadpisania per ścieżka), potem dodatkowe (extraPurposes).
+ * @returns {Promise<{refs:Blob[], estTokens:{refs?:number, out?:number}|undefined}>}
+ */
+export async function sendableRefs(cfg, typeRefs, extraRefs, extraPurposes = []) {
+  const paths = [...new Set(cfg.refs ?? [])];
+  const purposes = [...paths.map((p) => purposeOverride(cfg, p)), ...extraRefs.map((_, i) => extraPurposes[i] ?? "")];
+  const r = await prepareRefs([...typeRefs, ...extraRefs], cfg, purposes);
+  const fam = outputFamily(cfg.provider, cfg.model);
+  const out = fam ? outputTokens(fam, cfg.quality, cfg.width, cfg.height, { tables: estimateSettings().tables }) : null;
+  const est = {};
+  if (r.tokens != null) est.refs = r.tokens;
+  if (out != null) est.out = out;
+  return { refs: r.blobs, estTokens: Object.keys(est).length ? est : undefined };
 }
 
 /**
@@ -246,14 +265,14 @@ function failure(e, startMs, estShare) {
  * @returns {Promise<{candidates:{index:number, blob:Blob, cost:number, logId?:string}[],
  *   failed:{index:number, error:string}[], cost:number, meta:object, prompt:string, key:string}>}
  */
-export async function generateCandidates(document, description, { count = 1, extraRefs = [], signal, overrides } = {}) {
+export async function generateCandidates(document, description, { count = 1, extraRefs = [], extraRefPurposes = [], signal, overrides } = {}) {
   assertCanApply(document); // zanim cokolwiek zapłacimy
   const { key, cfg, prompt, meta } = describe(document, description, overrides);
-  return executeGeneration({ doc: document, description, key, cfg, prompt, meta, count, extraRefs, signal, runKind: "fast" });
+  return executeGeneration({ doc: document, description, key, cfg, prompt, meta, count, extraRefs, extraRefPurposes, signal, runKind: "fast" });
 }
 
 /** Wspólny rdzeń generacji (dokument albo próba z szuflady testu): limity, wywołanie providera, log, koszt. */
-export async function executeGeneration({ doc: document, description, key, cfg, prompt, meta, count, extraRefs, signal, runKind, caller }) {
+export async function executeGeneration({ doc: document, description, key, cfg, prompt, meta, count, extraRefs, extraRefPurposes = [], signal, runKind, caller }) {
   const ts = new Date().toISOString();
   let refsTotal = (cfg.refs?.length ?? 0) + extraRefs.length;
   const base = logBase(document, description, key, cfg, prompt, runKind, refsTotal);
@@ -278,20 +297,20 @@ export async function executeGeneration({ doc: document, description, key, cfg, 
     release = reserveBudget(est, { count, perRequest: cfg.provider === "openai" ? est : one });
   } catch (e) { throw await preFail(e, "limit-blocked", "blocked", est, "estimated"); }
   try {
-    return await runGeneration({ document, description, key, cfg, prompt, meta, count, extraRefs, signal, ts, base, est, apiKey });
+    return await runGeneration({ document, description, key, cfg, prompt, meta, count, extraRefs, extraRefPurposes, signal, ts, base, est, apiKey });
   } finally {
     release();
   }
 }
 
-async function runGeneration({ document, description, key, cfg, prompt, meta, count, extraRefs, signal, ts, base, est, apiKey }) {
+async function runGeneration({ document, description, key, cfg, prompt, meta, count, extraRefs, extraRefPurposes, signal, ts, base, est, apiKey }) {
   const cancelledEarly = () => Object.assign(new Error("Cancelled."), { name: "AbortError", aiimgLogged: true });
   if (signal?.aborted) throw cancelledEarly(); // nic jeszcze nie poszło do API: koszt 0, bez wpisu w logu
   const normalizedExtra = [];
   for (const [i, b] of extraRefs.entries()) normalizedExtra.push(await normalizeRef(b, `#${i + 1}`));
-  let refs;
+  let refs, estTokens;
   try {
-    refs = [...(await loadRefs(cfg.refs, signal)), ...normalizedExtra];
+    ({ refs, estTokens } = await sendableRefs(cfg, await loadRefs(cfg.refs, signal), normalizedExtra, extraRefPurposes));
   } catch (e) {
     if (e?.name === "AbortError") throw cancelledEarly();
     throw e;
@@ -347,7 +366,9 @@ async function runGeneration({ document, description, key, cfg, prompt, meta, co
       const entry = await logCall({
         ...vbase, status: "ok", durationMs: r.durationMs, route: r.route, cost: r.cost, costKind: r.costKind,
         // tokeny OpenAI dotyczą całego żądania (n obrazów): tylko przy pojedynczej wersji
-        tokens: cfg.provider === "openai" && count > 1 ? undefined : tokensFrom(r.raw) ?? undefined
+        tokens: cfg.provider === "openai" && count > 1 ? undefined : tokensFrom(r.raw) ?? undefined,
+        // W6-D: szacunek (refs + wyjście jednego obrazu) obok prawdziwych tokenów; przy OpenAI n>1 refs są w całym żądaniu
+        estTokens
       });
       candidates.push({ index: i, blob: r.blob, cost: r.cost, logId: entry?.id, ...(cfg.transparent ? { transparent: true } : {}) });
     } else {
@@ -417,8 +438,8 @@ export async function commitCandidate(document, candidate, meta, { apply = true 
 }
 
 /** Fast dla jednej wersji: generuj, zapisz plik i podmień obraz dokumentu. @returns {Promise<string>} ścieżka */
-export async function runFast(document, description, { signal, extraRefs = [], onSaved, overrides } = {}) {
-  const res = await generateCandidates(document, description, { count: 1, extraRefs, signal, overrides });
+export async function runFast(document, description, { signal, extraRefs = [], extraRefPurposes = [], onSaved, overrides } = {}) {
+  const res = await generateCandidates(document, description, { count: 1, extraRefs, extraRefPurposes, signal, overrides });
   const cand = res.candidates[0];
   try {
     const path = await commitCandidate(document, cand, res.meta);
@@ -441,14 +462,14 @@ export async function runFast(document, description, { signal, extraRefs = [], o
  * `pick: true` — wyniki lądują w _candidates/<batchId>/ i czekają na wybór ("awaiting-pick").
  * @returns {Promise<object>} rekord batcha
  */
-export async function runBatch(document, description, { count = 1, extraRefs = [], overrides } = {}) {
+export async function runBatch(document, description, { count = 1, extraRefs = [], extraRefPurposes = [], overrides } = {}) {
   assertCanApply(document); // zanim cokolwiek zapłacimy
   const { cfg, prompt, meta } = describe(document, description, overrides);
   if (!prompt.trim()) throw new Error("Empty prompt.");
   validateRun(cfg, count, extraRefs);
   const extra = [];
   for (const [i, b] of extraRefs.entries()) extra.push(await normalizeRef(b, `#${i + 1}`));
-  const refs = [...(await loadRefs(cfg.refs)), ...extra];
+  const { refs } = await sendableRefs(cfg, await loadRefs(cfg.refs), extra, extraRefPurposes);
   const items = Array.from({ length: count }, (_, i) => ({
     id: foundry.utils.randomID(),
     prompt, refs, width: cfg.width, height: cfg.height, quality: cfg.quality, transparent: !!cfg.transparent,

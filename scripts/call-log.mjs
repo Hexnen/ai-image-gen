@@ -17,7 +17,8 @@ export const LOG_FIELDS = [
   "size", "quality", "imageSize", "thinkingLevel", "refsCount", "cost", "costKind", "tokens",
   "docUuid", "docName", "typeKey", "batchId", "itemId", "error", "user",
   "bytesBefore", "bytesAfter", "optimizedVia", "caller", "transparent",
-  "cacheRead", "cacheWrite"   // AI builder (kind "build"): prompt-cache tokens read / written per request
+  "cacheRead", "cacheWrite",  // AI builder (kind "build"): prompt-cache tokens read / written per request
+  "estTokens"                 // W6-D: estimate {refs, out} (third-party token tables) shown next to the real `tokens`
 ];
 
 const months = new Map();   // "YYYY-MM" -> entry[]
@@ -45,7 +46,9 @@ export function tokensFrom(obj) {
   const inT = u.input_tokens ?? u.prompt_tokens ?? u.promptTokenCount ?? u.prompt_token_count;
   const outT = u.output_tokens ?? u.completion_tokens ?? u.candidatesTokenCount ?? u.candidates_token_count;
   if (!Number.isFinite(Number(inT)) && !Number.isFinite(Number(outT))) return null;
-  return { in: Number(inT) || 0, out: Number(outT) || 0 };
+  // OpenAI: część wejścia, która była obrazami (referencje), do porównania z szacunkiem referencji (W6-D)
+  const img = Number(u.input_tokens_details?.image_tokens);
+  return { in: Number(inT) || 0, out: Number(outT) || 0, ...(Number.isFinite(img) ? { img } : {}) };
 }
 
 /** Limity długości pól tekstowych (plik miesiąca jest przepisywany w całości przy każdym wpisie). */

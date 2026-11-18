@@ -147,6 +147,8 @@ export class LogApp extends HandlebarsApplicationMixin(ApplicationV2) {
           ["AIIMG.Log.Route", e.route], ["AIIMG.Log.Size", e.size], ["AIIMG.Config.Quality", e.quality],
           ["AIIMG.Log.ImageSize", e.imageSize], ["AIIMG.Log.Thinking", e.thinkingLevel],
           ["AIIMG.Log.Refs", e.refsCount], ["AIIMG.Log.Tokens", e.tokens ? `${e.tokens.in} → ${e.tokens.out}` : ""],
+          ["AIIMG.Log.RefTokens", e.tokens?.img != null || e.estTokens?.refs != null ? game.i18n.format("AIIMG.Log.RealVsEst", { real: e.tokens?.img ?? "?", est: e.estTokens?.refs ?? "?" }) : ""],
+          ["AIIMG.Log.OutTokens", e.estTokens?.out != null ? game.i18n.format("AIIMG.Log.RealVsEst", { real: e.tokens?.out ?? "?", est: e.estTokens.out }) : ""],
           ["AIIMG.Log.Optimized", e.bytesBefore != null ? `${fmtBytes(e.bytesBefore)} → ${fmtBytes(e.bytesAfter)} (${e.optimizedVia ?? "?"})` : ""],
           ["AIIMG.Log.Transparent", e.transparent ? "✓" : ""],
           ["AIIMG.Log.Description", e.description && e.description !== e.prompt ? e.description : ""], ["AIIMG.Log.Type", e.typeKey], ["AIIMG.Log.Batch", e.batchId],

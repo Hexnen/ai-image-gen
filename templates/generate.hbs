@@ -22,12 +22,24 @@
       <button type="button" data-action="addRefs" {{#if busy}}disabled{{/if}}><i class="fa-solid fa-image"></i> {{localize "AIIMG.Gen.AddImages"}}</button>
       <input type="file" name="refFiles" accept="image/*" multiple hidden>
     </div>
+    {{#if refTypeLine}}<p class="aiimg-ref-typeline">{{refTypeLine}}</p>{{/if}}
     {{#if extraRefs.length}}
     <div class="aiimg-extra-list">
       {{#each extraRefs}}
-      <div class="aiimg-extra-ref" data-tooltip-text="{{name}}">
-        <img src="{{url}}" alt="{{name}}">
-        <button type="button" data-action="removeRef" data-uid="{{uid}}" aria-label="{{localize 'AIIMG.Gen.RemoveRef'}}" {{#if ../busy}}disabled{{/if}}><i class="fa-solid fa-xmark"></i></button>
+      <div class="aiimg-extra-row">
+        <div class="aiimg-extra-ref" data-tooltip-text="{{name}}">
+          <img src="{{url}}" alt="{{name}}">
+          <button type="button" data-action="removeRef" data-uid="{{uid}}" aria-label="{{localize 'AIIMG.Gen.RemoveRef'}}" {{#if ../busy}}disabled{{/if}}><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="aiimg-extra-info">
+          <span class="aiimg-ref-size">{{text}}</span>
+          {{#if warn}}<span class="aiimg-ref-warn"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> {{warn}}</span>{{/if}}
+          {{#if @root.refTiles}}
+          <select data-ref-purpose data-uid="{{uid}}" aria-label="{{localize 'AIIMG.RefPurpose.PerImage'}}: {{name}}" {{#if ../busy}}disabled{{/if}}>
+            {{#each options}}<option value="{{id}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+          </select>
+          {{/if}}
+        </div>
       </div>
       {{/each}}
     </div>
@@ -67,6 +79,12 @@
     <dt>{{localize "AIIMG.Gen.SavedAs"}}</dt><dd>{{outputSummary}}</dd>
     <dt>{{localize "AIIMG.Gen.Estimate"}}</dt>
     <dd>{{localize "AIIMG.Fast"}} {{estFast}}{{#if estFastTag}} ({{estFastTag}}){{/if}}{{#if estBatch}} · {{localize "AIIMG.BatchShort"}} {{estBatch}}{{#if estBatchTag}} ({{estBatchTag}}){{/if}}{{/if}}{{#if estTag}} · {{estTag}}{{/if}}</dd>
+    {{#if breakdown}}
+    <dt>{{localize "AIIMG.Est.Tokens"}}</dt>
+    <dd class="aiimg-est-detail"><span class="aiimg-est-tag">{{localize "AIIMG.Est.Tag"}}</span> {{#each breakdown.lines}}{{#unless @first}} · {{/unless}}{{this}}{{/each}}
+      {{#if breakdown.hint}}<span class="aiimg-est-hint"><i class="fa-solid fa-lightbulb" aria-hidden="true"></i> {{breakdown.hint}}</span>{{/if}}
+      <small class="aiimg-est-src">{{localize "AIIMG.Est.Source"}}</small></dd>
+    {{/if}}
   </dl>
 
   {{#if error}}<p class="aiimg-error"><i class="fa-solid fa-circle-xmark"></i> {{error}}</p>{{/if}}
