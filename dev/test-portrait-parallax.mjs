@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import {
-  normalizeImagePath, isDepthCandidate, cleanEntry, cleanIndex, createDepthIndex, INDEX_MAX
+  normalizeImagePath, isDepthCandidate, cleanEntry, cleanIndex, toStored, createDepthIndex, INDEX_MAX
 } from "../scripts/depth/depth-index.mjs";
 import {
   parsePosition, objectFitRect, intersectRect, placementFor, panelPixels, lookFromPointer, settled, portraitView,
@@ -21,13 +21,27 @@ const test = async (name, fn) => {
 const near = (a, b, eps = 1e-6, msg = "") => assert.ok(Math.abs(a - b) <= eps, `${msg} ${a} vs ${b}`);
 const rectNear = (r, e, eps = 1e-6) => { for (const k of ["x", "y", "w", "h"]) near(r[k], e[k], eps, k); };
 
+/** Foundry expands dotted object keys of a setting value (expandObject): "a/b.webp" -> {"a/b": {webp}}. */
+function expandLikeFoundry(o) {
+  if (!o || typeof o !== "object") return o;
+  if (Array.isArray(o)) return o.map(expandLikeFoundry);
+  const out = {};
+  for (const [k, v] of Object.entries(o)) {
+    const parts = k.split(".");
+    let t = out;
+    for (const p of parts.slice(0, -1)) t = (t[p] ??= {});
+    t[parts.at(-1)] = expandLikeFoundry(v);
+  }
+  return out;
+}
+
 /** A world: one stored index shared by several clients, a fake file system, a clock. */
 function world(files = []) {
-  const w = { store: { v: 1, maps: {} }, files: new Set(files), t: 1000, listings: [], writes: 0 };
+  const w = { store: { v: 1, list: [] }, files: new Set(files), t: 1000, listings: [], writes: 0 };
   w.client = ({ gm = false, browse = gm, negTtlMs = 30_000 } = {}) => {
     const idx = createDepthIndex({
       read: () => structuredClone(w.store),
-      write: async (x) => { w.writes++; w.store = structuredClone(x); for (const c of w.clients) c.indexChanged(); },
+      write: async (x) => { w.writes++; w.store = expandLikeFoundry(structuredClone(x)); for (const c of w.clients) c.indexChanged(); },
       listDir: async (dir) => {
         w.listings.push(dir);
         const out = [...w.files].filter((f) => f.slice(0, f.lastIndexOf("/")) === dir);
@@ -43,6 +57,7 @@ function world(files = []) {
     return idx;
   };
   w.clients = [];
+  w.maps = () => cleanIndex(w.store).maps;
   return w;
 }
 
@@ -92,6 +107,16 @@ await test("cleanIndex: junk, prototype keys and unknown formats dropped; newest
   assert.ok(!("i0.webp" in k.maps) && `i${INDEX_MAX + 49}.webp` in k.maps, "the oldest go first");
 });
 
+await test("stored form: image paths are values, never setting keys (Foundry expands dotted keys)", () => {
+  const idx = { v: 1, maps: { "worlds/x/hero.webp": { d: "worlds/x/hero_depth.png", f: "png16", s: 1, t: 3 } } };
+  const naive = expandLikeFoundry(structuredClone(idx));
+  assert.deepEqual(cleanIndex(naive).maps, {}, "the object form is destroyed by the expansion (the bug seen live)");
+  const st = expandLikeFoundry(toStored(idx));
+  assert.deepEqual(Object.keys(cleanIndex(st).maps), ["worlds/x/hero.webp"]);
+  assert.equal(cleanIndex(st).maps["worlds/x/hero.webp"].d, "worlds/x/hero_depth.png");
+  assert.deepEqual(cleanIndex({ list: [null, 5, { k: "__proto__", d: "x.png" }, { k: "", d: "y.png" }] }).maps, {});
+});
+
 // ------------------------------------------------------------------ index: lookups
 
 await test("player without file browsing: only the index, never a directory listing", async () => {
@@ -127,7 +152,7 @@ await test("GM: directory listing when the index has no entry, backfilled into t
   assert.strictEqual(a2, a, "the same lookup");
   await gm.flush();
   assert.equal(w.writes, 1, "the backfill is one batched write");
-  assert.deepEqual(Object.keys(w.store.maps).sort(), ["worlds/x/a.webp", "worlds/x/b.webp"]);
+  assert.deepEqual(Object.keys(w.maps()).sort(), ["worlds/x/a.webp", "worlds/x/b.webp"]);
   const st = gm.stats();
   assert.ok(st.browse >= 2 && st.listings === 1);
   // a second GM / reload: straight from the index, no listing
@@ -182,7 +207,7 @@ await test("remember: immediate write, normalised, listeners; refuses icons / sv
   assert.equal(w.writes, 0);
   assert.equal(await gm.remember("/worlds/x/a.webp?v=1", { depth: "/worlds/x/a_depth.png", format: "png-rg16", mask: "worlds/x/a_mask.png" }), true);
   assert.equal(w.writes, 1, "written at once");
-  assert.deepEqual(w.store.maps["worlds/x/a.webp"], { d: "worlds/x/a_depth.png", f: "png-rg16", m: "worlds/x/a_mask.png", s: 0, t: w.t });
+  assert.deepEqual(w.maps()["worlds/x/a.webp"], { d: "worlds/x/a_depth.png", f: "png-rg16", m: "worlds/x/a_mask.png", s: 0, t: w.t });
   assert.ok(heard.length >= 1);
   assert.equal((await gm.lookup("worlds/x/a.webp")).format, "png-rg16");
   // the same again: no second write
@@ -192,10 +217,10 @@ await test("remember: immediate write, normalised, listeners; refuses icons / sv
   gm.reportMissing("worlds/x/a.webp");
   assert.equal(gm.peek("worlds/x/a.webp"), null);
   await gm.flush();
-  assert.equal(w.store.maps["worlds/x/a.webp"], undefined);
+  assert.equal(w.maps()["worlds/x/a.webp"], undefined);
   await gm.remember("worlds/x/b.webp", { depth: "worlds/x/b_depth.png" });
   assert.equal(await gm.forget("worlds/x/b.webp"), true);
-  assert.equal(w.store.maps["worlds/x/b.webp"], undefined);
+  assert.equal(w.maps()["worlds/x/b.webp"], undefined);
   const unsub = gm.onChange(() => { throw new Error("listener errors are contained"); });
   gm.invalidate();
   unsub();
@@ -205,9 +230,9 @@ await test("backfill writes merge with what is stored at write time (another GM 
   const w = world(["worlds/x/a.webp", "worlds/x/a_depth.png"]);
   const gm = w.client({ gm: true });
   await gm.lookup("worlds/x/a.webp");
-  w.store.maps["worlds/y/z.webp"] = { d: "worlds/y/z_depth.png", f: "png16", m: null, s: 1, t: 5 };
+  w.store.list.push({ k: "worlds/y/z.webp", d: "worlds/y/z_depth.png", f: "png16", m: null, s: 1, t: 5 });
   await gm.flush();
-  assert.deepEqual(Object.keys(w.store.maps).sort(), ["worlds/x/a.webp", "worlds/y/z.webp"]);
+  assert.deepEqual(Object.keys(w.maps()).sort(), ["worlds/x/a.webp", "worlds/y/z.webp"]);
 });
 
 await test("lookup never throws: unreadable index, failing listing, bad input", async () => {
@@ -347,6 +372,7 @@ await test("wiring: settings, hooks, run.mjs records the map, renderer shares on
   const iRemember = run.indexOf("depthIndex.remember(path");
   assert.ok(iDepth > 0 && iRemember > iDepth, "remembered after the map is saved");
   assert.match(run, /try \{\s*res\.metaPath = await upload\(paths\.meta/, "a refused sidecar overwrite does not fail the run");
+  assert.match(run, /notify: false, skipOptimize: true/, "Media Optimizer must not turn the 16-bit PNG into an 8-bit _depth.webp (seen live)");
   const portrait = read("scripts/parallax/portrait.mjs");
   assert.match(portrait, /closeApplicationV2/);
   assert.match(portrait, /getHeaderControlsApplicationV2/);

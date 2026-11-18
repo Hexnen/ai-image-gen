@@ -61,19 +61,32 @@ export function cleanEntry(e) {
   };
 }
 
-/** The stored index (any shape) -> {v, maps} with only clean entries, newest INDEX_MAX kept. */
+/**
+ * The stored index (any shape) -> {v, maps} with only clean entries, newest INDEX_MAX kept. Stored form is
+ * `{v, list: [{k, d, f, m, s, t}]}` (toStored): image paths contain dots, and Foundry expands dotted keys of an object
+ * setting ("a/hero.webp" -> {"a/hero": {webp: ...}}), seen live on lane 8. `maps` (object form) is read too (tests).
+ */
 export function cleanIndex(raw, max = INDEX_MAX) {
   const maps = {};
-  const src = raw && typeof raw === "object" && raw.maps && typeof raw.maps === "object" ? raw.maps : {};
   const list = [];
-  for (const [k, v] of Object.entries(src)) {
-    if (k === "__proto__" || k === "constructor" || k === "prototype") continue;
+  const add = (k, v) => {
+    if (typeof k !== "string" || !k || k.length > 1024 || k === "__proto__" || k === "constructor" || k === "prototype") return;
     const e = cleanEntry(v);
-    if (e && k) list.push([k, e]);
+    if (e) list.push([k, e]);
+  };
+  if (raw && typeof raw === "object") {
+    if (Array.isArray(raw.list)) for (const it of raw.list) if (it && typeof it === "object") add(it.k, it);
+    if (raw.maps && typeof raw.maps === "object") for (const [k, v] of Object.entries(raw.maps)) add(k, v);
   }
   list.sort((a, b) => b[1].t - a[1].t);
-  for (const [k, e] of list.slice(0, max)) maps[k] = e;
+  for (const [k, e] of list.slice(0, max)) if (!(k in maps)) maps[k] = e;
   return { v: INDEX_VERSION, maps };
+}
+
+/** {v, maps} -> the stored form {v, list} (no image path ever becomes an object key of the setting). */
+export function toStored(idx) {
+  const c = cleanIndex(idx);
+  return { v: INDEX_VERSION, list: Object.entries(c.maps).map(([k, e]) => ({ k, ...e })) };
 }
 
 /** Public shape of a found map. */
@@ -140,7 +153,7 @@ export function createDepthIndex(io) {
     }
     if (!changed) return;
     stats.writes++;
-    await io.write(cleanIndex(idx));
+    await io.write(toStored(idx));
   }
 
   function queue(key, entry, immediate = false) {
@@ -294,7 +307,7 @@ export function registerDepthIndexSetting() {
   game.settings.register(MODULE_ID, INDEX_SETTING, {
     scope: "world",
     config: false,
-    type: new foundry.data.fields.ObjectField({ initial: { v: INDEX_VERSION, maps: {} } }),
+    type: new foundry.data.fields.ObjectField({ initial: { v: INDEX_VERSION, list: [] } }),
     onChange: () => depthIndex.indexChanged()
   });
 }

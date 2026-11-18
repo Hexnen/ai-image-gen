@@ -18,7 +18,7 @@
 //   confirmation before every paid call). The finished map lands in the index and every client's open sheet picks it up.
 import { MODULE_ID } from "../constants.mjs";
 import { depthIndex, normalizeImagePath } from "../depth/depth-index.mjs";
-import { offsetFor, overscanFor, stepsFor, easeToward, backingSize, downscaleMap, conditionDepth } from "./parallax-core.mjs";
+import { offsetFor, overscanFor, stepsFor, easeToward, backingSize, downscaleMap, conditionDepth, normalizeView } from "./parallax-core.mjs";
 import {
   placementFor, panelPixels, lookFromPointer, settled, portraitView, effectAmount, portraitTextureSide,
   createFrameGuard, sameImage
@@ -131,7 +131,12 @@ function destroyHost() {
 }
 
 function kick() {
-  if (!host || host.raf || document.hidden || !views.size) return;
+  if (!host || document.hidden || !views.size) return;
+  if (host.raf) {
+    if (performance.now() - host.lastT < 1000) return;
+    cancelAnimationFrame(host.raf); // a request that never ran (page was hidden / frozen): ask again
+    host.raf = 0;
+  }
   host.lastT = performance.now();
   host.lastDrew = false;
   host.raf = requestAnimationFrame(frame);
@@ -536,6 +541,16 @@ export const portraitApi = {
     views: [...views.values()].map((v) => v.report())
   }),
   refresh: () => refreshPortraits(),
+  /** Override view settings of the open portraits (parallax-core view schema; this page, until they re-open). */
+  setView: (partial = {}) => {
+    for (const v of views.values()) {
+      v.view = normalizeView({ ...v.view, ...partial, on: { ...v.view.on, ...(partial.on ?? {}) } }, v.view);
+      if ("dilate" in partial || "normalBlur" in partial) v.upload();
+      v.dirty = true;
+    }
+    kick();
+    return [...views.values()].map((v) => structuredClone(v.view));
+  },
   /** Turn the feature back on after the slow-frame guard switched it off (this page). */
   resume: () => { if (disabled === "slow") disabled = ""; guard.reset(); refreshPortraits(); },
   /** Draw every view now (outside the loop; checks in a throttled tab). Optional fixed look for all. */

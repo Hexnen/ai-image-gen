@@ -45,7 +45,9 @@ async function upload(path, bytes, type) {
   const slash = path.lastIndexOf("/");
   const dir = path.slice(0, slash), name = path.slice(slash + 1);
   await ensureDir(dir);
-  const res = await FP().upload("data", dir, new File([bytes], name, { type }), {}, { notify: false });
+  // W6-N: skipOptimize = Media Optimizer (Local) must not re-encode a 16-bit depth PNG into an 8-bit lossy WebP (it also
+  // renames it to `_depth.webp`, which the depth lookup would then not find by name); seen live on lane 8
+  const res = await FP().upload("data", dir, new File([bytes], name, { type }), {}, { notify: false, skipOptimize: true });
   if (!res?.path) throw new Error(`Upload failed: ${path}`);
   return res.path;
 }
