@@ -5,11 +5,17 @@ import { redact } from "../redact.mjs";
 import { recordCost } from "../limits.mjs";
 import { logBatchResult } from "../call-log.mjs";
 import { statsPatch } from "../optimize.mjs";
-import { claimLease, releaseLease, markIngested, patchBatch } from "./record.mjs";
+import { claimLease, releaseLease, markIngested, patchBatch, leaseOwnerId } from "./record.mjs";
 import { applyBatchItem, finishPatch } from "./apply.mjs";
 
 /** Ile razy (kolejnych sprawdzeń) próbujemy zapisać obraz, zanim uznamy pozycję za nieudaną. */
 export const MAX_ATTEMPTS = 3;
+/**
+ * W6-K: minimalne odstępy między kolejnymi próbami zapisu jednej pozycji (po 1. i po 2. nieudanej). Dawniej trzy
+ * próby mogły paść w 30 s (ręczne „Sprawdź teraz", przeładowania) i opłacony obraz był oznaczany jako stracony.
+ * Testy ustawiają [0, 0].
+ */
+export const ingestTuning = { retryDelaysMs: [60_000, 180_000] };
 
 /** Stan ingestu odtworzony z markera zapisanego w rekordzie (wznowienie po restarcie). */
 export function stateOf(rec) {
@@ -21,6 +27,7 @@ export function stateOf(rec) {
     candidates: [...(ing.candidates ?? [])],
     attempts: { ...(ing.attempts ?? {}) },
     saved: { ...(ing.saved ?? {}) },
+    nextTry: { ...(ing.nextTry ?? {}) },
     incomplete: false,   // są pozycje z błędem przejściowym: zostaw rekord pending, ponów w następnym ticku
     lost: false,         // straciliśmy dzierżawę albo rekord przestał być aktywny
   };
@@ -37,16 +44,28 @@ export function resultOf(st) {
 }
 
 const persist = (rec, st) =>
-  markIngested(rec.id, st.done, st.cost, st.failed, st.candidates, { attempts: st.attempts, saved: st.saved });
+  markIngested(rec.id, st.done, st.cost, st.failed, st.candidates, { attempts: st.attempts, saved: st.saved, nextTry: st.nextTry });
 
-/** Pozycja ma ostateczny wynik: marker najpierw, koszt dopiero potem (crash = niedoliczenie, nie podwójne). */
-async function settle(rec, st, id, { ok, error, cost = 0, tokens, path, candidate, stats }) {
+/** Pozycje, których obraz został wygenerowany (i opłacony), ale nie dał się zapisać: do ponowienia (retryBatchSave). */
+export const retryableOf = (failed) => (failed ?? []).filter((f) => f?.retry);
+
+/**
+ * Pozycja ma ostateczny wynik: marker najpierw, koszt dopiero potem (crash = niedoliczenie, nie podwójne).
+ * `saveFailed`: obraz JEST u dostawcy, zawiódł tylko zapis/podpięcie -> wpis z `retry: true` (W6-K), nie strata.
+ */
+async function settle(rec, st, id, { ok, error, cost = 0, tokens, path, candidate, stats, saveFailed = false, reason }) {
   st.done.add(id);
-  if (!ok) st.failed.push({ id, error: redact(error ?? "error") });
+  if (!ok) {
+    st.failed.push({
+      id, error: redact(error ?? "error"),
+      ...(saveFailed ? { stage: "save", retry: true, cost, ...(reason ? { reason } : {}), ...(path ? { path } : {}) } : {}),
+    });
+  }
   else if (candidate) st.candidates.push({ id, path, cost });
   st.cost += cost;
   delete st.attempts[id];
   delete st.saved[id];
+  delete st.nextTry[id];
   await logBatchResult(rec, id, { ok, error, cost, tokens, ...statsPatch(stats) });
   const marked = await persist(rec, st);
   await recordCost(cost);
@@ -58,15 +77,24 @@ async function handleRow(rec, st, item, row) {
   if (row.error || !row.b64) {
     return settle(rec, st, id, { ok: false, error: row.error || "No image in the batch response", cost: row.cost ?? 0, tokens: row.tokens });
   }
+  // W6-K: odstęp między próbami (nie trzy próby w 30 s); obraz czeka u dostawcy
+  if ((st.nextTry[id] ?? 0) > Date.now()) { st.incomplete = true; return true; }
   const r = await applyBatchItem(item, b64ToBlob(row.b64, row.mime || "image/png"), rec, st.saved[id]);
   if (r.ok) return settle(rec, st, id, { ok: true, path: r.path, candidate: r.candidate, cost: row.cost ?? 0, tokens: row.tokens, stats: r.stats });
   if (r.path) st.saved[id] = r.path;
   const n = (st.attempts[id] ?? 0) + 1;
   st.attempts[id] = n;
-  if (r.permanent || n >= MAX_ATTEMPTS) {
-    const why = r.permanent ? r.error : `${r.error} (gave up after ${n} attempts)`;
-    return settle(rec, st, id, { ok: false, error: why, cost: row.cost ?? 0, tokens: row.tokens });
+  console.warn(`moinens-ai-gen | batch ${rec.id}: saving item ${id} failed (attempt ${n}/${MAX_ATTEMPTS})`, r.error);
+  // Session lost / no upload permission: retrying on this client cannot help -> stop at once, keep it recoverable.
+  const clientBlocked = r.reason === "session" || r.reason === "permission";
+  if (r.permanent || clientBlocked || n >= MAX_ATTEMPTS) {
+    const why = r.permanent ? r.error
+      : clientBlocked ? `${r.error} (image kept at the provider; retry available)`
+      : `${r.error} (gave up after ${n} attempts; retry available)`;
+    // Dokument docelowy usunięty: ponowienie zapisu nic nie da. Każdy inny błąd zapisu: obraz do odzyskania.
+    return settle(rec, st, id, { ok: false, error: why, cost: row.cost ?? 0, tokens: row.tokens, saveFailed: !r.permanent, reason: r.reason, path: r.path });
   }
+  st.nextTry[id] = Date.now() + (ingestTuning.retryDelaysMs[n - 1] ?? 0);
   st.incomplete = true;   // obraz zostaje u dostawcy; ponowimy przy następnym sprawdzeniu
   return persist(rec, st);
 }
@@ -100,7 +128,7 @@ export async function failMissing(rec, st, why = "") {
  * Zamyka rekord. terminalStatus "done": normalne zakończenie (lub awaiting-pick). Inne ("error",
  * "cancelled"): zachowuje to, co już zaksięgowano (applied/failed/cost), a batch z kandydatami czeka na wybór.
  */
-export function finishBatch(cur, st, { terminalStatus = "done", error } = {}) {
+export function finishBatch(cur, st, { terminalStatus = "done", error, extra } = {}) {
   const r = resultOf(st);
   let patch;
   if (terminalStatus === "done") patch = finishPatch(cur, r);
@@ -109,7 +137,11 @@ export function finishBatch(cur, st, { terminalStatus = "done", error } = {}) {
     status: terminalStatus, error, completedAt: Date.now(),
     applied: r.applied, failed: r.failed, cost: r.cost, ingest: undefined, lease: undefined,
   };
-  return patchBatch(cur.id, patch, { onlyActive: true, leaseOwner: game.user?.id });
+  // W6-K: ile opłaconych obrazów czeka na ponowienie zapisu (+ gdzie je pobrać ponownie: `extra.remote`)
+  const retryable = retryableOf(r.failed).length;
+  patch.retryable = retryable || undefined;
+  if (retryable && extra) Object.assign(patch, extra);
+  return patchBatch(cur.id, patch, { onlyActive: true, leaseOwner: leaseOwnerId() });
 }
 
 /** Wyniki wygasły u dostawcy (404/410): zakończ, zachowując postęp z markera. */

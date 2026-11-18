@@ -5,7 +5,7 @@
 // i scalamy po id (drugi GM mógł dopisać wpisy), a błąd odczytu NIGDY nie kończy się nadpisaniem pustym.
 import { MODULE_ID, DATA_ROOT } from "./constants.mjs";
 import { redact } from "./redact.mjs";
-import { ensureDir } from "./save-image.mjs";
+import { ensureDir, uploadOrThrow } from "./save-image.mjs";
 
 export { redact };
 
@@ -144,7 +144,8 @@ async function ensureLoaded() {
 
 async function uploadText(name, text) {
   await ensureDir(DIR);
-  await FP().upload("data", DIR, new File([text], name, { type: "application/json" }), {}, { notify: false });
+  // W6-K: a refused upload used to count as written (the entry was silently lost); now it throws -> retry in 30 s
+  await uploadOrThrow(DIR, new File([text], name, { type: "application/json" }));
 }
 
 async function writeMonth(key) {

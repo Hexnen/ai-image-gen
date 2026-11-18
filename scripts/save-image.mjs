@@ -45,6 +45,94 @@ export async function blobToWebp(blob, quality = 0.92) {
   }
 }
 
+/**
+ * W6-K: upload error with the real reason. `reason`: "session" (the server did not accept this browser's HTTP login
+ * session: the cookie is missing/expired, while the game socket still works), "permission" (no FILES_UPLOAD),
+ * "refused" (the server answered with an error, shown in a Foundry notification), "network" (the request threw),
+ * "unknown". `retryable`: worth retrying later / from another client.
+ */
+export class UploadError extends Error {
+  constructor(message, { reason = "unknown", status, retryable = true } = {}) {
+    super(message);
+    this.name = "UploadError";
+    this.reason = reason;
+    this.status = status;
+    this.retryable = retryable;
+  }
+}
+
+/**
+ * Foundry's FilePicker.upload hands the server's error text (`response.error`, HTTP 200 body) only to
+ * ui.notifications.error and returns false. While our uploads run we tee those messages (still shown as before) so the
+ * real reason reaches the batch record. No extra request: an HTTP probe would itself set a new session cookie and could
+ * log out another tab of the same host.
+ */
+let sessionWarned = false;
+let capturing = 0;
+let captured = [];
+let origError = null;
+function beginCapture() {
+  const n = globalThis.ui?.notifications;
+  if (!n || typeof n.error !== "function") return () => [];
+  if (capturing++ === 0) {
+    origError = n.error;
+    captured = [];
+    n.error = function (msg, ...rest) { try { captured.push(String(msg ?? "")); } catch { /* ignore */ } return origError.call(this, msg, ...rest); };
+  }
+  const from = captured.length;
+  return () => {
+    const mine = captured.slice(from);
+    if (--capturing === 0 && origError) { n.error = origError; origError = null; }
+    return mine;
+  };
+}
+
+/** Classify the server's upload error text. "User [] does not have permission" = no user on the HTTP session. */
+export function classifyUploadMessage(msg) {
+  const m = String(msg ?? "");
+  if (/User \[\s*\] does not have permission to upload/i.test(m)) return "session";
+  if (/does not have permission to upload/i.test(m)) return "permission";
+  return m ? "refused" : "unknown";
+}
+
+const SESSION_HINT = "the server did not see a logged-in user on this browser's HTTP session (session cookie missing, expired or " +
+  "overwritten, e.g. by another Foundry tab on the same host with a different port; the game socket still works). " +
+  "Reload this page or log in again, then use Retry save.";
+
+/**
+ * FilePicker.upload with a real error. Foundry's upload swallows the reason: a server error becomes `false` (the text
+ * goes only to a notification), a thrown fetch becomes `{}`. This keeps going through FilePicker.upload (other modules
+ * wrap it, e.g. local-media-optimizer) and only explains the failure.
+ * Throws UploadError {reason: "session" | "permission" | "refused" | "network" | "unknown", retryable}.
+ * @returns {Promise<{path:string}>}
+ */
+export async function uploadOrThrow(dir, file, options = {}) {
+  let res, thrown = null;
+  const end = beginCapture();
+  let msgs;
+  try { res = await FP().upload("data", dir, file, {}, { notify: false, ...options }); }
+  catch (e) { thrown = e; }
+  finally { msgs = end(); }
+  if (res?.path) return res;
+  const where = `${dir}/${file?.name ?? "file"}`;
+  const server = msgs.find((m) => /upload|permission|file/i.test(m)) ?? msgs[0] ?? "";
+  const kind = classifyUploadMessage(server);
+  if (kind === "session") {
+    if (!sessionWarned) {   // once per page load: Foundry's own text ("User [] does not have permission") is cryptic
+      sessionWarned = true;
+      try { ui.notifications.warn(`Moinens AI Gen: ${SESSION_HINT}`, { permanent: true }); } catch { /* UI not ready */ }
+    }
+    throw new UploadError(`Upload failed for ${where}: ${SESSION_HINT} (server: "${server}")`, { reason: "session", retryable: false });
+  }
+  if (kind === "permission" || (game.user && typeof game.user.can === "function" && !game.user.can("FILES_UPLOAD"))) {
+    throw new UploadError(`Upload failed for ${where}: user "${game.user?.name ?? "?"}" may not upload files${server ? ` (server: "${server}")` : ""}`,
+      { reason: "permission", retryable: false });
+  }
+  if (thrown) throw new UploadError(`Upload failed for ${where}: ${thrown?.message ?? thrown}`, { reason: "network" });
+  if (server) throw new UploadError(`Upload failed for ${where}: server said "${server}"`, { reason: "refused" });
+  throw new UploadError(`Upload failed for ${where}: no path in the server response (network error, or a response that was not JSON)`, { reason: "unknown" });
+}
+
 export async function ensureDir(path) {
   let cur = "";
   for (const p of path.split("/")) {
@@ -72,8 +160,7 @@ export async function saveImageBlobEx(blob, { system = "core", docType = "Docume
   const filename = `${slug(name)}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}.${EXT[type] ?? "png"}`;
   const file = new File([data], filename, { type });
   // `optimized: true` tells local-media-optimizer's upload hook not to encode the file a second time.
-  const res = await FP().upload("data", dir, file, {}, { notify: false, ...(stats && stats.via !== "error" ? { optimized: true } : {}) });
-  if (!res?.path) throw new Error(`Upload failed for ${dir}/${filename}`);
+  const res = await uploadOrThrow(dir, file, stats && stats.via !== "error" ? { optimized: true } : {});
   return {
     path: res.path,
     stats: stats ?? { changed: data !== blob, bytesBefore: blob.size, bytesAfter: data.size, via: "off", blob: data }
@@ -136,8 +223,7 @@ export async function saveRefFile(file, typeKey) {
     }
   }
   const filename = `${slug(base, "ref")}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}.${REF_EXT[outType]}`;
-  const res = await FP().upload("data", dir, new File([data], filename, { type: outType }), {}, { notify: false, ...(flag ? { optimized: true } : {}) });
-  if (!res?.path) throw new Error(`Upload failed for ${dir}/${filename}`);
+  const res = await uploadOrThrow(dir, new File([data], filename, { type: outType }), flag ? { optimized: true } : {});
   return res.path;
 }
 

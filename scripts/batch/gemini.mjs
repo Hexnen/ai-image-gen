@@ -126,6 +126,25 @@ async function* geminiRows(apiKey, respFile, model, stats) {
 
 const isGone = (e) => e?.status === 404 || e?.status === 410;
 
+const respFileOf = (op) =>
+  op?.response?.responsesFile || op?.response?.responses_file ||
+  op?.metadata?.output?.responsesFile || op?.response?.dest?.fileName || op?.response?.dest?.file_name;
+
+/**
+ * W6-K: rows of an ALREADY FINISHED batch again, for retryBatchSave (read-only: operation GET + results download;
+ * nothing is generated or billed again). Throws HttpError 404/410 when the results are gone at Gemini.
+ */
+export async function* geminiRetryRows(apiKey, rec, stats = { skipped: 0 }) {
+  let respFile = rec.remote?.responsesFile ?? null;
+  if (!respFile) {
+    const res = await fetch(`${GEMINI_BASE}/v1beta/${rec.remoteId}`, { headers: hdr(apiKey), signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS) });
+    if (!res.ok) throw new HttpError(`Gemini batches/get ${res.status}`, res.status);
+    respFile = respFileOf(await res.json());
+  }
+  if (!respFile) throw new HttpError("Gemini batch has no results file", 404);
+  yield* geminiRows(apiKey, respFile, rec.model, stats);
+}
+
 export async function checkGemini(apiKey, rec) {
   const res = await fetch(`${GEMINI_BASE}/v1beta/${rec.remoteId}`, {
     headers: hdr(apiKey), signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
@@ -144,9 +163,7 @@ export async function checkGemini(apiKey, rec) {
   const state = String(op?.metadata?.state ?? op?.state ?? "");
   if (state.endsWith("SUCCEEDED")) {
     await withLease(rec.id, async (cur) => {
-      const respFile =
-        op?.response?.responsesFile || op?.response?.responses_file ||
-        op?.metadata?.output?.responsesFile || op?.response?.dest?.fileName || op?.response?.dest?.file_name;
+      const respFile = respFileOf(op);
       if (!respFile) {
         await expireBatch(cur, "Gemini reported success but returned no results file.");
         return;
@@ -162,7 +179,7 @@ export async function checkGemini(apiKey, rec) {
       if (st.lost) return;
       await failMissing(cur, st, `${stats.skipped} unreadable lines`);
       if (st.lost || st.incomplete) return;
-      await finishBatch(cur, st, { terminalStatus: "done" });
+      await finishBatch(cur, st, { terminalStatus: "done", extra: { remote: { responsesFile: respFile } } });
     });
   } else if (/FAILED|CANCELLED|EXPIRED/.test(state)) {
     await patchBatch(rec.id, {

@@ -15,6 +15,7 @@ import { logCall } from "../call-log.mjs";
 export { listBatches, getBatch, removeBatch, isActive, pruneBatches } from "./record.mjs";
 export { checkBatches, startPoller, stopPoller, cancelBatch, abandonBatch, CHECK_EVERY_MS } from "./poller.mjs";
 export { estimateBatchCost } from "./cost.mjs";
+export { retryBatchSave, retryableItems, isRetryableFailure } from "./retry.mjs";
 
 const SUBMIT = { openai: submitOpenAI, gemini: submitGemini };
 const CANCEL = { openai: cancelOpenAI, gemini: cancelGemini };

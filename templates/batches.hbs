@@ -22,11 +22,14 @@
         <td>{{created}}</td>
         <td>{{provider}}<br><small>{{model}}</small></td>
         <td>{{count}}{{#if names}}<br><small>{{names}}</small>{{/if}}</td>
-        <td class="aiimg-status aiimg-status-{{status}}">{{statusLabel}}{{#if error}}<br><small class="aiimg-error">{{error}}</small>{{/if}}</td>
+        <td class="aiimg-status aiimg-status-{{status}}">{{statusLabel}}{{#if error}}<br><small class="aiimg-error" {{#if failDetail}}data-tooltip="{{failDetail}}"{{/if}}>{{error}}</small>{{/if}}{{#if retryNote}}<br><small class="aiimg-retry-note">{{retryNote}}</small>{{/if}}</td>
         <td data-tooltip="{{#if costReal}}AIIMG.Batches.CostReal{{else}}AIIMG.Batches.CostEstimate{{/if}}">{{cost}}</td>
         <td class="aiimg-batch-actions">
           {{#if awaitingPick}}
           <button type="button" class="primary" data-action="pick" data-id="{{id}}" aria-label="{{localize 'AIIMG.Pick.Open'}}" data-tooltip="AIIMG.Pick.Open"><i class="fa-solid fa-images"></i></button>
+          {{/if}}
+          {{#if retryable}}
+          <button type="button" class="primary" data-action="retrySave" data-id="{{id}}" {{#if retrying}}disabled{{/if}} aria-label="{{retryLabel}}" data-tooltip="{{retryLabel}}"><i class="fa-solid fa-rotate-right"></i></button>
           {{/if}}
           {{#if active}}
           <button type="button" data-action="cancel" data-id="{{id}}" {{#if cancelling}}disabled{{/if}} aria-label="{{localize 'AIIMG.Batches.Cancel'}}" data-tooltip="AIIMG.Batches.Cancel"><i class="fa-solid fa-ban"></i></button>

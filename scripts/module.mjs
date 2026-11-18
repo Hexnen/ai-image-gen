@@ -83,6 +83,8 @@ Hooks.once("ready", async () => {
       listImageTypes: () => imageTypes.detectImageTypes(),
       estimateGeneration,
       generateImage,
+      // W6-K: re-download + save paid batch results whose save failed (read-only at the provider, no new generation)
+      retryBatchSave: (batchId, opts) => batch.retryBatchSave(batchId, opts),
       batch, callLog
     });
   }

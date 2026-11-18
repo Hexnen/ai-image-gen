@@ -40,7 +40,7 @@ export async function applyBatchItem(item, blob, rec, savedPath) {
     if (rec?.pick) return { ok: true, path, candidate: true, stats };
     await applyImage(item.target.uuid, path, item.target.field ?? "img");
   } catch (e) {
-    return { ok: false, error: String(e?.message ?? e), path, permanent: isPermanentApplyError(e) };
+    return { ok: false, error: String(e?.message ?? e), path, permanent: isPermanentApplyError(e), ...(e?.reason ? { reason: e.reason } : {}) };
   }
   return { ok: true, path, stats };
 }

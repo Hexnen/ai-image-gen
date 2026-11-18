@@ -165,6 +165,23 @@ async function* openaiRows(apiKey, batch, stats) {
 
 const isGone = (e) => e?.status === 404 || e?.status === 410;
 
+/**
+ * W6-K: rows of an ALREADY FINISHED batch again, for retryBatchSave. Read-only GETs (batch status + output file
+ * content): no new request is sent to the image endpoint, nothing is generated or billed again.
+ * Throws HttpError 404/410 when the batch or its output file is gone at OpenAI.
+ */
+export async function* openaiRetryRows(apiKey, rec, stats = { skipped: 0 }) {
+  let outputId = rec.remote?.outputFileId ?? null;
+  try {
+    const batch = await getRemote(apiKey, rec.remoteId);
+    outputId = batch?.output_file_id ?? outputId;
+  } catch (e) {
+    if (!outputId) throw e;      // no stored id to fall back on
+  }
+  if (!outputId) throw new HttpError("OpenAI batch has no output file (nothing was generated)", 404);
+  yield* openaiRows(apiKey, { output_file_id: outputId }, stats);
+}
+
 export async function checkOpenAI(apiKey, rec) {
   let batch;
   try {
@@ -198,9 +215,14 @@ export async function checkOpenAI(apiKey, rec) {
       const terminal = status === "completed" ? "done" : status === "cancelled" ? "cancelled" : "error";
       const error = terminal === "done" ? undefined
         : status === "failed" ? JSON.stringify(batch?.errors ?? {}).slice(0, 300) : status;
-      const saved = await finishBatch(cur, st, { terminalStatus: terminal, error });
+      const remote = { remote: { outputFileId: batch.output_file_id ?? null, errorFileId: batch.error_file_id ?? null } };
+      const saved = await finishBatch(cur, st, { terminalStatus: terminal, error, extra: remote });
       if (saved && terminal === "done") {
-        await deleteOpenAIFiles(apiKey, [...(cur.files ?? []), batch.output_file_id, batch.error_file_id]);
+        // W6-K: a paid image that could not be saved stays re-downloadable: keep the OUTPUT file at OpenAI (30 days)
+        // until retryBatchSave saved it; the input/ref files (prompts) are deleted as before.
+        await deleteOpenAIFiles(apiKey, saved.retryable
+          ? [...(cur.files ?? [])]
+          : [...(cur.files ?? []), batch.output_file_id, batch.error_file_id]);
       }
     });
   } else if (["failed", "expired", "cancelled"].includes(status)) {

@@ -24,7 +24,11 @@ const serial = (fn) => {
   return run;
 };
 
-const me = () => game.user?.id;
+// W6-K: dzierżawa należy do KLIENTA (karty przeglądarki), nie do użytkownika: ten sam MG w dwóch kartach
+// (albo agent zalogowany jako ten sam użytkownik) nie może ingestować tego samego batcha równolegle.
+const CLIENT = Math.random().toString(36).slice(2, 10);
+export const leaseOwnerId = () => (game.user?.id ? `${game.user.id}:${CLIENT}` : null);
+const me = leaseOwnerId;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function readSlot(i) {
