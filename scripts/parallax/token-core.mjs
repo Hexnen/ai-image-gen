@@ -3,8 +3,10 @@
 // screen), the uv offset in the token texture for any token transform (scale, mirror, rotation), half-float packing of
 // the conditioned depth map, the depth texture size, and the PIXI filter's GLSL (a port of the parallax window's ray
 // search, parallax-gl.mjs FS, to GLSL ES 1.0 for Foundry's PIXI 7 context). No PIXI, no Foundry: tested in Node
-// (dev/test-token-parallax.mjs).
+// (dev/test-token-parallax.mjs). W6-P: the optional light / rim / dust use the window's own GLSL (parallax-fx.mjs
+// GLSL_FX, included verbatim), gated by their amounts (all 0 = the W6-O output) and applied before the input alpha.
 import { clampLook, MAX_SHIFT } from "./parallax-core.mjs";
+import { GLSL_FX } from "./parallax-fx.mjs";
 
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const clamp01 = (v) => clamp(v, 0, 1);
@@ -178,11 +180,20 @@ uniform float uGamma;
 uniform float uContrast;
 uniform float uHoleFill;
 uniform float uSteps;
+uniform vec2 uLook;           // W6-P: look in token-texture space (light direction), unit disc
+uniform float uLight;         // W6-P: light / rim / dust amounts (0 = off: the pre-W6-P output, untouched)
+uniform float uRim;
+uniform float uRelief;
+uniform float uDust;
+uniform float uDustScale;
+uniform float uTime;
 
 float cond(float d){ float g = pow(clamp(d, 0.0, 1.0), uGamma); return clamp((g - 0.5) * uContrast + 0.5, 0.0, 1.0); }
 float H(vec2 p){ return cond(texture2D(uDepth, p).r); }
+float G(vec2 p){ return cond(texture2D(uDepth, p).g); }
 vec2 at(vec2 uv, float h){ return uv - uOff * (h - uFocus); }
 vec4 inp(vec2 t){ vec2 q = (uTokToIn * vec3(t, 1.0)).xy; return texture2D(uSampler, clamp(q, inputClamp.xy, inputClamp.zw)); }
+${GLSL_FX}
 
 void main(void){
   vec4 orig = texture2D(uSampler, vTextureCoord);
@@ -232,5 +243,18 @@ void main(void){
 
   float a = orig.a;
   vec3 rgb = c.a > 0.004 ? c.rgb / c.a : orig.rgb / a;
+  // W6-P: light / rim / dust only recolour this pixel (straight colour, clamped, then times the INPUT alpha below)
+  if (uLight > 0.001 || uRim > 0.001 || uDust > 0.001) {
+    vec4 dep2 = texture2D(uDepth, s);
+    float d2 = cond(dep2.r);
+    if (uLight > 0.001 || uRim > 0.001) {
+      vec2 e2 = uDTexel * 2.0;
+      float dx = G(s + vec2(e2.x, 0.0)) - G(s - vec2(e2.x, 0.0));
+      float dy = G(s + vec2(0.0, e2.y)) - G(s - vec2(0.0, e2.y));
+      rgb = fxLightRim(rgb, dx, dy, dep2.b * smoothstep(0.1, 0.3, d2), uLook, uLight, uRim, uRelief);
+    }
+    if (uDust > 0.001) rgb += fxDustColor() * fxDust(uv, uOff, uFocus, d2, uTime, uDustScale) * uDust;
+    rgb = clamp(rgb, 0.0, 1.0);
+  }
   gl_FragColor = vec4(rgb * a, a);
 }`;

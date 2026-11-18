@@ -137,8 +137,16 @@ await test("W5-F: API keys and pre-warm are client settings with config:false (n
     assert.equal(cfg.scope, "client", k);
     assert.equal(cfg.config, false, k);
   }
-  // nothing else client-scoped is shown in the settings window either
-  for (const [id, cfg] of game.settings.settings) if (cfg.scope === "client") assert.notEqual(cfg.config, true, id);
+  // nothing else client-scoped is shown in the settings window either, except the W6-P parallax extras (breathing /
+  // light / dust: a viewer's own preference for their own screen, meant to be visible to players)
+  const fxShown = /^moinens-ai-gen\.(portrait|token)Fx(Breath|Light|Dust)(Strength)?$/;
+  let fxCount = 0;
+  for (const [id, cfg] of game.settings.settings) {
+    if (cfg.scope !== "client") continue;
+    if (fxShown.test(id)) { fxCount++; assert.equal(cfg.config, true, id); continue; }
+    assert.notEqual(cfg.config, true, id);
+  }
+  assert.equal(fxCount, 12, "the 12 W6-P parallax extras");
 });
 
 await test("every copied key is registered in the new namespace", () => {

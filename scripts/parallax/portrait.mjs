@@ -14,9 +14,15 @@
 //   `portraitParallax` is off, under `prefers-reduced-motion: reduce`, or without WebGL2.
 // - Sheet closed / re-rendered: the view is dropped / re-bound to the new <img> (textures kept). The last view gone =
 //   the context is destroyed.
+// - W6-P extras (client settings, parallax-fx.mjs): breathing (slow idle tilt while the pointer is away), light (on by
+//   default, as before: shading + rim that follow the tilt) and dust (particles in depth planes, clipped to the picture:
+//   the shader writes the portrait's own alpha). Breathing / dust keep the frame loop running at rest, but draw at most
+//   ~30 fps while idle; still paused when hidden / off screen / minimised, and the frame guard still applies.
+//   `prefers-reduced-motion: reduce` = the whole effect off (as before), so breathing and dust are off too.
 // - GM: "Generate depth" in the sheet's header controls opens the depth window on the portrait (its own estimate +
 //   confirmation before every paid call). The finished map lands in the index and every client's open sheet picks it up.
 import { MODULE_ID } from "../constants.mjs";
+import { FX_DEFAULTS, FX_KEYS, FX_RANGES, IDLE_FRAME_MS, fxSettingKey, normalizeFx, effectiveFx, breathLook } from "./parallax-fx.mjs";
 import { depthIndex, normalizeImagePath } from "../depth/depth-index.mjs";
 import { offsetFor, overscanFor, stepsFor, easeToward, backingSize, downscaleMap, conditionDepth, normalizeView } from "./parallax-core.mjs";
 import {
@@ -37,6 +43,17 @@ let notified = false;
 let refreshTimer = 0;
 let seq = 0;
 const guard = createFrameGuard();
+let fxNow = null;           // W6-P: effective extras (breathing / light / dust) on this client
+
+/** W6-P: the viewer's extras for portraits (client settings), after the reduced-motion rule. */
+export function portraitFx() {
+  if (!fxNow) {
+    const raw = {};
+    for (const k of FX_KEYS) { try { raw[k] = game.settings.get(MODULE_ID, fxSettingKey("portrait", k)); } catch { /* not registered */ } }
+    fxNow = effectiveFx(normalizeFx(raw, "portrait"), { reducedMotion: globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false });
+  }
+  return fxNow;
+}
 
 const reducedMotion = () => globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
 const norm = (s) => normalizeImagePath(s, { origin: globalThis.location?.origin ?? "", routePrefix: foundry.utils.getRoute("/").replace(/^\/+|\/+$/g, "") });
@@ -105,7 +122,7 @@ function ensureHost() {
     try { gl = ParallaxRenderer.create(canvas, { alpha: true, premultipliedAlpha: false }); }
     catch (e) { console.warn(`${MODULE_ID} | portrait parallax: WebGL2 renderer failed`, e); }
     if (!gl) { disabled = "nogl"; dropAll(); return null; }
-    host = { canvas, gl, raf: 0, lastT: 0, lastDrew: false };
+    host = { canvas, gl, raf: 0, lastT: 0, lastDrew: false, idleRun: false };
     canvas.addEventListener("webglcontextlost", (ev) => { ev.preventDefault(); if (host?.gl) host.gl.lost = true; });
     canvas.addEventListener("webglcontextrestored", () => restoreContext());
     return host;
@@ -139,6 +156,7 @@ function kick() {
   }
   host.lastT = performance.now();
   host.lastDrew = false;
+  host.idleRun = false;
   host.raf = requestAnimationFrame(frame);
 }
 
@@ -149,16 +167,20 @@ function frame(t) {
   const dt = Math.min(0.1, Math.max(0, (t - host.lastT) / 1000));
   const gap = t - host.lastT;
   host.lastT = t;
-  let busy = false, drew = false;
+  let busy = false, drew = false, idle = false;
   const t0 = performance.now();
   for (const v of views.values()) {
     const r = v.step(t, dt);
     busy ||= r.busy;
     drew ||= r.drew;
+    idle ||= !!r.idle;
   }
   const drawMs = performance.now() - t0;
-  if (drew && host.lastDrew && guard.push(gap, drawMs) === "bad") { tooSlow(); return; }
+  // W6-P: while breathing / dust run, idle draws are throttled (~30 fps) and the frames in between draw nothing; the
+  // guard then also judges a drawn frame that follows an idle-run frame (gap = one rAF interval of the page)
+  if (drew && (host.lastDrew || host.idleRun) && guard.push(gap, drawMs) === "bad") { tooSlow(); return; }
   host.lastDrew = drew;
+  host.idleRun = idle;
   if (busy) host.raf = requestAnimationFrame(frame);
 }
 
@@ -201,6 +223,7 @@ class PortraitView {
     this.dirty = true;
     this.layoutUntil = 0;
     this.drawnLook = null;
+    this.lastDrawT = 0;
     this.place = null;
     this.style = null;
     this.clipEls = [];
@@ -364,16 +387,22 @@ class PortraitView {
   step(t, dt) {
     if (this.status !== "ready" || this.destroyed || !host?.gl) return { busy: false, drew: false };
     if (!this.img?.isConnected || !this.app.rendered || this.app.minimized || !this.visible) return { busy: false, drew: false };
-    const target = this.inside ? this.pointer : { x: 0, y: 0 };
+    const fx = portraitFx();
+    // W6-P breathing: the pointer away = a slow tiny tilt (eased like the pointer); off = back to the centre as before
+    const target = this.inside ? this.pointer : fx.breath ? breathLook(t, fx.breathStrength) : { x: 0, y: 0 };
     this.look = { x: easeToward(this.look.x, target.x, dt, 0.14), y: easeToward(this.look.y, target.y, dt, 0.14) };
     const done = settled(this.look, target);
-    if (done && !this.inside) this.look = { x: 0, y: 0 };
+    if (done && !this.inside) this.look = { ...target };
     const layout = t < this.layoutUntil;
     const moved = !this.drawnLook || !settled(this.look, this.drawnLook, 0.0005);
-    const busy = !done || layout;
-    if (!moved && !layout && !this.dirty) return { busy, drew: false };
+    const busy = !done || layout || fx.animates;
+    if (!moved && !layout && !this.dirty && !fx.dust) return { busy, drew: false };
+    // idle animation only (pointer away, no layout change, look near its breathing target): at most ~30 fps
+    const idle = fx.animates && !this.inside && !layout && !this.dirty && Math.hypot(this.look.x - target.x, this.look.y - target.y) < 0.05;
+    if (idle && t - this.lastDrawT < IDLE_FRAME_MS) return { busy, drew: false, idle };
     this.draw(t);
-    return { busy, drew: true };
+    this.lastDrawT = t;
+    return { busy, drew: true, idle };
   }
 
   draw(t = performance.now()) {
@@ -384,13 +413,14 @@ class PortraitView {
     if (!b) { this.canvas.style.visibility = "hidden"; return false; }
     const g = host.gl, hc = host.canvas;
     if (hc.width < b.w || hc.height < b.h) { hc.width = Math.max(hc.width, b.w); hc.height = Math.max(hc.height, b.h); }
-    const v = this.view, tw = this.tex.w, th = this.tex.h;
+    const v = this.view, tw = this.tex.w, th = this.tex.h, fx = portraitFx();
     // the panel sits at the top-left of the shared canvas (the renderer's panels are y-down from the top)
     g.draw([{ key: this.depKey, image: this.imgKey, x: 0, y: 0, w: b.w, h: b.h }], {
       off: offsetFor(this.look, v.strength, tw, th), crop: overscanFor(v.strength, v.focus, tw, th), look: this.look,
       bg: [0, 0, 0], focus: v.focus, gamma: v.gamma, contrast: v.contrast,
-      light: v.on.light ? effectAmount(v.light, this.look) : 0, rim: v.on.rim ? effectAmount(v.rim, this.look) : 0,
-      dust: 0, vignette: 0, holeFill: v.on.holeFill ? 1 : 0, time: t / 1000, relief: 10, view: 0, alphaOut: 1,
+      light: v.on.light && fx.light ? effectAmount(v.light * fx.lightStrength, this.look) : 0,
+      rim: v.on.rim && fx.light ? effectAmount(v.rim * fx.lightStrength, this.look) : 0,
+      dust: fx.dust ? fx.dustStrength : 0, vignette: 0, holeFill: v.on.holeFill ? 1 : 0, time: t / 1000, relief: 10, view: 0, alphaOut: 1,
       rectFor: () => p.panel,
       stepsFor: (d) => stepsFor(offsetFor({ x: 1, y: 0 }, v.strength, tw, th), d.w, d.h)
     });
@@ -516,7 +546,7 @@ export function registerPortraitParallax() {
     buttons.unshift({ label: "AIIMG.PortraitParallax.Generate", class: "aiimg-portrait-depth", icon: "fa-solid fa-layer-group", onclick: () => openDepthFor(app.document) });
   });
   depthIndex.onChange(() => refreshPortraits());
-  try { globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.addEventListener?.("change", () => refreshPortraits()); } catch { /* old engine */ }
+  try { globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.addEventListener?.("change", () => { fxNow = null; refreshPortraits(); }); } catch { /* old engine */ }
   document.addEventListener("visibilitychange", () => { if (!document.hidden) { for (const v of views.values()) v.dirty = true; kick(); } });
 }
 
@@ -531,12 +561,29 @@ export function registerPortraitSetting() {
     type: new foundry.data.fields.BooleanField({ initial: true }),
     onChange: () => { if (settingOn()) { disabled = disabled === "nogl" ? disabled : ""; guard.reset(); } refreshPortraits(); }
   });
+  registerFxSettings("portrait", () => { fxNow = null; for (const v of views.values()) v.dirty = true; kick(); });
+}
+
+/**
+ * W6-P: the viewer's extras (client scope: each viewer decides what their own screen / GPU does), registered right
+ * after the target's parallax settings so they sit next to them in Configure Settings. Shared with token-parallax.mjs.
+ */
+export function registerFxSettings(target, onChange) {
+  const D = FX_DEFAULTS[target];
+  const T = target === "token" ? "Token" : "Portrait";
+  for (const k of FX_KEYS) {
+    const L = `AIIMG.ParallaxFx.${T}.${k[0].toUpperCase()}${k.slice(1)}`;
+    const type = k.endsWith("Strength")
+      ? new foundry.data.fields.NumberField({ initial: D[k], min: FX_RANGES[k][0], max: FX_RANGES[k][1], step: FX_RANGES[k][2], nullable: false })
+      : new foundry.data.fields.BooleanField({ initial: D[k] });
+    game.settings.register(MODULE_ID, fxSettingKey(target, k), { name: `${L}.Name`, hint: `${L}.Hint`, scope: "client", config: true, type, onChange });
+  }
 }
 
 /** For macros / checks: `api.parallax.portraits`. */
 export const portraitApi = {
   status: () => ({
-    active: portraitParallaxActive(), setting: settingOn(), disabled, reducedMotion: reducedMotion(),
+    active: portraitParallaxActive(), setting: settingOn(), disabled, reducedMotion: reducedMotion(), fx: { ...portraitFx() },
     context: !!host?.gl && !host.gl.lost, running: !!host?.raf, guard: guard.state(),
     views: [...views.values()].map((v) => v.report())
   }),

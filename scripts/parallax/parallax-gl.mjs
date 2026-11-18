@@ -14,7 +14,8 @@
 // - light, rim, dust, vignette each with its own amount (0 = off); normals from a blurred copy (uDep.g).
 // - texture LOD from the undisplaced uv (textureGrad): no mip seams along depth edges.
 // `cond`, the stretch factor and the ray search mirror parallax-core.mjs (condition, stretchFactor, marchRay), which the
-// Node tests cover.
+// Node tests cover. W6-P: the dust and light/rim code lives in parallax-fx.mjs (GLSL_FX), shared with the token filter.
+import { GLSL_FX } from "./parallax-fx.mjs";
 
 const VS = `#version 300 es
 out vec2 vP;
@@ -43,16 +44,7 @@ float cond(float d){ float g = pow(clamp(d, 0.0, 1.0), uGamma); return clamp((g 
 float H(vec2 p){ return cond(textureLod(uDep, p, 0.0).r); }
 float G(vec2 p){ return cond(textureLod(uDep, p, 0.0).g); }
 vec2 at(vec2 uv, float h){ return uv - uOff * (h - uFocus); }
-float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-float dustPlane(vec2 uv, float sc, float sp, float seed){
-  vec2 q = uv * sc + vec2(uTime * 0.02 * sp, -uTime * 0.035 * sp) + seed;
-  vec2 i = floor(q), f = fract(q);
-  float r = hash(i + seed);
-  vec2 c = vec2(hash(i + 1.3), hash(i + 7.7)) * 0.8 + 0.1 + vec2(sin(uTime * 0.5 + r * 6.0), cos(uTime * 0.4 + r * 6.0)) * 0.08;
-  float tw = 0.5 + 0.5 * sin(uTime * (1.0 + r * 2.0) + r * 20.0);
-  return step(0.82, r) * smoothstep(0.06, 0.0, length(f - c)) * tw;
-}
-
+${GLSL_FX}
 void main(){
   vec2 q = (vP - uRect.xy) / uRect.zw;
   vec2 uv = mix(uCrop, 1.0 - uCrop, q);
@@ -108,23 +100,11 @@ void main(){
     vec2 e2 = e * 2.0;
     float dx = G(s + vec2(e2.x, 0.0)) - G(s - vec2(e2.x, 0.0));
     float dy = G(s + vec2(0.0, e2.y)) - G(s - vec2(0.0, e2.y));
-    vec3 N = normalize(vec3(-dx * uRelief, -dy * uRelief, 1.0));
-    vec3 L = normalize(vec3(uLook.x, uLook.y, 0.8));
-    float nl = dot(N, L);
-    c *= mix(1.0, 0.8 + 0.36 * max(nl, 0.0), fig * uLight);
-    float facing = length(N.xy) > 1e-4 ? smoothstep(0.0, 0.7, dot(normalize(N.xy), normalize(uLook + vec2(1e-4)))) : 0.0;
-    float rim = (pow(1.0 - N.z, 1.4) * facing * 1.4 + pow(clamp(nl, 0.0, 1.0), 6.0) * 0.35) * fig * uRim;
-    c += vec3(1.0, 0.58, 0.44) * rim * 0.6;
+    c = fxLightRim(c, dx, dy, fig, uLook, uLight, uRim, uRelief);   // W6-P: shared with the token filter (parallax-fx.mjs)
   }
 
-  // --- dust in three depth planes, hidden behind nearer surfaces ---
-  if (uDust > 0.001) {
-    vec2 du = q;
-    float b = dustPlane(du + uOff * (0.25 - uFocus) * 0.9, 26.0, 1.0, 0.0) * smoothstep(0.3, 0.2, d) * 0.35
-            + dustPlane(du + uOff * (0.6 - uFocus) * 0.9, 18.0, 1.4, 3.0) * smoothstep(0.65, 0.55, d) * 0.5
-            + dustPlane(du + uOff * (1.25 - uFocus) * 0.9, 11.0, 1.9, 9.0) * 0.7;
-    c += vec3(1.0, 0.72, 0.6) * b * uDust;
-  }
+  // --- dust in three depth planes, hidden behind nearer surfaces (W6-P: shared code, scale 1 = as before) ---
+  if (uDust > 0.001) c += fxDustColor() * fxDust(q, uOff, uFocus, d, uTime, 1.0) * uDust;
 
   vec2 vv = q - 0.5;
   c *= 1.0 - dot(vv, vv) * 0.7 * uVignette;
