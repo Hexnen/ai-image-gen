@@ -47,6 +47,7 @@ import { ATTRS, LEVEL_WORDS, getPath, norm, normBase, plainText, powerLevelOf, u
 import { clone, fingerprint, readJournal, pruneJournal, findRun, selectEntries, driftOf, laterTouches, undoOrder, describeRun, restoreTarget, movePlan, UNDO_TTL } from "./undo.mjs";
 import { baseName, noteOf, withNote, cleanNote } from "./names.mjs";
 import { attributeFromNote, fillAttributeKey, onlyAttributePlaceholders } from "./proposal.mjs";
+import { sameBio, bioFlat } from "./bio.mjs";
 
 export const MODULE_ID = "moinens-ai-gen";
 export const JOURNAL_PATH = `flags.${MODULE_ID}.undo`;
@@ -77,7 +78,9 @@ export const ACTOR_PATHS = new Map([
   ...TEXT_FIELDS.map((k) => [`system.${k}`, { kind: "text", cap: 1200 }]),
   ["system.reputation", { kind: "int", min: 0, max: 99 }],
   ["system.resources", { kind: "int", min: 0, max: 99 }],
-  ["biographyAppend", { kind: "append", cap: 4000, target: "system.biography" }]
+  ["biographyAppend", { kind: "append", cap: 4000, target: "system.biography" }],
+  // W6-C: the builder's biography (texts.biography, plain text) replaces the field as escaped <p> paragraphs; undo restores it
+  ["system.biography", { kind: "html", cap: 4000, target: "system.biography" }]
 ]);
 /** karma and current Health/Resolve: only when the drawer passes allowVitals (the GM asked for it explicitly, O25) */
 export const VITAL_PATHS = new Map([
@@ -717,12 +720,22 @@ export function createWriter(deps = {}) {
       const entries = actorSetEntries(op.set, opts, E, opId, W);
       const changes = [];
       for (const { path, value, spec } of entries) {
-        if (actorPaths.has(path)) { E("op.conflict", `${path} is set by two ops`, { opId, path }); continue; }
-        actorPaths.add(path);
+        const key = spec.target ?? path;   // W6-C: biographyAppend and system.biography write the same field
+        if (actorPaths.has(key)) { E("op.conflict", `${key} is set by two ops`, { opId, path }); continue; }
+        actorPaths.add(key);
         if (spec.kind === "append") {
           const cur0 = String(getPath(actorSrc, spec.target) ?? "");
           const add = toParagraphs(value);
           if (add) { changes.push({ path: spec.target, from: cur0, to: cur0 + add }); setPath(actorSrc, spec.target, cur0 + add); }
+          continue;
+        }
+        if (spec.kind === "html") {
+          const cur0 = String(getPath(actorSrc, path) ?? "");
+          if (!value) { if (cur0.trim()) W("actor.blank", `${path} is not blanked (empty values are never written)`, { opId, path }); continue; }
+          if (sameBio(cur0, value)) continue;
+          const html = toParagraphs(value);
+          changes.push({ path, from: cur0, to: html, ...(bioFlat(cur0) ? { overwrite: true } : {}) });
+          setPath(actorSrc, path, html);
           continue;
         }
         const from = getPath(actorSrc, path);
@@ -735,10 +748,13 @@ export function createWriter(deps = {}) {
       Object.assign(pl, { action: changes.length ? "actor" : "noop", type: "actor", name: newName || actor.name, changes });
       if (!changes.length && !p.errors.some((e) => e.opId === opId)) W("op.noop", `op ${opId} changes no actor field`, { opId });
       for (const c of changes) {
-        p.fields.push({ opId, ...c });
-        if (c.path !== "name" && typeof c.from === "string" && c.from.trim() && !/^system\.biography$/.test(c.path)) p.overwrites.push({ opId, ...c });
+        const { overwrite, ...ch } = c;
+        p.fields.push({ opId, ...ch });
+        // the appended biography paragraph never overwrites; a rewritten biography (W6-C) does when it had text
+        if (overwrite || (ch.path !== "name" && typeof ch.from === "string" && ch.from.trim() && !/^system\.biography$/.test(ch.path))) p.overwrites.push({ opId, ...ch });
       }
       if (changes.length) exec.actor.push({ opId, set: Object.fromEntries(changes.map((c) => [c.path, c.to])), paths: changes.map((c) => c.path) });
+      for (const c of changes) delete c.overwrite;
     }
 
     // keeps, expect, projection

@@ -164,7 +164,7 @@ await test("L0 autoFixed: whitespace trimmed, duplicate personality words collap
 
 await test("local schema check mirrors the tool schema (strict: additionalProperties false everywhere)", () => {
   const walk = (s, p = "") => {
-    if (s.type === "object") { assert.equal(s.additionalProperties, false, `${p} additionalProperties`); assert.ok(Array.isArray(s.required), `${p} required`); for (const [k, v] of Object.entries(s.properties)) walk(v, `${p}.${k}`); }
+    if (s.type === "object") { assert.equal(s.additionalProperties, false, `${p} additionalProperties`); assert.ok(s.required === undefined || (Array.isArray(s.required) && s.required.length > 0), `${p} required (W6-C: left out when empty)`); for (const [k, v] of Object.entries(s.properties)) walk(v, `${p}.${k}`); }
     if (s.type === "array") walk(s.items, `${p}[]`);
     for (const bad of ["minimum", "maximum", "minItems", "maxItems", "minLength", "maxLength", "$ref", "oneOf"]) assert.equal(s[bad], undefined, `${p} uses ${bad}`);
   };
@@ -1222,8 +1222,74 @@ await test("W5-B-1: actionable warnings of an accepted submit (the harness's fix
   // the group exposes it (pack.actionableWarnings through Object.assign in pack.mjs); a clean default-rank build has none
   const g = group(catOcc);
   assert.equal(typeof g.actionableWarnings, "function");
-  const sub = await g.runProposalTool("submit_proposal", rep(fullBuild()), { doc: blankHero(), options: {} });
+  // W6-C: a build without a biography has the actionable warning bio.missing (the fix round asks for it); with one, none
+  const noBio = await g.runProposalTool("submit_proposal", rep(fullBuild()), { doc: blankHero(), options: {} });
+  assert.deepEqual(g.actionableWarnings("submit_proposal", noBio).map((x) => x.code), ["bio.missing"]);
+  const fb = fullBuild();
+  const sub = await g.runProposalTool("submit_proposal", rep({ ...fb, texts: { ...fb.texts, biography: "Invented first paragraph about a courier.\nInvented second paragraph about the meteor night." } }), { doc: blankHero(), options: {} });
   assert.equal(sub.ok, true); assert.deepEqual(g.actionableWarnings("submit_proposal", sub), [], JSON.stringify(sub.warnings));
+});
+
+/* ---------------------------------------------------------------- W6-C: the biography */
+const BIO2 = "Invented first paragraph: a courier from an invented harbor town.\nInvented second paragraph: the meteor night and what it cost.";
+const withBio = (bio, over = {}) => { const fb = fullBuild(over); return rep({ ...fb, texts: { ...fb.texts, biography: bio } }); };
+const bioCodes = (r) => [...r.errors, ...r.warnings].map((x) => x.code).filter((c) => c.startsWith("bio."));
+
+await test("W6-C: a build needs a biography (bio.missing, actionable); two paragraphs pass; the GM preview shows them, the model's copy does not", async () => {
+  const none = await VO(blankHero(), rep(fullBuild()), { rank: "global" });
+  assert.equal(none.ok, true, JSON.stringify(none.errors));
+  const miss = none.warnings.find((w) => w.code === "bio.missing");
+  assert.ok(miss && miss.path === "proposal.texts.biography", JSON.stringify(none.warnings));
+  assert.ok(isActionableWarning(miss), "the fix round asks for the biography");
+  const ok = await VO(blankHero(), withBio(BIO2), { rank: "global" });
+  assert.equal(ok.ok, true, JSON.stringify(ok.errors));
+  assert.deepEqual(bioCodes(ok), []);
+  assert.match(ok.summary, /^act1: actor .*biography/m);
+  assert.deepEqual(ok.summary.split("\n").filter((l) => l.startsWith("¶ ")), BIO2.split("\n").map((p) => `¶ ${p}`), ok.summary);
+  const g = group(catOcc);
+  const tr = await g.runProposalTool("submit_proposal", withBio(BIO2), { doc: blankHero(), options: { rank: "global" } });
+  assert.equal(tr.ok, true);
+  assert.ok(!tr.summary.includes("¶") && /biography/.test(tr.summary), tr.summary);
+  // an ops build on an empty sheet without a bio: the same warning; an NPC replace too
+  const opsBuild = await VO(blankHero(), ops(
+    { op: "addItem", opId: "s", ref: ref("powerSource", "Strange Meteor") },
+    { op: "addItem", opId: "p", ref: ref("power", "Glide Wings"), level: "basic", sourceOpId: "s" }), { rank: "global" });
+  assert.ok(codes(opsBuild, "warnings").includes("bio.missing"), JSON.stringify(opsBuild.warnings));
+  const npc = await V(smallNpc(), { target: "this", mode: "replace", rationale: "x", proposal: { name: "Dock Brute", attributes: { fighting: 4, agility: 3, strength: 5, reason: 2, intuition: 3, presence: 2 }, powers: [{ ref: ref("power", "Quick Step"), level: "basic" }], talents: [{ ref: ref("talent", "Quick Wits") }] } });
+  assert.ok(codes(npc, "warnings").includes("bio.missing"), JSON.stringify([npc.errors, npc.warnings]));
+});
+
+await test("W6-C: exactly two paragraphs (bio.paragraphs warns on 1 or 3), copied catalogue text is refused (bio.copied)", async () => {
+  const one = await VO(blankHero(), withBio("Only one invented paragraph."), { rank: "global" });
+  assert.equal(one.ok, true);
+  const w1 = one.warnings.find((w) => w.code === "bio.paragraphs");
+  assert.ok(w1 && /has 1 paragraph/.test(w1.message) && isActionableWarning(w1), JSON.stringify(one.warnings));
+  const three = await VO(blankHero(), withBio("One.\n\nTwo.\nThree."), { rank: "global" });
+  assert.match(three.warnings.find((w) => w.code === "bio.paragraphs")?.message ?? "", /has 3 paragraph/);
+  // a run of 10+ words from a catalogue entry's own text (invented filler in the fixture) = copied
+  const src = catOcc.entries.find((e) => (e.html ?? "").length > 200);
+  const words = src.html.replace(/<[^>]*>/g, " ").split(/\s+/).filter(Boolean).slice(0, 14).join(" ");
+  const copied = await VO(blankHero(), withBio(`Invented opening. ${words}\nInvented second paragraph.`), { rank: "global" });
+  assert.equal(copied.ok, false);
+  has(copied, "bio.copied");
+  assert.equal(copied.errors.find((e) => e.code === "bio.copied").path, "proposal.texts.biography");
+});
+
+await test("W6-C: in-place edits keep the biography: no bio warning when it is not named; a rewrite is flagged for the GM (no fix round)", async () => {
+  const a = typicalHero();
+  a._source.system.biography = "<p>Invented old one.</p><p>Invented old two.</p>";
+  const keep = await V(a, ops({ op: "updateActor", opId: "d", set: { texts: { drive: "Invented new drive" } } }));
+  assert.equal(keep.ok, true, JSON.stringify(keep.errors));
+  assert.deepEqual(bioCodes(keep), []);
+  assert.ok(!/biography/.test(keep.summary));
+  const rw = await V(a, ops({ op: "updateActor", opId: "b", set: { texts: { biography: "Invented new one.\nInvented new two." } } }));
+  assert.equal(rw.ok, true, JSON.stringify(rw.errors));
+  const w = rw.warnings.find((x) => x.code === "bio.rewrite");
+  assert.ok(w && w.opId === "b" && w.path === "ops[0].set.texts.biography", JSON.stringify(rw.warnings));
+  assert.equal(isActionableWarning(w), false, "the GM decides; the model is not asked to undo it");
+  // a replace that gives the stored bio again changes nothing (compared as text, not HTML)
+  const conv = replaceToOps(null, { name: a.name, texts: { biography: "Invented old one.\nInvented old two." } }, { catalog, plain: toPlainActor(a) });
+  assert.ok(!conv.ops.some((o) => o.op === "updateActor" && o.set?.texts?.biography), JSON.stringify(conv.ops));
 });
 
 console.log(`\n${passed} passed${process.exitCode ? " (with failures)" : ""}`);

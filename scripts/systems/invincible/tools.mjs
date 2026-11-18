@@ -23,7 +23,7 @@ export function readToolDefs() {
   return [
     {
       name: "get_entries",
-      description: "Full details of catalogue entries by ref (at most 8 refs per call): the item's rules text as the book gives it, automation names, effects, what a drawback needs; split powers: levels (one ref per level) and perLevel (each level's effects and the text it adds to Basic), other powers: maxLevel. Archetype and occupation refs return their book section plus structured facts (archetype: role, attributes, powers with refs; occupation: resources and talents, already in the index line); npc/sampleHero refs return the actor's attributes and items.",
+      description: "Full details of catalogue entries by ref: the item's rules text as the book gives it, automation names, effects, what a drawback needs; split powers: levels (one ref per level) and perLevel (each level's effects and the text it adds to Basic), other powers: maxLevel. Archetype and occupation refs return their book section plus structured facts (archetype: role, attributes, powers with refs; occupation: resources and talents, already in the index line); npc/sampleHero refs return the actor's attributes and items.",
       input_schema: {
         type: "object",
         additionalProperties: false,
@@ -34,22 +34,22 @@ export function readToolDefs() {
     },
     {
       name: "read_document",
-      description: "Deep fields that the <sheet> block leaves out, or another world document. NOT for this sheet's normal state: that is already in your context. Use it (1) for full descriptions, automation details or effect changes of items on this sheet (target \"this\" + itemIds), or (2) to read another world actor or item the GM names (target = its exact name or uuid). Read-only.",
+      description: "Deep fields the <sheet> block leaves out (never this sheet's normal state: it is in your context): (1) full descriptions, automation details or effect changes of items on this sheet (target \"this\" + itemIds), or (2) another world actor or item the GM names. Read-only.",
       input_schema: {
         type: "object",
         additionalProperties: false,
         required: ["target"],
         properties: {
-          target: { type: "string", description: "\"this\" for the open sheet, or a world Actor/Item name or uuid." },
-          itemIds: { type: "array", items: { type: "string" }, description: "Embedded item ids (as in the sheet block). Omit for the document itself." },
-          fields: { type: "array", items: { type: "string", enum: [...DOC_FIELDS] }, description: "Which deep fields to return; default: description and automations." }
+          target: { type: "string", description: "\"this\" (the open sheet) or a world Actor/Item's exact name or uuid." },
+          itemIds: { type: "array", items: { type: "string" }, description: "Item ids as in the sheet block; omit for the document itself." },
+          fields: { type: "array", items: { type: "string", enum: [...DOC_FIELDS] }, description: "Default: description and automations." }
         }
       },
       strict: true
     },
     {
       name: "read_rules",
-      description: "Read one whitelisted page of the core rulebook as plain text, in parts of up to 6,000 characters (part 1 first; the result says how many parts there are). Costly, and the rules digest already covers hero creation: call it only when the GM asks a rules question or the digest does not cover the case (growth, gear, weapons, vehicles, NPCs, minions). Never for one archetype or occupation: get_entries / the index is shorter.",
+      description: "One whitelisted core rulebook page as plain text, in parts of up to 6,000 characters (the result says how many). Costly; the rules digest covers hero creation: only when the GM asks a rules question or the digest does not cover the case (growth, gear, weapons, vehicles, NPCs, minions). Never for one archetype or occupation: get_entries / the index is shorter.",
       input_schema: {
         type: "object",
         additionalProperties: false,
@@ -63,13 +63,13 @@ export function readToolDefs() {
     },
     {
       name: "search_catalog",
-      description: "Search the installed catalogue by name and summary (case- and accent-insensitive). The catalogue index in the system prompt already lists every entry except sample heroes (kinds [\"sampleHero\"]): search only when it is not enough. Returns refs to use in get_entries and proposals. forPower narrows boosts and limits to one power (power name or ref); with an empty query it lists all of that power's boosts and limits; an empty forPower result carries a note saying why.",
+      description: "Search the installed catalogue by name and summary (case- and accent-insensitive). The catalogue index in the system prompt already lists every entry except sample heroes (kinds [\"sampleHero\"]): search only when it is not enough. forPower narrows boosts and limits to one power (power name or ref); with an empty query it lists all of that power's boosts and limits; an empty forPower result carries a note saying why.",
       input_schema: {
         type: "object",
         additionalProperties: false,
         required: ["query"],
         properties: {
-          query: { type: "string", description: "Words to look for; may be empty when kinds or forPower narrow the list." },
+          query: { type: "string", description: "May be empty when kinds or forPower narrow the list." },
           kinds: { type: "array", items: { type: "string", enum: [...KINDS] }, description: "Only these kinds; default all." },
           forPower: { type: "string", description: "Power name or ref: only its boosts/limits." },
           limit: { type: "integer", description: "Max results, 1-25; default 10." }

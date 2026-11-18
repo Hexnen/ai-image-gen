@@ -150,7 +150,7 @@ await test("W2-8 system[0]: proposal marker, unchanged update lines, read scope,
   assert.ok(!/Read an entry before you pick it/.test(h), "the old blanket read rule is gone");
   assert.ok(!/one short sentence/.test(h), "W3-4: no reply after a successful submit (the turn ends)");
   assert.match(h, /name the main alternative in the rationale/);
-  assert.match(h, /rationale and every free text \(descriptions, personality words, notes\) in the language of the GM's message/);   // D-7/D-12
+  assert.match(h, /rationale and every free text \(descriptions, biography, personality words, notes\) in the language of the GM's message/);   // D-7/D-12
   assert.match(h, /catalogue names exactly as the catalogue spells them, inside notes too/);   // W4-T (f)
 });
 
@@ -320,7 +320,7 @@ await test("W4-T guide + tools: note language once, gear list in replace, attrib
   assert.match(g, /gear \[\{ref\} \| \{custom\}\] \(optional: given = the hero's whole gear list/);
   assert.match(g, /left out = gear untouched/);
   assert.match(g, /put one attribute in the note \([^)]*\), the builder sets the effect from it/);
-  assert.match(HARNESS_RULES, /every free text \(descriptions, personality words, notes\) in the language of the GM's message/);   // (f) free text
+  assert.match(HARNESS_RULES, /every free text \(descriptions, biography, personality words, notes\) in the language of the GM's message/);   // (f) free text
   assert.match(HARNESS_RULES, /catalogue names exactly as the catalogue spells them, inside notes too/);                       // (f) catalogue names
   assert.match(desc("get_entries"), /perLevel/);
   const all = JSON.stringify(tools());
@@ -338,7 +338,7 @@ await test("W5-T system[0] + submit tool: the fix round (W5-B-1), never an empty
   // the tags that mark the text versions (the digest's goes into the pack fingerprint)
   const { HARNESS_RULES_VERSION } = await import("../scripts/build/harness-prompt.mjs");
   const { DIGEST_VERSION } = await import("../scripts/systems/invincible/rules-digest.mjs");
-  assert.equal(HARNESS_RULES_VERSION, 7); assert.equal(DIGEST_VERSION, 7);
+  assert.equal(HARNESS_RULES_VERSION, 8);   // 8 = W6-C (setting default, biography) assert.equal(DIGEST_VERSION, 7);
   assert.ok(!/invincible|talent/i.test(h), "system[0] stays system-agnostic");
 });
 
@@ -364,6 +364,21 @@ await test("W5-T digest + guide + hints: levels in every profile, slugfest damag
   const { APPLY_CONFIRM_NOTE } = await import("../scripts/systems/invincible/validate.mjs");
   assert.match(APPLY_CONFIRM_NOTE, /removals, level swaps and kept talents moved to another role/);
   assert.ok(!/rank\.defaulted/.test(d + HARNESS_RULES + JSON.stringify(tools())), "W5-B-2: rank.defaulted is info, never named as a warning");
+});
+
+/* ---------------------------------------------------------------- W6-C: default setting + biography */
+await test("W6-C system[0]: built-in classic-USA default setting with 'unless the GM says otherwise', no question; two-paragraph bio", () => {
+  const h = HARNESS_RULES;
+  assert.match(h, /Setting: classic comic-book USA \(its cities, institutions, era\) for names, places, history and origins, unless the GM says otherwise; then follow the GM, never ask\./);
+  assert.match(h, /A character you build or create gets a biography: exactly two paragraphs in your own words \(no rule text\)/);
+  assert.match(h, /On an existing character change it only when asked or a change makes it false \(minimally; the rationale says so\)/);
+  assert.ok(!/invincible|talent/i.test(h), "system[0] stays system-agnostic");
+  // the field the model fills: texts.biography in both updateActor and replace (schema) and named in the guide
+  const sch = proposalToolDefs()[0].input_schema;
+  assert.ok(sch.properties.ops.items.properties.set.properties.texts.properties.biography, "updateActor texts.biography");
+  assert.ok(sch.properties.proposal.properties.texts.properties.biography, "replace texts.biography");
+  assert.match(PROPOSAL_GUIDE, /team, teamBase, biography\}/);
+  assert.ok(!JSON.stringify(tools()).includes('"required":[]'), "empty required arrays are left out (prefix size)");
 });
 
 /* ---------------------------------------------------------------- size */

@@ -19,6 +19,7 @@
 
 import { ATTRS, RANKS, isRank, DEFAULT_RANK } from "./vendor/chargen/rules.mjs";
 import { NOTE_MAX, norm, normBase, baseName, noteOf, withNote, cleanNote } from "./names.mjs";
+import { sameBio } from "./bio.mjs";
 
 export const LEVEL_WORDS = Object.freeze(["basic", "major", "massive", "monstrous"]);
 export const OP_KINDS = Object.freeze(["addItem", "updateItem", "removeItem", "updateActor"]);
@@ -27,7 +28,8 @@ export const ITEM_KINDS = Object.freeze(["powerSource", "power", "boost", "limit
 /** item types a `replace` proposal owns on an actor (injuries are never touched; gear only when the proposal has `gear`, W4-A-3) */
 export const CREATION_TYPES = Object.freeze(["powerSource", "power", "boost", "limit", "talent", "drawback"]);
 export const CUSTOM_TYPES = Object.freeze(["gear", "vehicleWeapon"]);
-export const TEXT_KEYS = Object.freeze(["civilianName", "role", "occupation", "personality", "drive", "flaw", "appearance", "relationships", "team", "teamBase"]);
+/** W6-C: `biography` = plain text, written as <p> paragraphs into system.biography (bio.mjs) */
+export const TEXT_KEYS = Object.freeze(["civilianName", "role", "occupation", "personality", "drive", "flaw", "appearance", "relationships", "team", "teamBase", "biography"]);
 /** actor paths an op may write (spec 6 updateActor whitelist) */
 export const ACTOR_PATHS = Object.freeze([
   "name", ...ATTRS.map((a) => `system.attributes.${a}.value`), ...TEXT_KEYS.map((k) => `system.${k}`), "system.reputation", "system.resources"
@@ -46,7 +48,8 @@ export const OPS_MAX = 60;
 const S = (description) => ({ type: "string", ...(description ? { description } : {}) });
 const I = (description) => ({ type: "integer", ...(description ? { description } : {}) });
 const B = (description) => ({ type: "boolean", ...(description ? { description } : {}) });
-const obj = (properties, required = [], description) => ({ type: "object", additionalProperties: false, required, properties, ...(description ? { description } : {}) });
+// W6-C: an empty `required` is left out (8 x 14 chars of cached prefix; checkShape reads `required ?? []`)
+const obj = (properties, required = [], description) => ({ type: "object", additionalProperties: false, ...(required.length ? { required } : {}), properties, ...(description ? { description } : {}) });
 const LEVEL = { type: "string", enum: [...LEVEL_WORDS] };
 // Field docs live ONCE in PROPOSAL_GUIDE (the submit_proposal description), not per field (shorter cached prefix).
 // W4-A-2: `grants` is gone from the schema (the sheet decides what a limit pays for: a level when its power is above Basic, else
@@ -93,7 +96,7 @@ export const PROPOSAL_GUIDE = [
   `- addItem: ref (catalogue) OR custom (only gear/vehicleWeapon: type, name, plain-text description, cost >= 0, restricted, singleUse (gear), attack {damage, bonus, minRange, maxRange, bypassArmor, attribute} = one attack). power: level (basic/major/massive/monstrous; split-level powers: the power's index ref + level, or the level's own ref) and its source: sourceItemId (sheet id) or sourceOpId (a powerSource added in the same list). boost/limit: powerItemId or powerOpId, no note (its choice, e.g. a sense, goes in choiceNotes). power/talent/drawback: note = the choice shown in brackets, only for a real choice (no decorative notes; when the GM named none, invent one that fits); an effect with bonus.[attribute] (e.g. Signature Item): put one attribute in the note (it may name the item too: \"Shield, Fighting\"), the builder sets the effect from it; at most ${NOTE_MAX} characters, no parentheses inside (\"Kingpin\", not \"Kingpin (Wilson Fisk)\").`,
   "- updateItem {itemId, set}: power: level, powerSourceItemId|powerSourceOpId, note; boost/limit: powerItemId|powerOpId; talent/drawback: note (\"\" removes); gear/vehicleWeapon: name, descriptionAppend (plain text paragraph), gear {cost, restricted, singleUse, attack}.",
   "- removeItem {itemId, cascade}: a power with boosts/limits or a source used by powers needs cascade:true or re-pointing ops in the same list.",
-  "- updateActor {set}: name (the hero name), attributes {fighting..presence}, texts {civilianName, role (an English role key), occupation (the occupation's English catalogue name), personality (exactly two words, comma separated), drive, flaw, appearance, relationships (one line each: \"NPC: Name (who they are)\", \"Hero: Name\"), team, teamBase}, reputation (the rank's reputation value), resources (the occupation's Resources value). karma/health/resolve (current values) only when the GM asked for them (a replace in the creation profile or a build on an empty sheet sets Health/Resolve to max itself).",
+  "- updateActor {set}: name (the hero name), attributes {fighting..presence}, texts {civilianName, role (an English role key), occupation (the occupation's English catalogue name), personality (exactly two words, comma separated), drive, flaw, appearance, relationships (one line each: \"NPC: Name (who they are)\", \"Hero: Name\"), team, teamBase, biography}, reputation (the rank's reputation value), resources (the occupation's Resources value). karma/health/resolve (current values) only when the GM asked for them (a replace in the creation profile or a build on an empty sheet sets Health/Resolve to max itself).",
   "mode \"replace\" (blank actor or an explicit rebuild): proposal = rank (must be the drawer's rank), name, attributes, texts, resources, reputation (give both, values as in updateActor), sources [{key, ref}], powers [{ref, level, source (a sources key), note, boosts [{ref}], limits [{ref}]}], talents [{ref, note}] (hero talent first, then the occupation talent, then extras; written in this order, kept talents are moved), drawbacks [{ref, note}], gear [{ref} | {custom}] (optional: given = the hero's whole gear list, the rest is removed; left out = gear untouched); items with the same name are kept. Its errors name proposal.* paths and the entry; their opId is the summary's. For a gear/vehicleWeapon document: proposal.item (same fields as custom).",
   "rationale: one short paragraph for the GM (required unless dryRun): what you chose, why, the main alternative. choiceNotes: [{opId or path, why}] for every pick that is not obvious (how a new slot is paid for, each drawback)."
 ].join("\n");
@@ -671,7 +674,8 @@ export function replaceToOps(doc, proposal, { catalog, plain = null, rank = null
   const set = {};
   if (P.name && P.name !== actor.name) set.name = P.name;
   if (isObj(P.attributes)) { const a = {}; for (const k of ATTRS) if (Number.isInteger(P.attributes[k]) && P.attributes[k] !== getPath(actor, `system.attributes.${k}.value`)) a[k] = P.attributes[k]; if (Object.keys(a).length) set.attributes = a; }
-  if (isObj(P.texts)) { const t = {}; for (const k of TEXT_KEYS) if (typeof P.texts[k] === "string" && P.texts[k] !== String(actor.system?.[k] ?? "")) t[k] = P.texts[k]; if (Object.keys(t).length) set.texts = t; }
+  // W6-C: the biography is stored as HTML: compared as text (the same bio again is no change)
+  if (isObj(P.texts)) { const t = {}; for (const k of TEXT_KEYS) if (typeof P.texts[k] === "string" && (k === "biography" ? !sameBio(actor.system?.[k], P.texts[k]) : P.texts[k] !== String(actor.system?.[k] ?? ""))) t[k] = P.texts[k]; if (Object.keys(t).length) set.texts = t; }
   // P1-F: a superhero built under the creation profile starts with the rank's reputation; a replace that leaves it out gets it
   const rep = { ...P };
   if (!Number.isInteger(P.reputation) && actor.type === "superhero" && profile !== "in-play") {

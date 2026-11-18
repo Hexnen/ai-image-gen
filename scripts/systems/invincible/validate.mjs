@@ -24,6 +24,7 @@
 import * as rules from "./vendor/chargen/rules.mjs";
 import { chargenStateFromActor, readItem, getCatalogLookup, talentRoleShifts, talentRolesOf, talentRoles } from "./reader.mjs";
 import { movePlan } from "./undo.mjs";
+import { BIO_PARAGRAPHS, bioParagraphs, bioFlat, copiedRun } from "./bio.mjs";
 import { talentOrderOf } from "./writer.mjs";
 import { getCatalog, slug, effectsOf, placeholderKeys } from "./catalog.mjs";
 import {
@@ -138,6 +139,11 @@ export const MESSAGES = Object.freeze({
   "team.join.missing": () => ({ message: "The team base to join is missing.", hint: "Name the team in texts.team." }),
   // W4-A-1 (D-16): an empty team is a solo hero, not a defect: quiet info (validator; the vendored rules keep their warning)
   "team.empty": () => ({ message: "No team and no team base: a solo hero.", hint: "Nothing to fix (a solo hero keeps team and teamBase empty)." }),
+  // W6-C: the biography (texts.biography -> system.biography, bio.mjs)
+  "bio.missing": () => ({ message: "No biography: a built or new character needs one.", hint: `Set texts.biography: exactly ${BIO_PARAGRAPHS} paragraphs (one per line) in your own words, in the GM's language.` }),
+  "bio.paragraphs": (p) => ({ message: `The biography has ${p.count} paragraph(s); it needs exactly ${BIO_PARAGRAPHS}.`, hint: `Write texts.biography as exactly ${BIO_PARAGRAPHS} paragraphs, one per line.` }),
+  "bio.copied": (p) => ({ message: `The biography repeats catalogue or rulebook text ("${p.run}").`, hint: "Write the biography in your own words; never copy rule or catalogue text." }),
+  "bio.rewrite": () => ({ message: "Rewrites the existing biography.", hint: "Nothing to fix if the GM asked or the change made it false (then the rationale says so); otherwise leave texts.biography out." }),
   "upgrades.over": (p) => ({ message: `${p.count} team-base upgrades; the rank allows ${p.max}.`, hint: "Remove upgrades from texts.teamBase." }),
   // npc / items
   "attr.range": (p) => ({ message: `Attribute ${A(p.attr)} must be a whole number in ${NPC_ATTR.min}..${NPC_ATTR.max}.`, hint: "NPC attributes have no budget but must stay in range." }),
@@ -538,6 +544,7 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
   if (isHero) for (const s of talentShifts(basePlain, proj.actor, P, catalog)) {
     acc.warnings.push({ code: "talent.role.shift", path: `items.${s.itemId}`, ...(s.itemId.startsWith(NEW_PREFIX) ? { opId: s.itemId.slice(NEW_PREFIX.length) } : {}), params: s });
   }
+  bioIssues(basePlain, proj, P, profile, catalog, acc);
   if (acc.errors.length) return finish("L2", acc, { rank });
 
   // ---- L3 stale check + writer dry run
@@ -621,8 +628,33 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
   res.applyConfirm = applyConfirmList(proj, talentOrder.reorders);
 
   res.expect = expectFor(doc ?? asDoc(basePlain), ops, proj);
-  res.summary = [...summarize({ ops }, proj, res.budget), ...keptLine(conv, ops), ...(isHero && res.budget.after ? [`budget ${res.budget.after.points} spent ${res.budget.after.spent} slots ${res.budget.after.slots}/${res.budget.after.rankPowers}`] : [])].join("\n");
+  res.summary = [...summarize({ ops }, proj, res.budget), ...keptLine(conv, ops), ...(isHero && res.budget.after ? [`budget ${res.budget.after.points} spent ${res.budget.after.spent} slots ${res.budget.after.slots}/${res.budget.after.rankPowers}`] : []), ...bioLines(proj)].join("\n");
   return finish("L4", acc, { rank });
+}
+/**
+ * W6-C biography checks (both actor kinds). A build (a replace, or an ops build that fills a sheet without creation items under the
+ * creation profile) needs a biography on the result: bio.missing, an ACTIONABLE warning (the harness's one fix round asks the
+ * model for it, W5-B-1; the GM still gets the build if that fails: not an error, so a missing bio never blocks a whole build). A written
+ * biography needs exactly BIO_PARAGRAPHS paragraphs (warning bio.paragraphs) and no run of catalogue text (error bio.copied). An
+ * ops edit that rewrites a non-empty biography gets bio.rewrite (a GM-visible warning, nothing for the model to fix).
+ */
+export function bioIssues(basePlain, proj, P, profile, catalog, acc) {
+  const ops = Object.entries(proj.opInfo ?? {});
+  const hit = ops.map(([opId, x]) => [opId, x.kind === "actor" ? (x.changed ?? []).find((c) => c.path === "system.biography") : null]).find(([, c]) => c);
+  const [opId, ch] = hit ?? [null, null];
+  const at = (P.mode === "replace" ? "proposal" : `ops[${(P.ops ?? []).findIndex((o) => o?.opId === opId)}].set`) + ".texts.biography";
+  const creation = (x) => ["powerSource", "power", "boost", "limit", "talent", "drawback"].includes(x?.type);
+  const opsBuild = P.mode === "ops" && profile === "creation" && !(basePlain.items ?? []).some(creation) && (proj.actor?.items ?? []).some(creation);
+  if ((P.mode === "replace" || opsBuild) && !bioFlat(getPath(proj.actor, "system.biography"))) {
+    const actorOp = ops.find(([, x]) => x.kind === "actor")?.[0];
+    acc.warnings.push({ code: "bio.missing", path: P.mode === "replace" ? "proposal.texts.biography" : "texts.biography", ...(actorOp ? { opId: actorOp } : {}), params: {} });
+  }
+  if (!ch || typeof ch.to !== "string") return;
+  const count = bioParagraphs(ch.to).length;
+  if (count !== BIO_PARAGRAPHS) acc.warnings.push({ code: "bio.paragraphs", path: at, opId, params: { count } });
+  const run = copiedRun(ch.to, catalog);
+  if (run) acc.errors.push({ code: "bio.copied", path: at, opId, params: { run } });
+  if (P.mode === "ops" && bioFlat(getPath(basePlain, "system.biography"))) acc.warnings.push({ code: "bio.rewrite", path: at, opId, params: {} });
 }
 /**
  * W2-3 role shifts -> [{ itemId, name, from, to, listed }] (see reader.mjs talentRoles). ops only: W5-A-V1, a replace writes the
@@ -846,7 +878,7 @@ export function costLabel(c, info, ctx) {
 
 /* ================================================================== model-facing tools */
 const TOOL_DESC = {
-  submit_proposal: "Submit the proposal for the GM. It is validated (refs, the rules on the sheet as it would be after the change, a dry run of the write); errors come back with hints, the budget before/after and each op's cost. ok:true ends your turn (with a warning to fix: after one fix step) and the GM sees a preview (applyConfirm: the removals, level swaps and kept talents moved to another role that the GM confirms at Apply). dryRun:true = check only: same checks, nothing reaches the GM, your turn goes on; only to compare variants or to price a change you may not propose (\"what would Flight at Major cost?\"), never before a submit.\n" + PROPOSAL_GUIDE
+  submit_proposal: "Submit the proposal for the GM. It is validated (refs, the rules on the changed sheet, a dry run of the write); errors come back with hints, the budget before/after and each op's cost. ok:true ends your turn (with a warning to fix: after one fix step) and the GM sees a preview (applyConfirm: the removals, level swaps and kept talents moved to another role that the GM confirms at Apply). dryRun:true = check only: same checks, nothing reaches the GM, your turn goes on; only to compare variants or to price a change you may not propose, never before a submit.\n" + PROPOSAL_GUIDE
 };
 /**
  * B1 (bughunt-1, PROVISIONAL, owner decides after one real request): `strict` on the proposal tool. Internal constant, no
@@ -866,7 +898,7 @@ export function proposalToolDefs() {
  * GM's business or already intended (drawer rank, slots over the rank by choice, hand-edited removals the GM sees, a cut note,
  * an NPC threat, a sensitive field the GM asked for).
  */
-export const NO_FIX_WARNINGS = Object.freeze(new Set(["rank.defaulted", "rank.differs", "slots.over", "remove.handEdited", "note.cut", "npc.threat", "field.sensitive", "baseline.tolerated", "budget.delta", "gear.cost", "effect.filled"]));
+export const NO_FIX_WARNINGS = Object.freeze(new Set(["rank.defaulted", "rank.differs", "slots.over", "remove.handEdited", "note.cut", "npc.threat", "field.sensitive", "baseline.tolerated", "budget.delta", "gear.cost", "effect.filled", "bio.rewrite"]));
 const NO_FIX_HINT = /^(nothing to (fix|do)|information only|fine if|in-play: )/i;
 export const isActionableWarning = (w) => !!w?.code && !QUIET_CODES.has(w.code) && !NO_FIX_WARNINGS.has(w.code) && !!String(w.hint ?? "").trim() && !NO_FIX_HINT.test(String(w.hint).trim());
 /** model-facing submit result -> the actionable warnings (empty for a refused or dry-run result) */
@@ -876,13 +908,23 @@ export function actionableWarnings(name, res) {
 }
 /** D-9: check_proposal (internal alias) or submit_proposal with dryRun:true */
 export const isDryRun = (name, input) => name === "check_proposal" || input?.dryRun === true;
+/** W6-C: the written biography for the GM's preview, one "¶ " line per paragraph (dropped from the model's copy: it wrote it) */
+export const BIO_LINE = "¶ ";
+function bioLines(proj) {
+  for (const x of Object.values(proj.opInfo ?? {})) {
+    const c = x.kind === "actor" ? (x.changed ?? []).find((k) => k.path === "system.biography") : null;
+    if (c && typeof c.to === "string") return bioParagraphs(c.to).map((p) => `${BIO_LINE}${p}`);
+  }
+  return [];
+}
+const modelSummary = (s) => String(s ?? "").split("\n").filter((l) => !l.startsWith(BIO_LINE)).join("\n");
 /** compact model-facing result (GM-only fields dropped) */
 export function toolResult(name, r, doc, { dryRun = name === "check_proposal" } = {}) {
   const out = { ok: r.ok };
   if (dryRun) out.dryRun = true;   // the harness reads it: never the pending proposal, never ends the turn
   if (r.ok && !dryRun) {
     out.proposalId = `prop-${hash(`${doc?.uuid ?? ""}|${stableJson(r.normalized)}`)}`;
-    out.summary = r.summary ?? "";
+    out.summary = modelSummary(r.summary);
     // W3-10: model-facing (tool result, outside the cached prefix)
     if (r.applyConfirm?.length) { out.applyConfirm = r.applyConfirm; out.applyConfirmNote = APPLY_CONFIRM_NOTE; }
   }
@@ -895,7 +937,7 @@ export function toolResult(name, r, doc, { dryRun = name === "check_proposal" } 
   // W2-8: the budget legend lives in the rules digest (cached prefix); the per-result `note` stays GM-side only
   if (r.budget && typeof r.budget === "object" && "note" in r.budget) { const { note, ...b } = r.budget; out.budget = b; } else out.budget = r.budget;
   if (!r.ok) out.layer = r.layer;
-  if (r.ok && dryRun) out.summary = r.summary ?? "";
+  if (r.ok && dryRun) out.summary = modelSummary(r.summary);
   return out;
 }
 

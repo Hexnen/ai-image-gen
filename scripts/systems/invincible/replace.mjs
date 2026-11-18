@@ -19,6 +19,7 @@
 import * as rules from "./vendor/chargen/rules.mjs";
 import { ATTRS, LEVEL_WORDS, norm, normBase, powerLevelOf } from "./reader.mjs";
 import { normRef, baseName, noteOf, levelWord, cleanText, writeNote } from "./writer.mjs";
+import { sameBio } from "./bio.mjs";
 
 const SIX = ["powerSource", "power", "boost", "limit", "talent", "drawback"];
 const listOf = (coll) => (coll == null ? [] : Array.isArray(coll) ? coll : typeof coll.values === "function" ? [...coll.values()] : [...coll]);
@@ -89,6 +90,8 @@ function desiredFromNpc(n) {
   text("name", n.name);
   for (const k of ATTRS) { const v = n.attributes?.[k]; if (v != null) fields[`system.attributes.${k}.value`] = Number(typeof v === "object" ? v.value : v); }
   for (const [k, v] of Object.entries(n.texts ?? {})) if (["civilianName", "role", "appearance", "occupation", "personality", "drive", "flaw", "relationships"].includes(k)) text(`system.${k}`, Array.isArray(v) ? v.join(", ") : v);
+  // W6-C: the builder's biography (plain text; the writer writes it as <p> paragraphs and skips an unchanged one, writer.mjs)
+  if (cleanText(n.texts?.biography, 4000)) fields["system.biography"] = cleanText(n.texts.biography, 4000);
   for (const k of ["resources", "reputation"]) if (Number.isInteger(n[k])) fields[`system.${k}`] = n[k];
   if (cleanText(n.specialAbilities, 4000)) fields.biographyAppend = `Special abilities: ${cleanText(n.specialAbilities, 4000)}`;
   return { sources, powers, talents: n.talents ?? [], drawbacks: n.drawbacks ?? [], fields, unattached };
@@ -197,6 +200,7 @@ export function toOps(actor, proposal, cat, opts = {}) {
   for (const [path, v] of Object.entries(want.fields)) {
     if (path === "biographyAppend") { set[path] = v; continue; }
     const cur = path.split(".").reduce((o, k) => o?.[k], src);
+    if (path === "system.biography") { if (!sameBio(cur, v)) set[path] = v; continue; }
     if (JSON.stringify(cur ?? null) !== JSON.stringify(v)) set[path] = v;
   }
   if (Object.keys(set).length) ops.push({ opId: "actor", kind: "updateActor", set });

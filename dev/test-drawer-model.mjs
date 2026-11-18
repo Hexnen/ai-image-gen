@@ -159,6 +159,10 @@ await test("summaryRows: op lines with action and cost, budget line dropped, oth
   assert.deepEqual(extra, []);
   assert.deepEqual(M.summaryRows("", {}), { ops: [], extra: [] });
   assert.deepEqual(M.summaryRows("something odd\nbudget 30 spent 2 slots 1/4").extra, ["something odd"]);
+  // W6-C: the biography the validator puts into the GM's summary ("¶ " per paragraph) shows as preview lines, not as ops
+  const b = M.summaryRows("act1: actor name, biography\n¶ Pierwszy akapit: Invented.\n¶ Drugi akapit: Invented.", { act1: { kind: "actor" } });
+  assert.equal(b.ops.length, 1);
+  assert.deepEqual(b.extra, ["¶ Pierwszy akapit: Invented.", "¶ Drugi akapit: Invented."]);
 });
 
 await test("budgetRows / issueRows / undoView / usageView", () => {

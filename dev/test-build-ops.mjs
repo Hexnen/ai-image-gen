@@ -1438,4 +1438,57 @@ await test("W5-C (W5-B-6 after W5-A): written ops name the new name also for a l
   assert.equal(byOp.n.name, "Lean Times (rent)"); assert.equal(a.items.get(lean.id).name, "Lean Times (rent)");
 });
 
+/* ================================================================ W6-C: the biography (texts.biography -> system.biography) */
+const OLD_BIO = "<p>Invented old first paragraph.</p><p>Invented old second paragraph.</p>";
+const NEW_BIO = "Invented new first paragraph about a <b>harbor</b> night.\nInvented new second paragraph, @UUID[x] stays text.";
+
+await test("W6-C: texts.biography writes two escaped <p> paragraphs, is an overwrite in the plan, and undo restores the old bio", async () => {
+  const a = hero();
+  a._source.system.biography = OLD_BIO;
+  const prop = { mode: "ops", ops: [{ opId: "b1", kind: "updateActor", set: { texts: { biography: NEW_BIO } } }] };
+  const p = await W.plan(a, prop);
+  assert.equal(p.ok, true, JSON.stringify(p.errors));
+  assert.equal(p.ops[0].action, "actor");
+  assert.deepEqual(p.fields.map((f) => f.path), ["system.biography"]);
+  assert.equal(p.fields[0].from, OLD_BIO);
+  assert.ok(p.overwrites.some((o) => o.path === "system.biography"), "a rewritten non-empty bio is an overwrite the GM sees");
+  assert.ok(!p.fields.some((f) => "overwrite" in f) && !p.ops[0].changes.some((c) => "overwrite" in c), "the internal flag does not leak");
+  const r = await W.apply(a, prop, { expect: p.expect });
+  assert.equal(r.ok, true, r.message);
+  const bio = a._source.system.biography;
+  assert.equal((bio.match(/<p>/g) ?? []).length, 2, bio);
+  assert.match(bio, /&lt;b&gt;harbor&lt;\/b&gt;/, "HTML from the model is escaped");
+  assert.ok(!/@UUID\[/.test(bio), "enrichers are defused");
+  const u = await W.undo(a, r.runId);
+  assert.equal(u.ok, true, u.message);
+  assert.equal(a._source.system.biography, OLD_BIO, "undo restores the old biography byte for byte");
+});
+
+await test("W6-C: an in-place edit that does not name the biography leaves it untouched; the same bio again is no change", async () => {
+  const a = hero();
+  a._source.system.biography = OLD_BIO;
+  const r = await W.apply(a, { mode: "ops", ops: [{ opId: "x1", kind: "updateActor", set: { texts: { drive: "Invented new drive" } } }] });
+  assert.equal(r.ok, true, r.message);
+  assert.equal(a._source.system.drive, "Invented new drive");
+  assert.equal(a._source.system.biography, OLD_BIO);
+  const same = await W.plan(a, { mode: "ops", ops: [{ opId: "s1", kind: "updateActor", set: { texts: { biography: "Invented old first paragraph.\nInvented old second paragraph." } } }] });
+  assert.equal(same.ops[0].action, "noop");
+  assert.equal(same.fields.length, 0);
+  // the empty bio is never blanked; the bio and biographyAppend in one op conflict (one field)
+  const blank = await W.plan(a, { mode: "ops", ops: [{ opId: "e1", kind: "updateActor", set: { texts: { biography: "" } } }] });
+  assert.ok(blank.warnings.some((w) => w.code === "actor.blank"));
+  const both = await W.plan(a, { mode: "ops", ops: [{ opId: "c1", kind: "updateActor", set: { texts: { biography: NEW_BIO }, biographyAppend: "x" } }] });
+  assert.ok(both.errors.some((e) => e.code === "op.conflict"), JSON.stringify(both.errors));
+});
+
+await test("W6-C: a flat replace with texts.biography writes the bio (replace.mjs fallback converter); the same bio is no op", async () => {
+  const a = hero();
+  const conv = toOps(a, { name: a.name, attributes: {}, texts: { biography: NEW_BIO } }, cat);
+  const act = conv.ops.find((o) => o.kind === "updateActor");
+  assert.equal(act?.set["system.biography"], NEW_BIO);
+  a._source.system.biography = (await W.plan(a, { mode: "ops", ops: [{ opId: "b1", kind: "updateActor", set: { texts: { biography: NEW_BIO } } }] })).fields[0].to;   // as written (escaped, defused)
+  const again = toOps(a, { name: a.name, attributes: {}, texts: { biography: NEW_BIO } }, cat);
+  assert.ok(!again.ops.some((o) => o.kind === "updateActor" && "system.biography" in o.set), JSON.stringify(again.ops));
+});
+
 console.log(`\n${passed} passed${process.exitCode ? ", some FAILED" : ""}`);

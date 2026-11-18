@@ -479,3 +479,40 @@ Uwaga: sufit 7 500 jest prawie wyczerpany; następny przebieg tekstów musi coś
 
 ### Niezweryfikowane
 - Prawdziwy fetch do API z prawdziwym kluczem (zakaz). Okno kluczy, baner szuflady i powiadomienie tylko w kodzie / node, bez Foundry.
+
+## W6-C: dwuakapitowe bio + zaszyty domyślny setting (klasyczne USA, „chyba że MG powie inaczej”)
+
+Polecenie właściciela (2026-11-18): «niech też pisze 2 akapitowe bio. domyślny zaszyty setting to klasyczne usa. ale z zaszytych "chyba że user powie inaczej"».
+
+### Gdzie siedzi bio
+- Pole systemu: `system.biography` aktora (HTML; superhero i npc). Czytnik (`reader.mjs` TEXT_FIELDS) już je czytał, arkusz modelu pokazuje `TEXT biography` (snapshot, cięte do 1500 znaków). Nowego pola nie ma.
+- Model pisze zwykły tekst w `texts.biography` (updateActor `set.texts` i replace `proposal.texts`; schemat ma pole w obu miejscach). Akapit = niepusta linia.
+- Writer (`writer.mjs` ACTOR_PATHS `system.biography`, kind `html`): tekst -> `<p>` na akapit (escapowane, enrichery rozbrojone, `toParagraphs`), zastępuje pole; to samo bio jeszcze raz = brak zmiany (`sameBio`, porównanie jako tekst); puste = nigdy nie czyści (`actor.blank`); `biographyAppend` + bio w jednej operacji = `op.conflict`. Przepisanie niepustego bio idzie do `plan.overwrites` (MG widzi). Undo przywraca stare bio bajt w bajt (wpis `actor` dziennika, bez zmian w undo.mjs).
+- Konwersje replace: `proposal.mjs replaceToOps` (używana przy podglądzie i zapisie) i zapasowa `replace.mjs toOps` (kształt płaski) porównują bio jako tekst.
+- Nowy czysty moduł `scripts/systems/invincible/bio.mjs`: `BIO_PARAGRAPHS = 2`, `bioParagraphs`, `bioFlat`, `bioHtml`, `sameBio`, `copiedRun` (10 kolejnych słów wspólnych z własnym tekstem wpisu katalogu = skopiowane; zbiór liczony raz na katalog, WeakMap).
+
+### Walidacja (`validate.mjs bioIssues`, oba rodzaje aktorów)
+- `bio.missing`: replace (każdy profil) albo budowa ops na arkuszu bez elementów tworzenia (profil creation), a wynik nie ma bio. OSTRZEŻENIE z możliwością poprawy, nie błąd: runda poprawki harnessu (W5-B-1) prosi model o bio, a MG i tak dostaje budowę, gdy model nie poprawi. Powód: błąd blokowałby całą budowę z powodu tekstu fabularnego (i łamał 12 starszych testów replace). Do decyzji właściciela, jeśli ma być twardy błąd (jedna linia: `acc.warnings` -> `acc.errors` dla replace).
+- `bio.paragraphs`: zapisane bio ma != 2 akapitów -> ostrzeżenie do poprawy.
+- `bio.copied`: przebieg 10 słów z tekstu wpisu katalogu (opisy przedmiotów, sekcje archetypów/zawodów z księgi) -> BŁĄD. Strony `read_rules` nie są w katalogu, więc tekst przepisany wyłącznie z nich nie jest wykrywany (niezweryfikowane / niepokryte).
+- `bio.rewrite`: edycja ops przepisuje niepuste bio -> ostrzeżenie dla MG, w `NO_FIX_WARNINGS` (bez rundy poprawki: tylko MG wie, czy prosił).
+- Podgląd w szufladzie: walidator dopisuje do podsumowania MG linie `¶ <akapit>`; `summaryRows` pokazuje je jako linie „extra” karty (bez zmian w szablonie i drawer-app). Kopia dla modelu (`toolResult`) te linie wycina (model je napisał; oszczędność tokenów), zostaje `act1: actor …, biography`.
+
+### Tekst promptu (HARNESS_RULES_VERSION 7 -> 8)
+- Nowe reguły system[0] (dalej bez nazw systemu):
+  - „Setting: classic comic-book USA (its cities, institutions, era) for names, places, history and origins, unless the GM says otherwise; then follow the GM, never ask.”
+  - „A character you build or create gets a biography: exactly two paragraphs in your own words (no rule text). On an existing character change it only when asked or a change makes it false (minimally; the rationale says so).”
+  - lista wolnych tekstów w języku MG: „(descriptions, biography, personality words, notes)”.
+- Przewodnik: `texts {…, team, teamBase, biography}`. DIGEST_VERSION bez zmian (digest nietknięty).
+- Sufit prefiksu (bez indeksu katalogu): przed 7 499 (margines 1), po 7 487 (margines 13); sufit 7 500 NIE podniesiony. Miejsce zrobione przez: puste `"required":[]` pomijane w schematach (8 x 14 znaków; `checkShape` czyta `required ?? []`, strict na submit wyłączony), krótsze opisy `read_document` / `read_rules` / `get_entries` / `search_catalog` (bez zmian sensu, przypięte frazy zostały), „search only when it is not enough” tylko w `search_catalog`, bez przykładu „Flight at Major” w opisie submit, krótsze zdanie o dokumencie w system[0].
+
+### Testy
+- `test-prompt-texts` 25 (+1 W6-C: reguła USA z klauzulą „unless the GM says otherwise … never ask”, bio dwuakapitowe, bez „invincible|talent” w system[0], `texts.biography` w schemacie updateActor i replace, brak pustych `required`; wersja 8; sufit 7 487 < 7 500).
+- `test-build-validate-invincible` 59 (+3: bio.missing przy replace / budowie ops / NPC, możliwe do poprawy; 2 akapity bez ostrzeżeń, `¶` w podsumowaniu MG i nie w wyniku modelu; 1 i 3 akapity -> bio.paragraphs; tekst katalogu -> bio.copied; edycja bez bio nie rusza bio, przepisanie -> bio.rewrite bez rundy poprawki; replace z tym samym bio = brak zmiany). Zmienione: test schematu (puste `required` pominięte), W5-B-1 (budowa bez bio ma `bio.missing`, z bio brak).
+- `test-build-ops` 58 (+3: zapis 2 x `<p>` escapowane i rozbrojone, overwrite w planie, Undo przywraca stare bio bajt w bajt; edycja innego pola nie rusza bio, to samo bio = noop, puste nie czyści, konflikt z biographyAppend; replace.mjs zapisuje bio i pomija to samo).
+- `test-drawer-model` 16 (linie `¶` = extra, nie operacje).
+- Wszystkie `dev/test-*.mjs` zielone: ops 58, snapshot (exit 0), validate 59, catalog 25, drawer-model 16, dry-relay 13, dry-transport 12, enhance 22, harness 50, image-cost 24, key-check 8, migrate-id 19, packs 24, prompt-texts 25, transport 30, vendor load 9, vendor-sync ALL OK.
+
+### Niezweryfikowane
+- Prawdziwy model: czy pisze bio po polsku przy polskim MG, dokładnie 2 akapity, w realiach klasycznego komiksowego USA, i czy przy „akcja w Tokio” / „Polska lat 80.” idzie za MG bez pytania; czy w edycjach nie rusza bio. Do następnej rundy próbnej (przypadki budowy z rund 4-7 + jedna budowa z innym settingiem w wiadomości MG + jedna edycja bez wzmianki o bio).
+- Szuflada w Foundry (linie `¶` na karcie, Apply/Undo bio) tylko w node.
