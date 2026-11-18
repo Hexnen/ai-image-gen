@@ -24,17 +24,25 @@ async function rgbaOf(blob) {
 }
 
 /** Portrait → {bitmap, w, h}. `crop` as in resolveCrop (pixels / fractions / "top-square"). */
-export async function loadPortrait(path, { crop = null } = {}) {
+export async function loadPortrait(path, { crop = null, maxSide = 0 } = {}) {
   const { bytes, type } = await fetchBytes(path);
   const blob = new Blob([bytes], { type: type || "image/png" });
   let bmp = await createImageBitmap(blob, { premultiplyAlpha: "none", colorSpaceConversion: "none" });
+  const natural = { w: bmp.width, h: bmp.height };
   const rect = resolveCrop(crop, bmp.width, bmp.height);
   if (rect) {
     const full = bmp;
     bmp = await createImageBitmap(full, rect[0], rect[1], rect[2], rect[3], { premultiplyAlpha: "none", colorSpaceConversion: "none" });
     full.close?.();
   }
-  return { bitmap: bmp, w: bmp.width, h: bmp.height };
+  // W6-N: a sheet portrait shown at ~200 px does not need a 2048 px texture
+  if (maxSide > 0 && Math.max(bmp.width, bmp.height) > maxSide) {
+    const k = maxSide / Math.max(bmp.width, bmp.height);
+    const full = bmp;
+    bmp = await createImageBitmap(full, { resizeWidth: Math.max(1, Math.round(full.width * k)), resizeHeight: Math.max(1, Math.round(full.height * k)), resizeQuality: "high", premultiplyAlpha: "none", colorSpaceConversion: "none" });
+    full.close?.();
+  }
+  return { bitmap: bmp, w: bmp.width, h: bmp.height, natural };
 }
 
 /** The `_depth.json` sidecar of a module depth file, or null (missing / not ours / unreadable). */
@@ -50,11 +58,12 @@ async function sidecarOf(path) {
 /**
  * Depth map → {D, mask, w, h, bits, format, meta}. `spec` = {path, crop?, invert?, format?} (format forces
  * "png16" | "png-rg16" | "gray8"). Maps larger than 2048 px are box-downscaled ×2 (conditioning stays fast).
+ * W6-N: `sidecar: false` skips the `_depth.json` request (the depth index knows it does not exist: no 404).
  */
 export async function loadDepth(spec) {
-  const { path, crop = null, invert = false, format = null } = spec;
+  const { path, crop = null, invert = false, format = null, sidecar = true } = spec;
   const { bytes, type } = await fetchBytes(path);
-  const meta = isPng(bytes) ? await sidecarOf(path) : null;
+  const meta = isPng(bytes) && sidecar !== false ? await sidecarOf(path) : null;
   let src;
   if (isPng(bytes)) {
     const png = await decodePng(bytes);

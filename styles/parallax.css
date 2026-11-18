@@ -67,3 +67,6 @@
 @media (prefers-reduced-motion: reduce) {
   .aiimg-plx .fa-spin { animation: none; }
 }
+
+/* W6-N: depth parallax over an actor sheet portrait (scripts/parallax/portrait.mjs). Laid over the <img>; clicks pass through. */
+.aiimg-portrait-plx { position: absolute; display: block; margin: 0; padding: 0; border: 0; z-index: 1; pointer-events: none; max-width: none; max-height: none; transform: none; }

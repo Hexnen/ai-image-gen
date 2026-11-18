@@ -5,6 +5,7 @@ import { GenerateDialog } from "./generate-dialog.mjs";
 import { assertCanApply } from "./generate-flow.mjs";
 import { depthButtonFor, registerDepth } from "./depth/entry.mjs";
 import { parallaxButtonFor, registerParallax } from "./parallax/entry.mjs";
+import { registerPortraitParallax } from "./parallax/portrait.mjs";
 
 /** Selektory obrazka profilu — od najbardziej do najmniej pewnych. */
 const DEFAULT_SELECTORS = [
@@ -130,5 +131,6 @@ export function registerSheetButtons() {
   Hooks.on("renderDocumentSheet", (app, html) => inject(app, html));
   registerDepth(); // W6-I: api.depth + nothing else at init (the depth code loads on first use)
   registerParallax(); // W6-L: api.parallax (the window loads on first use)
+  registerPortraitParallax(); // W6-N: depth parallax on actor sheet portraits + "Generate depth" header control (GM)
   console.log(`${MODULE_ID} | sheet buttons registered`);
 }

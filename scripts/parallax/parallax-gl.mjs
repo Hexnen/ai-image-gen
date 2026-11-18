@@ -36,7 +36,7 @@ uniform vec2 uOff;          // uv shift between depth 1 and depth 0
 uniform vec2 uDTexel;       // 1 / depth size
 uniform vec2 uLook;         // pointer / sway, unit disc, y down (light direction)
 uniform vec3 uBg;
-uniform float uFocus, uGamma, uContrast, uLight, uRim, uDust, uVignette, uHoleFill, uTime, uRelief;
+uniform float uFocus, uGamma, uContrast, uLight, uRim, uDust, uVignette, uHoleFill, uTime, uRelief, uAlphaOut;
 uniform int uSteps, uView;
 
 float cond(float d){ float g = pow(clamp(d, 0.0, 1.0), uGamma); return clamp((g - 0.5) * uContrast + 0.5, 0.0, 1.0); }
@@ -85,7 +85,8 @@ void main(){
   vec2 grad = vec2(H(s + vec2(e15.x, 0.0)) - H(s - vec2(e15.x, 0.0)), H(s + vec2(0.0, e15.y)) - H(s - vec2(0.0, e15.y))) / (2.0 * e15);
   float stretch = 1.0 + dot(uOff, grad);
   float hole = smoothstep(1.6, 3.5, stretch) * uHoleFill;
-  vec3 c = textureGrad(uImg, s, gx, gy).rgb;
+  vec4 src = textureGrad(uImg, s, gx, gy);
+  vec3 c = src.rgb;
   if (hole > 0.002) {
     vec2 gt = grad * e;                             // per-texel change
     vec2 dir = -gt / max(length(gt), 1e-6) * e;     // one texel towards the far side
@@ -133,15 +134,15 @@ void main(){
     c = mix(vec3(dot(c, vec3(0.299, 0.587, 0.114)) * 0.45), vec3(1.0, 0.25, 0.1), st);
     c = mix(c, vec3(0.2, 0.8, 1.0), hole * 0.5);
   }
-  outColor = vec4(c, 1.0);
+  outColor = vec4(c, mix(1.0, src.a, uAlphaOut));   // W6-N: sheet portraits keep the image's own transparency
 }`;
 
-const UNIFORMS = ["uImg", "uDep", "uRect", "uCrop", "uOff", "uDTexel", "uLook", "uBg", "uFocus", "uGamma", "uContrast", "uLight", "uRim", "uDust", "uVignette", "uHoleFill", "uTime", "uRelief", "uSteps", "uView"];
+const UNIFORMS = ["uImg", "uDep", "uRect", "uCrop", "uOff", "uDTexel", "uLook", "uBg", "uFocus", "uGamma", "uContrast", "uLight", "uRim", "uDust", "uVignette", "uHoleFill", "uTime", "uRelief", "uSteps", "uView", "uAlphaOut"];
 
 export class ParallaxRenderer {
   /** @param {HTMLCanvasElement} canvas  @returns {ParallaxRenderer|null} null when WebGL2 is missing (caller shows a message) */
-  static create(canvas) {
-    const gl = canvas.getContext("webgl2", { antialias: false, alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: true, powerPreference: "high-performance" });
+  static create(canvas, attrs = {}) {
+    const gl = canvas.getContext("webgl2", { antialias: false, alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: true, powerPreference: "high-performance", ...attrs });
     if (!gl) return null;
     return new ParallaxRenderer(canvas, gl);
   }
@@ -150,10 +151,14 @@ export class ParallaxRenderer {
     this.canvas = canvas;
     this.gl = gl;
     this.depths = new Map();
-    this.image = null;
+    /** W6-N: image textures by key; the window uses one ("main"), the sheet portraits share the context (one per view) */
+    this.images = new Map();
     this.lost = false;
     this.#build();
   }
+
+  /** The window's portrait texture (key "main"). */
+  get image() { return this.images.get("main") ?? null; }
 
   #build() {
     const gl = this.gl;
@@ -174,10 +179,11 @@ export class ParallaxRenderer {
     this.u = Object.fromEntries(UNIFORMS.map((k) => [k, gl.getUniformLocation(p, k)]));
   }
 
-  /** Portrait (ImageBitmap / image element). Mipmapped. */
-  setImage(img) {
+  /** Portrait (ImageBitmap / image element) under a key (default "main"). Mipmapped. */
+  setImage(img, key = "main") {
     const gl = this.gl;
-    if (this.image) gl.deleteTexture(this.image.tex);
+    const old = this.images.get(key);
+    if (old) gl.deleteTexture(old.tex);
     const tex = gl.createTexture();
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -187,7 +193,13 @@ export class ParallaxRenderer {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, img);
     gl.generateMipmap(gl.TEXTURE_2D);
     this.#params(gl.LINEAR_MIPMAP_LINEAR);
-    this.image = { tex, w: img.width, h: img.height };
+    this.images.set(key, { tex, w: img.width, h: img.height });
+  }
+
+  dropImage(key = "main") {
+    const t = this.images.get(key);
+    if (t) this.gl.deleteTexture(t.tex);
+    this.images.delete(key);
   }
 
   /** Conditioned depth (parallax-core conditionDepth: 4 floats per pixel) under a key. Half-float, linear filtering. */
@@ -221,11 +233,12 @@ export class ParallaxRenderer {
   /**
    * Draw a frame. `panels` = [{key, x, y, w, h}] in canvas pixels (y down); `u` = per-frame uniforms shared by every
    * panel: {rect(panel w,h → contain rect), crop, off, look, bg, focus, gamma, contrast, light, rim, dust, vignette,
-   * holeFill, time, relief, steps, view}. `u.rectFor(panel)` gives the contain rect of a panel.
+   * holeFill, time, relief, steps, view}. `u.rectFor(panel)` gives the contain rect of a panel. W6-N: a panel may name
+   * its image texture (`panel.image`, default "main"); `u.alphaOut` 1 = write the image's alpha (default 0 = opaque).
    */
   draw(panels, u) {
     const gl = this.gl;
-    if (this.lost || !this.image) return;
+    if (this.lost || !this.images.size) return;
     gl.useProgram(this.program);
     gl.bindVertexArray(this.vao);
     gl.disable(gl.DEPTH_TEST);
@@ -234,11 +247,10 @@ export class ParallaxRenderer {
     const H = this.canvas.height;
     gl.viewport(0, 0, this.canvas.width, H);
     gl.scissor(0, 0, this.canvas.width, H);
-    gl.clearColor(u.bg[0], u.bg[1], u.bg[2], 1);
+    gl.clearColor(u.bg[0], u.bg[1], u.bg[2], u.alphaOut ? 0 : 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.image.tex);
     const U = this.u;
+    gl.uniform1f(U.uAlphaOut, u.alphaOut ? 1 : 0);
     gl.uniform1i(U.uImg, 0);
     gl.uniform1i(U.uDep, 1);
     gl.uniform2f(U.uCrop, u.crop.x, u.crop.y);
@@ -258,10 +270,13 @@ export class ParallaxRenderer {
     gl.uniform1i(U.uView, u.view);
     for (const p of panels) {
       const d = this.depths.get(p.key);
-      if (!d || p.w < 2 || p.h < 2) continue;
+      const im = this.images.get(p.image ?? "main");
+      if (!d || !im || p.w < 2 || p.h < 2) continue;
       const vx = Math.round(p.x), vy = Math.round(H - p.y - p.h), vw = Math.round(p.w), vh = Math.round(p.h);
       gl.viewport(vx, vy, vw, vh);
       gl.scissor(vx, vy, vw, vh);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, im.tex);
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, d.tex);
       const r = u.rectFor(p);
@@ -282,8 +297,7 @@ export class ParallaxRenderer {
   destroy() {
     const gl = this.gl;
     for (const k of [...this.depths.keys()]) this.dropDepth(k);
-    if (this.image) gl.deleteTexture(this.image.tex);
-    this.image = null;
+    for (const k of [...this.images.keys()]) this.dropImage(k);
     gl.deleteProgram(this.program);
     gl.deleteVertexArray(this.vao);
     gl.getExtension("WEBGL_lose_context")?.loseContext();

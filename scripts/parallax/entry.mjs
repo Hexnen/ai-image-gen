@@ -1,6 +1,7 @@
 // W6-L: entry points of the parallax portrait window: `api.parallax.open({image, depths})`, the sheet button (shown when
 // `<name>_depth.png` exists next to the image) and the button in the depth result window. The window code loads on first use.
-import { depthPathsFor } from "../depth/post.mjs";
+import { depthIndex } from "../depth/depth-index.mjs";
+import { portraitApi } from "./portrait.mjs";
 import { resolveTypeKey } from "../image-types.mjs";
 import { getConfig } from "../config-store.mjs";
 
@@ -12,31 +13,19 @@ export function typeParallax(typeKey) {
   try { return getConfig(typeKey).depth?.parallax ?? null; } catch { return null; }
 }
 
-const EXISTS_TTL = 30_000;
-const existsCache = new Map(); // path -> {at, p}
-
-/** Cached existence check of a Data file (GM file browser; 30 s). */
-export function depthFileExists(path) {
-  const hit = existsCache.get(path);
-  if (hit && performance.now() - hit.at < EXISTS_TTL) return hit.p;
-  const p = import("./parallax-load.mjs").then((m) => m.fileExists(path)).catch(() => false);
-  existsCache.set(path, { at: performance.now(), p });
-  return p;
-}
-
-/** Forget cached checks (after a depth file was written). */
-export const forgetDepthChecks = () => existsCache.clear();
+/** Forget cached depth lookups (after a depth file was written). W6-N: the shared index (depth/depth-index.mjs). */
+export const forgetDepthChecks = () => depthIndex.invalidate();
 
 /**
- * Button for a document's image when its `<name>_depth.png` exists (resolves to null otherwise). GM only, like the
- * other sheet buttons.
+ * Button for a document's image when it has a depth map (resolves to null otherwise). GM only, like the other sheet
+ * buttons. W6-N: found through the shared index (world index, then the GM's directory listing; no 404).
  */
 export async function parallaxButtonFor(doc) {
   if (!game.user.isGM) return null;
   const img = doc?.img;
   if (!img || /^icons\/svg\//.test(img) || /\.svg$/i.test(img)) return null;
-  const paths = depthPathsFor(img);
-  if (!(await depthFileExists(paths.depth))) return null;
+  const info = await depthIndex.lookup(img);
+  if (!info) return null;
   const b = document.createElement("button");
   b.type = "button";
   b.className = "aiimg-btn aiimg-parallax-btn";
@@ -47,7 +36,7 @@ export async function parallaxButtonFor(doc) {
     ev.preventDefault();
     ev.stopPropagation();
     const key = resolveTypeKey(doc);
-    openParallax({ image: img, depths: [{ name: paths.depth.split("/").pop(), path: paths.depth }], parallax: typeParallax(key) });
+    openParallax({ image: img, depths: [{ name: info.depth.split("/").pop(), path: info.depth, format: info.format }], parallax: typeParallax(key) });
   });
   return b;
 }
@@ -66,7 +55,30 @@ export function registerParallax() {
        */
       open: ({ image, depths = [], typeKey = "", crop = null, view = null } = {}) => openParallax({ image, depths, crop, view, parallax: typeParallax(typeKey) }),
       /** The open window (or null): setLook, setView, setCompare, benchmark, status for macros and checks. */
-      get app() { return import("./parallax-app.mjs").then((m) => m.ParallaxApp.instance); }
+      get app() { return import("./parallax-app.mjs").then((m) => m.ParallaxApp.instance); },
+      /** W6-N: sheet portraits: status(), refresh(), resume(), drawNow(look?), benchmark(frames?) */
+      portraits: portraitApi
+    };
+    /**
+     * W6-N: the shared image -> depth map lookup (every client; writes are GM only). For the sheet portraits and the
+     * canvas tokens. See depth/depth-index.mjs.
+     */
+    api.depthMaps = {
+      /** @returns {Promise<{image, depth, format, mask, sidecar, source}|null>} */
+      lookup: (src) => depthIndex.lookup(src),
+      /** cached answer, no I/O: info | null | undefined (not looked up yet) */
+      peek: (src) => depthIndex.peek(src),
+      keyOf: (src) => depthIndex.keyOf(src),
+      pathsFor: (src) => depthIndex.pathsFor(src),
+      /** fn(keys|null) after any change; returns unsubscribe */
+      onChange: (fn) => depthIndex.onChange(fn),
+      entries: () => depthIndex.entries(),
+      stats: () => depthIndex.stats(),
+      invalidate: (src) => depthIndex.invalidate(src),
+      reportMissing: (src) => depthIndex.reportMissing(src),
+      /** load a found map: {D, mask, w, h, bits, format, meta, path} (Float32 0..1, 1 = near) */
+      load: (info) => import("./parallax-load.mjs").then((m) => m.loadDepth({ path: info.depth, format: info.format, sidecar: info.sidecar })),
+      ...(game.user.isGM ? { remember: (src, info) => depthIndex.remember(src, info), forget: (src) => depthIndex.forget(src) } : {})
     };
   });
 }

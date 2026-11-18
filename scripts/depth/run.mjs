@@ -3,6 +3,7 @@
 import { MODULE_ID } from "../constants.mjs";
 import { postProcess, luminance, encodeDepthPng16, encodeDepthRG16, encodeGray8, depthPathsFor } from "./post.mjs";
 import { planBrowserRun } from "./plan.mjs";
+import { depthIndex } from "./depth-index.mjs";
 
 const FP = () => foundry.applications.apps.FilePicker.implementation;
 const now = () => performance.now();
@@ -150,8 +151,19 @@ export async function runDepth({ path, depth, typeKey = "", ui = {} }) {
     ...(engine === "generative" ? { generated: res.returned ? [res.returned.w, res.returned.h] : null, styleRef: res.styleRef ?? null } : {}),
     maskModel: res.mask?.ok ? res.mask.repo : null, post: depth.post, timings: Object.fromEntries(Object.entries(t).map(([k, v]) => [k, Math.round(v ?? 0)]))
   };
-  res.metaPath = await upload(paths.meta, new TextEncoder().encode(JSON.stringify(meta, null, 2)), "application/json");
+  // W6-N: the server refuses to overwrite a non-media file, so a second run on the same image cannot replace the sidecar.
+  // The map itself is saved; the index entry below carries the real format, which the loaders prefer over the sidecar.
+  try {
+    res.metaPath = await upload(paths.meta, new TextEncoder().encode(JSON.stringify(meta, null, 2)), "application/json");
+  } catch (e) {
+    console.warn(`${MODULE_ID} | depth sidecar not written (an older one stays): ${paths.meta}`, e);
+    res.notes.push("metaKept");
+  }
   t.uploadMs = now() - t0;
+  // W6-N: remember image -> map in the shared world index: every client's sheet portrait (and later token) finds it
+  try {
+    await depthIndex.remember(path, { depth: res.depthPath, format: fmt === "png-rg16" ? "png-rg16" : "png16", mask: res.maskPath ?? null, sidecar: true });
+  } catch (e) { console.warn(`${MODULE_ID} | depth index not updated`, e); }
   res.depth = p.depth;
   res.maskA = A;
   res.bytes = bytes.length;
