@@ -22,7 +22,8 @@ export class DepthApp extends HandlebarsApplicationMixin(ApplicationV2) {
     actions: {
       pick: DepthApp.#onPick,
       run: DepthApp.#onRun,
-      view: DepthApp.#onView
+      view: DepthApp.#onView,
+      parallax: DepthApp.#onParallax
     }
   };
 
@@ -143,6 +144,17 @@ export class DepthApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   static #onView(ev, target) { this.view = target.dataset.view; return this.render(); }
 
+  /** W6-L: open the parallax window on the source with every saved result of this window (browser and/or generative). */
+  static #onParallax() {
+    const depths = ["browser", "generative"].map((k) => this.results[k]).filter((r) => r?.depthPath)
+      .map((r) => ({ name: `${L(`AIIMG.Depth.Engine.${r.engine}`)} · ${r.model ?? ""}`.trim(), path: r.depthPath, format: r.format ?? null }));
+    if (!this.path || !depths.length) return;
+    const cur = this.results[this.engine];
+    if (cur?.depthPath) depths.sort((a, b) => (a.path === cur.depthPath ? -1 : b.path === cur.depthPath ? 1 : 0));
+    const p = this.depthOverride?.parallax ?? (this.typeKey ? this.settings().parallax : null);
+    import("../parallax/entry.mjs").then((m) => m.openParallax({ image: this.path, depths, parallax: p }));
+  }
+
   static async #onRun() {
     if (this.busy || !this.path) return;
     this.busy = true;
@@ -166,6 +178,8 @@ export class DepthApp extends HandlebarsApplicationMixin(ApplicationV2) {
       const old = this.results[this.engine];
       if (old?.url) URL.revokeObjectURL(old.url);
       this.results[this.engine] = r;
+      r.format = depth.output.format === "png-rg16" ? "png-rg16" : "png16";
+      import("../parallax/entry.mjs").then((m) => m.forgetDepthChecks()).catch(() => {});
       this.view = "after";
       console.log(`${MODULE_ID} | depth`, { model: r.model, device: r.device, dtype: r.dtype, timings: r.timings, depth: r.depthPath });
       ui.notifications.info(F("AIIMG.DepthRun.Saved", { path: esc(r.depthPath) }));

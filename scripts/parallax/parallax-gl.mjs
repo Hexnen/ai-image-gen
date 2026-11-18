@@ -1,0 +1,291 @@
+// W6-L: WebGL2 renderer of the parallax portrait window. One canvas, one context, one image texture and one texture per
+// depth map; every compare panel is a viewport of the same canvas, so 1-3 panels share the frame, the clock and the
+// pointer. The window (parallax-app.mjs) owns layout, input and the settings; this file only draws.
+//
+// Shader, compared with the owner's prototype (10 fixed-point iterations p = uv − off·(d(p) − 0.45)):
+// - ray search instead of a fixed point: the view ray is walked from the near plane down in clamped steps (one per
+//   ~1.5 depth texels of travel, 8..64, parallax-core.mjs stepsFor) and refined by 6 bisections. The first surface met
+//   wins, so a near edge occludes the far side without the tearing / doubled contours of the fixed point at big offsets.
+// - stretched pixels: the stretch factor 1 + off·∇H (core.stretchFactor) says how many screen pixels one source pixel
+//   covers. Where a hole opens behind an edge (stretch > 1.6) the colour is taken from the far side of the edge (a short
+//   walk down the depth gradient to the background level, uDep.a = local minimum) and blended in: no rubber smear.
+// - overscan instead of a frame: the image is zoomed by the largest possible shift, so samples never leave it.
+// - depth conditioning: gamma + contrast as uniforms (instant sliders); de-quantise, dilate and normal blur at load.
+// - light, rim, dust, vignette each with its own amount (0 = off); normals from a blurred copy (uDep.g).
+// - texture LOD from the undisplaced uv (textureGrad): no mip seams along depth edges.
+// `cond`, the stretch factor and the ray search mirror parallax-core.mjs (condition, stretchFactor, marchRay), which the
+// Node tests cover.
+
+const VS = `#version 300 es
+out vec2 vP;
+void main(){
+  vec2 p = vec2(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0);
+  vP = vec2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);   // panel coords, y down
+  gl_Position = vec4(p, 0.0, 1.0);
+}`;
+
+const FS = `#version 300 es
+precision highp float;
+in vec2 vP;
+out vec4 outColor;
+uniform sampler2D uImg;     // portrait, sRGB bytes
+uniform sampler2D uDep;     // r depth, g blurred depth, b mask, a background depth (local min); y down
+uniform vec4 uRect;         // drawn image rect in panel coords (contain fit)
+uniform vec2 uCrop;         // overscan margin in image uv
+uniform vec2 uOff;          // uv shift between depth 1 and depth 0
+uniform vec2 uDTexel;       // 1 / depth size
+uniform vec2 uLook;         // pointer / sway, unit disc, y down (light direction)
+uniform vec3 uBg;
+uniform float uFocus, uGamma, uContrast, uLight, uRim, uDust, uVignette, uHoleFill, uTime, uRelief;
+uniform int uSteps, uView;
+
+float cond(float d){ float g = pow(clamp(d, 0.0, 1.0), uGamma); return clamp((g - 0.5) * uContrast + 0.5, 0.0, 1.0); }
+float H(vec2 p){ return cond(textureLod(uDep, p, 0.0).r); }
+float G(vec2 p){ return cond(textureLod(uDep, p, 0.0).g); }
+vec2 at(vec2 uv, float h){ return uv - uOff * (h - uFocus); }
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float dustPlane(vec2 uv, float sc, float sp, float seed){
+  vec2 q = uv * sc + vec2(uTime * 0.02 * sp, -uTime * 0.035 * sp) + seed;
+  vec2 i = floor(q), f = fract(q);
+  float r = hash(i + seed);
+  vec2 c = vec2(hash(i + 1.3), hash(i + 7.7)) * 0.8 + 0.1 + vec2(sin(uTime * 0.5 + r * 6.0), cos(uTime * 0.4 + r * 6.0)) * 0.08;
+  float tw = 0.5 + 0.5 * sin(uTime * (1.0 + r * 2.0) + r * 20.0);
+  return step(0.82, r) * smoothstep(0.06, 0.0, length(f - c)) * tw;
+}
+
+void main(){
+  vec2 q = (vP - uRect.xy) / uRect.zw;
+  vec2 uv = mix(uCrop, 1.0 - uCrop, q);
+  vec2 gx = dFdx(uv), gy = dFdy(uv);               // LOD from the undisplaced uv (uniform control flow)
+  if (any(lessThan(q, vec2(0.0))) || any(greaterThan(q, vec2(1.0)))) { outColor = vec4(uBg, 1.0); return; }
+
+  // --- ray search: first surface from the near plane down ---
+  float n = float(uSteps), hPrev = 1.0, hit = -1.0;
+  for (int i = 0; i <= 64; i++) {
+    if (i > uSteps) break;
+    float hh = 1.0 - float(i) / n;
+    if (H(at(uv, hh)) >= hh) { hit = hh; break; }
+    hPrev = hh;
+  }
+  float h = 0.0;
+  if (hit >= 1.0) h = 1.0;
+  else if (hit >= 0.0) {
+    float lo = hit, hi = hPrev;
+    for (int k = 0; k < 6; k++) { float m = 0.5 * (lo + hi); if (H(at(uv, m)) >= m) lo = m; else hi = m; }
+    h = 0.5 * (lo + hi);
+  }
+  vec2 s = clamp(at(uv, h), 0.0, 1.0);
+  vec4 dep = textureLod(uDep, s, 0.0);
+  float d = cond(dep.r);
+
+  // --- stretch (holes revealed behind edges) and the fill from the far side ---
+  vec2 e = uDTexel;
+  // 1.5-texel stencil: catches a 1-3 texel wall without flipping pixel to pixel along an edge (jagged fill borders)
+  vec2 e15 = e * 1.5;
+  vec2 grad = vec2(H(s + vec2(e15.x, 0.0)) - H(s - vec2(e15.x, 0.0)), H(s + vec2(0.0, e15.y)) - H(s - vec2(0.0, e15.y))) / (2.0 * e15);
+  float stretch = 1.0 + dot(uOff, grad);
+  float hole = smoothstep(1.6, 3.5, stretch) * uHoleFill;
+  vec3 c = textureGrad(uImg, s, gx, gy).rgb;
+  if (hole > 0.002) {
+    vec2 gt = grad * e;                             // per-texel change
+    vec2 dir = -gt / max(length(gt), 1e-6) * e;     // one texel towards the far side
+    float bgL = cond(dep.a);
+    float travel = length(uOff / e) * max(d - bgL, 0.0) + 3.0;
+    float stepL = max(1.0, travel / 10.0);
+    vec2 p = s;
+    float target = mix(bgL, d, 0.25);
+    for (int k = 0; k < 12; k++) { p += dir * stepL; if (H(p) <= target) break; }
+    p = clamp(p + dir * 2.0, 0.0, 1.0);             // past the antialiased outline
+    vec2 side = vec2(-dir.y, dir.x) * 1.5;
+    vec3 bgc = (textureLod(uImg, p, 0.0).rgb * 2.0 + textureLod(uImg, clamp(p + side, 0.0, 1.0), 0.0).rgb + textureLod(uImg, clamp(p - side, 0.0, 1.0), 0.0).rgb) * 0.25;
+    c = mix(c, bgc, hole);
+  }
+
+  // --- light + rim from normals of the blurred depth ---
+  float fig = dep.b * smoothstep(0.1, 0.3, d);
+  if (uLight > 0.001 || uRim > 0.001) {
+    vec2 e2 = e * 2.0;
+    float dx = G(s + vec2(e2.x, 0.0)) - G(s - vec2(e2.x, 0.0));
+    float dy = G(s + vec2(0.0, e2.y)) - G(s - vec2(0.0, e2.y));
+    vec3 N = normalize(vec3(-dx * uRelief, -dy * uRelief, 1.0));
+    vec3 L = normalize(vec3(uLook.x, uLook.y, 0.8));
+    float nl = dot(N, L);
+    c *= mix(1.0, 0.8 + 0.36 * max(nl, 0.0), fig * uLight);
+    float facing = length(N.xy) > 1e-4 ? smoothstep(0.0, 0.7, dot(normalize(N.xy), normalize(uLook + vec2(1e-4)))) : 0.0;
+    float rim = (pow(1.0 - N.z, 1.4) * facing * 1.4 + pow(clamp(nl, 0.0, 1.0), 6.0) * 0.35) * fig * uRim;
+    c += vec3(1.0, 0.58, 0.44) * rim * 0.6;
+  }
+
+  // --- dust in three depth planes, hidden behind nearer surfaces ---
+  if (uDust > 0.001) {
+    vec2 du = q;
+    float b = dustPlane(du + uOff * (0.25 - uFocus) * 0.9, 26.0, 1.0, 0.0) * smoothstep(0.3, 0.2, d) * 0.35
+            + dustPlane(du + uOff * (0.6 - uFocus) * 0.9, 18.0, 1.4, 3.0) * smoothstep(0.65, 0.55, d) * 0.5
+            + dustPlane(du + uOff * (1.25 - uFocus) * 0.9, 11.0, 1.9, 9.0) * 0.7;
+    c += vec3(1.0, 0.72, 0.6) * b * uDust;
+  }
+
+  vec2 vv = q - 0.5;
+  c *= 1.0 - dot(vv, vv) * 0.7 * uVignette;
+  if (uView == 1) c = vec3(d);
+  else if (uView == 2) {
+    float st = smoothstep(1.2, 3.5, stretch);
+    c = mix(vec3(dot(c, vec3(0.299, 0.587, 0.114)) * 0.45), vec3(1.0, 0.25, 0.1), st);
+    c = mix(c, vec3(0.2, 0.8, 1.0), hole * 0.5);
+  }
+  outColor = vec4(c, 1.0);
+}`;
+
+const UNIFORMS = ["uImg", "uDep", "uRect", "uCrop", "uOff", "uDTexel", "uLook", "uBg", "uFocus", "uGamma", "uContrast", "uLight", "uRim", "uDust", "uVignette", "uHoleFill", "uTime", "uRelief", "uSteps", "uView"];
+
+export class ParallaxRenderer {
+  /** @param {HTMLCanvasElement} canvas  @returns {ParallaxRenderer|null} null when WebGL2 is missing (caller shows a message) */
+  static create(canvas) {
+    const gl = canvas.getContext("webgl2", { antialias: false, alpha: false, premultipliedAlpha: false, preserveDrawingBuffer: true, powerPreference: "high-performance" });
+    if (!gl) return null;
+    return new ParallaxRenderer(canvas, gl);
+  }
+
+  constructor(canvas, gl) {
+    this.canvas = canvas;
+    this.gl = gl;
+    this.depths = new Map();
+    this.image = null;
+    this.lost = false;
+    this.#build();
+  }
+
+  #build() {
+    const gl = this.gl;
+    const sh = (type, src) => {
+      const o = gl.createShader(type);
+      gl.shaderSource(o, src);
+      gl.compileShader(o);
+      if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(`Parallax shader: ${gl.getShaderInfoLog(o)}`);
+      return o;
+    };
+    const p = gl.createProgram();
+    gl.attachShader(p, sh(gl.VERTEX_SHADER, VS));
+    gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(`Parallax program: ${gl.getProgramInfoLog(p)}`);
+    this.program = p;
+    this.vao = gl.createVertexArray();
+    this.u = Object.fromEntries(UNIFORMS.map((k) => [k, gl.getUniformLocation(p, k)]));
+  }
+
+  /** Portrait (ImageBitmap / image element). Mipmapped. */
+  setImage(img) {
+    const gl = this.gl;
+    if (this.image) gl.deleteTexture(this.image.tex);
+    const tex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, img);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    this.#params(gl.LINEAR_MIPMAP_LINEAR);
+    this.image = { tex, w: img.width, h: img.height };
+  }
+
+  /** Conditioned depth (parallax-core conditionDepth: 4 floats per pixel) under a key. Half-float, linear filtering. */
+  setDepth(key, { rgba, w, h }) {
+    const gl = this.gl;
+    const old = this.depths.get(key);
+    if (old) gl.deleteTexture(old.tex);
+    const tex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.FLOAT, rgba);
+    this.#params(gl.LINEAR);
+    this.depths.set(key, { tex, w, h });
+  }
+
+  dropDepth(key) {
+    const d = this.depths.get(key);
+    if (d) this.gl.deleteTexture(d.tex);
+    this.depths.delete(key);
+  }
+
+  #params(min) {
+    const gl = this.gl;
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, min);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+
+  /**
+   * Draw a frame. `panels` = [{key, x, y, w, h}] in canvas pixels (y down); `u` = per-frame uniforms shared by every
+   * panel: {rect(panel w,h → contain rect), crop, off, look, bg, focus, gamma, contrast, light, rim, dust, vignette,
+   * holeFill, time, relief, steps, view}. `u.rectFor(panel)` gives the contain rect of a panel.
+   */
+  draw(panels, u) {
+    const gl = this.gl;
+    if (this.lost || !this.image) return;
+    gl.useProgram(this.program);
+    gl.bindVertexArray(this.vao);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.enable(gl.SCISSOR_TEST);
+    const H = this.canvas.height;
+    gl.viewport(0, 0, this.canvas.width, H);
+    gl.scissor(0, 0, this.canvas.width, H);
+    gl.clearColor(u.bg[0], u.bg[1], u.bg[2], 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.image.tex);
+    const U = this.u;
+    gl.uniform1i(U.uImg, 0);
+    gl.uniform1i(U.uDep, 1);
+    gl.uniform2f(U.uCrop, u.crop.x, u.crop.y);
+    gl.uniform2f(U.uOff, u.off.x, u.off.y);
+    gl.uniform2f(U.uLook, u.look.x, u.look.y);
+    gl.uniform3f(U.uBg, u.bg[0], u.bg[1], u.bg[2]);
+    gl.uniform1f(U.uFocus, u.focus);
+    gl.uniform1f(U.uGamma, u.gamma);
+    gl.uniform1f(U.uContrast, u.contrast);
+    gl.uniform1f(U.uLight, u.light);
+    gl.uniform1f(U.uRim, u.rim);
+    gl.uniform1f(U.uDust, u.dust);
+    gl.uniform1f(U.uVignette, u.vignette);
+    gl.uniform1f(U.uHoleFill, u.holeFill);
+    gl.uniform1f(U.uTime, u.time);
+    gl.uniform1f(U.uRelief, u.relief);
+    gl.uniform1i(U.uView, u.view);
+    for (const p of panels) {
+      const d = this.depths.get(p.key);
+      if (!d || p.w < 2 || p.h < 2) continue;
+      const vx = Math.round(p.x), vy = Math.round(H - p.y - p.h), vw = Math.round(p.w), vh = Math.round(p.h);
+      gl.viewport(vx, vy, vw, vh);
+      gl.scissor(vx, vy, vw, vh);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, d.tex);
+      const r = u.rectFor(p);
+      gl.uniform4f(U.uRect, r.x, r.y, r.w, r.h);
+      gl.uniform2f(U.uDTexel, 1 / d.w, 1 / d.h);
+      gl.uniform1i(U.uSteps, u.stepsFor(d));
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+    gl.disable(gl.SCISSOR_TEST);
+  }
+
+  /** Wait for the GPU (frame-time measurement only). */
+  finish() {
+    const px = new Uint8Array(4);
+    this.gl.readPixels(0, 0, 1, 1, this.gl.RGBA, this.gl.UNSIGNED_BYTE, px);
+  }
+
+  destroy() {
+    const gl = this.gl;
+    for (const k of [...this.depths.keys()]) this.dropDepth(k);
+    if (this.image) gl.deleteTexture(this.image.tex);
+    this.image = null;
+    gl.deleteProgram(this.program);
+    gl.deleteVertexArray(this.vao);
+    gl.getExtension("WEBGL_lose_context")?.loseContext();
+  }
+}

@@ -1,0 +1,68 @@
+<section class="aiimg-plx-body">
+  {{#if multi}}
+  <div class="aiimg-plx-bar">
+    {{#if compare}}
+    <div class="aiimg-plx-picks" role="group" aria-label="{{localize 'AIIMG.Parallax.CompareHint'}}">
+      {{#each maps}}<button type="button" data-action="pick" data-key="{{key}}" aria-pressed="{{#if picked}}true{{else}}false{{/if}}" {{#if error}}disabled{{/if}}>{{name}}</button>{{/each}}
+    </div>
+    {{else}}
+    <div class="aiimg-plx-tabs" role="tablist" aria-label="{{localize 'AIIMG.Parallax.Maps'}}">
+      {{#each maps}}<button type="button" role="tab" id="{{../appId}}-tab-{{index}}" aria-controls="{{../appId}}-stage" aria-selected="{{#if active}}true{{else}}false{{/if}}" tabindex="{{tabindex}}" data-action="tab" data-index="{{index}}">{{name}}</button>{{/each}}
+    </div>
+    {{/if}}
+    <button type="button" class="aiimg-plx-mode" data-action="compare" aria-pressed="{{#if compare}}true{{else}}false{{/if}}"><i class="fa-solid fa-table-columns" aria-hidden="true"></i> {{localize "AIIMG.Parallax.Compare"}}</button>
+  </div>
+  {{/if}}
+
+  <div class="aiimg-plx-stage" id="{{appId}}-stage" data-role="stage" tabindex="0" role="group" aria-label="{{localize 'AIIMG.Parallax.Stage'}}">
+    {{#if glError}}<p class="aiimg-plx-msg" role="alert"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> {{glError}}</p>
+    {{else if imageError}}<p class="aiimg-plx-msg" role="alert"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i> {{imageError}}</p>
+    {{else if noMaps}}<p class="aiimg-plx-msg">{{localize "AIIMG.Parallax.NoDepth"}}</p>
+    {{else}}
+    <div class="aiimg-plx-cells" data-count="{{cellCount}}">
+      {{#each cells}}
+      <figure class="aiimg-plx-cell" data-cell="{{key}}">
+        <figcaption><strong>{{name}}</strong> <span>{{meta}}</span></figcaption>
+        {{#if loading}}<span class="aiimg-plx-wait"><i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i></span>{{/if}}
+      </figure>
+      {{/each}}
+    </div>
+    {{#if imageLoading}}<p class="aiimg-plx-msg aiimg-plx-soft"><i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i> {{localize "AIIMG.Parallax.Loading"}}</p>{{/if}}
+    {{/if}}
+  </div>
+
+  <div class="aiimg-plx-controls">
+    <fieldset class="aiimg-plx-group">
+      <legend>{{localize "AIIMG.Parallax.DepthGroup"}}</legend>
+      {{#each depthSliders}}
+      <div class="aiimg-plx-slider">
+        <label for="{{../appId}}-s-{{key}}">{{label}}</label>
+        <input id="{{../appId}}-s-{{key}}" type="range" data-slider="{{key}}" min="{{min}}" max="{{max}}" step="{{step}}" value="{{value}}">
+        <output data-for="{{key}}" for="{{../appId}}-s-{{key}}">{{display}}</output>
+      </div>
+      {{/each}}
+    </fieldset>
+    <fieldset class="aiimg-plx-group">
+      <legend>{{localize "AIIMG.Parallax.EffectsGroup"}}</legend>
+      {{#each fxSliders}}
+      <div class="aiimg-plx-slider">
+        <label class="aiimg-plx-switch"><input type="checkbox" data-switch="{{switch.key}}" {{#if switch.checked}}checked{{/if}}> {{label}}</label>
+        <input id="{{../appId}}-s-{{key}}" type="range" data-slider="{{key}}" min="{{min}}" max="{{max}}" step="{{step}}" value="{{value}}" aria-label="{{label}}">
+        <output data-for="{{key}}" for="{{../appId}}-s-{{key}}">{{display}}</output>
+      </div>
+      {{/each}}
+      <div class="aiimg-plx-row">
+        {{#each toggles}}<label class="aiimg-plx-switch"><input type="checkbox" data-switch="{{key}}" {{#if checked}}checked{{/if}}> {{label}}</label>{{/each}}
+      </div>
+      <div class="aiimg-plx-row" role="radiogroup" aria-label="{{localize 'AIIMG.Parallax.ViewLabel'}}">
+        <span>{{localize "AIIMG.Parallax.ViewLabel"}}:</span>
+        {{#each views}}<label class="aiimg-plx-switch"><input type="radio" name="{{../appId}}-view" data-viewmode value="{{id}}" {{#if checked}}checked{{/if}}> {{label}}</label>{{/each}}
+      </div>
+    </fieldset>
+    <div class="aiimg-plx-row aiimg-plx-foot">
+      <button type="button" data-action="reset"><i class="fa-solid fa-rotate-left" aria-hidden="true"></i> {{localize "AIIMG.Parallax.Reset"}}</button>
+      <span class="hint">{{localize "AIIMG.Parallax.KeysHint"}}</span>
+      <output class="aiimg-plx-frame" data-role="frame" aria-live="off"></output>
+    </div>
+  </div>
+</section>

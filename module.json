@@ -18,7 +18,8 @@
   ],
   "styles": [
     "styles/module.css",
-    "styles/builder-drawer.css"
+    "styles/builder-drawer.css",
+    "styles/parallax.css"
   ],
   "languages": [
     {

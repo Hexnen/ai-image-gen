@@ -30,6 +30,7 @@
   {{#if result}}
   <div class="aiimg-depthrun-views" role="group" aria-label="{{localize 'AIIMG.DepthRun.Views'}}">
     {{#each views}}<button type="button" data-action="view" data-view="{{id}}" aria-pressed="{{#if active}}true{{else}}false{{/if}}" class="{{#if active}}active{{/if}}">{{label}}</button>{{/each}}
+    <button type="button" class="aiimg-depthrun-plx" data-action="parallax"><i class="fa-solid fa-cube" aria-hidden="true"></i> {{localize "AIIMG.Parallax.Button"}}</button>
   </div>
   {{#if compare}}
   <div class="aiimg-depthrun-compare">
