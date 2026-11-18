@@ -3,11 +3,13 @@
 // does nothing for client settings), so a `config: true` key would show up, in clear text, in every player's settings
 // window. They are edited here instead: a settings menu registered with `restricted: true` (hidden from users without
 // SETTINGS_MODIFY), password inputs (masked, with a show toggle), and a GM check before every render.
-// Storage is unchanged (`<module>.apiKey.<p>` in this browser's localStorage), so stored values and the migration from the
-// old id (migrate-id.mjs) keep working. localStorage itself is readable by anyone who uses this browser profile.
+// W6-H: the keys are saved in the GM-only world store (key-store.mjs / key-vault.mjs), so they follow the GM to any browser.
+// The old client copies (`<module>.apiKey.<p>` in localStorage) are never cleared or overwritten from here; a provider
+// whose client copy differs from the world store is marked as a conflict (names only, never values).
 
 import { MODULE_ID, PROVIDER_IDS } from "./constants.mjs";
 import { checkApiKey } from "./key-check.mjs";
+import { vaultKey, vaultStatus, saveVault, reloadVault } from "./key-vault.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
@@ -18,6 +20,9 @@ const APP_ID = `${MODULE_ID}-keys`;
 
 const has = (key) => game.settings.settings.has(`${MODULE_ID}.${key}`);
 const get = (key) => { try { return game.settings.get(MODULE_ID, key); } catch { return undefined; } };
+const providerOf = (key) => key.replace(/^apiKey\./, "");
+/** the value this browser uses (world store or its client copy) */
+const keyValue = (key) => vaultKey(providerOf(key));
 
 export class ApiKeysApp extends HandlebarsApplicationMixin(ApplicationV2) {
   static DEFAULT_OPTIONS = {
@@ -38,7 +43,8 @@ export class ApiKeysApp extends HandlebarsApplicationMixin(ApplicationV2) {
   static open() {
     if (!game.user?.isGM) return null;
     const app = foundry.applications.instances.get(APP_ID) ?? new ApiKeysApp();
-    app.render({ force: true });
+    // fresh copy of the world store first (another GM may have saved), then render
+    reloadVault().finally(() => app.render({ force: true }));
     return app;
   }
 
@@ -51,6 +57,8 @@ export class ApiKeysApp extends HandlebarsApplicationMixin(ApplicationV2) {
   async _prepareContext(options) {
     const ctx = await super._prepareContext(options);
     const show = game.i18n.localize("AIIMG.Keys.Show");
+    const status = vaultStatus();
+    const conflicts = new Set(status.conflicts);
     const keys = KEY_SETTINGS.filter(has).map((key) => {
       const cfg = game.settings.settings.get(`${MODULE_ID}.${key}`);
       return {
@@ -58,9 +66,11 @@ export class ApiKeysApp extends HandlebarsApplicationMixin(ApplicationV2) {
         id: `${this.id}-${key.replace(/\W/g, "-")}`,
         label: game.i18n.localize(cfg?.name ?? key),
         hint: cfg?.hint && cfg.hint !== "AIIMG.Settings.ApiKey.Hint" ? game.i18n.localize(cfg.hint) : "",
-        value: String(get(key) ?? ""),
+        value: String(keyValue(key) ?? ""),
         // W6-B: a stored key that still has a visible non-ASCII character (saved before the check) is flagged
-        bad: !checkApiKey(get(key)).ok
+        bad: !checkApiKey(keyValue(key)).ok,
+        // W6-H: this browser's client copy differs from the world store (this browser uses its own copy)
+        conflict: conflicts.has(providerOf(key))
       };
     });
     const prewarm = has(PREWARM) ? {
@@ -70,7 +80,13 @@ export class ApiKeysApp extends HandlebarsApplicationMixin(ApplicationV2) {
       hint: game.i18n.localize("MAIG.Settings.Build.Prewarm.Hint"),
       checked: get(PREWARM) !== false
     } : null;
-    return Object.assign(ctx, { keys, prewarm, show, badText: game.i18n.localize("AIIMG.Keys.NonAscii") });
+    const storeNote = !status.loaded ? game.i18n.localize("AIIMG.KeyStore.NotLoaded")
+      : status.migration === "failed" ? game.i18n.localize("AIIMG.KeyStore.MigrateFailed") : "";
+    return Object.assign(ctx, {
+      keys, prewarm, show, storeNote,
+      badText: game.i18n.localize("AIIMG.Keys.NonAscii"),
+      conflictText: game.i18n.localize("AIIMG.KeyStore.Conflict")
+    });
   }
 
   /** eye button: show / hide one key (the input stays a password input otherwise) */
@@ -90,6 +106,7 @@ export class ApiKeysApp extends HandlebarsApplicationMixin(ApplicationV2) {
     // W6-B: strip invisible characters of a pasted key (NBSP, zero-width, BOM, newline...); a key with a visible
     // non-ASCII character (e.g. "…") is not saved and its field is marked. The other fields are saved as usual.
     const refused = [];
+    const values = {};
     for (const key of KEY_SETTINGS) {
       if (!has(key) || !(key in data)) continue;
       const { key: v, ok } = checkApiKey(data[key]);
@@ -101,7 +118,12 @@ export class ApiKeysApp extends HandlebarsApplicationMixin(ApplicationV2) {
       }
       input?.removeAttribute("aria-invalid");
       if (input && input.value !== v) input.value = v;
-      if (v !== String(get(key) ?? "")) await game.settings.set(MODULE_ID, key, v);
+      values[providerOf(key)] = v;
+    }
+    // W6-H: to the GM-only world store (the client copies stay as they are); a failure keeps the window open
+    if (Object.keys(values).length) {
+      try { await saveVault(values); }
+      catch (e) { console.warn(`${MODULE_ID} | API key store: save failed (${e?.message ?? e})`); throw new Error(game.i18n.localize("AIIMG.KeyStore.SaveFailed")); }
     }
     if (has(PREWARM)) {
       const v = !!data[PREWARM];

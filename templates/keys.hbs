@@ -1,6 +1,8 @@
 <div class="aiimg-keys-part">
 <div class="aiimg-keys-body">
   <p class="hint aiimg-keys-lead"><i class="fa-solid fa-lock" aria-hidden="true"></i> {{localize "AIIMG.Keys.Lead"}}</p>
+  <p class="hint aiimg-keys-store"><i class="fa-solid fa-globe" aria-hidden="true"></i> {{localize "AIIMG.KeyStore.Hint"}}</p>
+  {{#if storeNote}}<p class="hint aiimg-keys-bad" role="alert"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> {{storeNote}}</p>{{/if}}
   {{#each keys}}
   <div class="form-group">
     <label for="{{id}}">{{label}}</label>
@@ -9,6 +11,7 @@
       <button type="button" class="aiimg-keys-reveal icon fa-solid fa-eye" data-action="reveal" data-target="{{name}}" aria-label="{{../show}}" aria-pressed="false" aria-controls="{{id}}" data-tooltip="{{../show}}"></button>
     </div>
     {{#if bad}}<p class="hint aiimg-keys-bad" id="{{id}}-bad" role="alert"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> {{../badText}}</p>{{/if}}
+    {{#if conflict}}<p class="hint aiimg-keys-bad" role="status"><i class="fa-solid fa-code-compare" aria-hidden="true"></i> {{../conflictText}}</p>{{/if}}
     {{#if hint}}<p class="hint">{{hint}}</p>{{/if}}
   </div>
   {{/each}}

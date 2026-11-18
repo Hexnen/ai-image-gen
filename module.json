@@ -12,6 +12,7 @@
       "name": "Hexnen"
     }
   ],
+  "socket": true,
   "esmodules": [
     "scripts/module.mjs"
   ],

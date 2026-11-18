@@ -3,11 +3,11 @@
 import { MODULE_ID } from "../constants.mjs";
 import { redact } from "../redact.mjs";
 import { enhanceDescription, DEFAULT_MODEL, EFFORTS, MAX_INPUT_CHARS } from "./anthropic.mjs";
-import { normalizeApiKey } from "../key-check.mjs";
+import { getKey } from "../settings.mjs";
 
 const L = (k, data) => (data ? game.i18n.format(`AIIMG.Enhance.${k}`, data) : game.i18n.localize(`AIIMG.Enhance.${k}`));
 
-export const enhanceKey = () => normalizeApiKey(game.settings.get(MODULE_ID, "apiKey.anthropic"));
+export const enhanceKey = () => getKey("anthropic");   // W6-H: world store / client copy, "" for a non-GM
 
 function enhanceSettings() {
   const model = String(game.settings.get(MODULE_ID, "enhance.model") ?? "").trim() || DEFAULT_MODEL;

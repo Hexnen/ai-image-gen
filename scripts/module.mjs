@@ -17,6 +17,7 @@ import { registerContextMenus } from "./context-menu.mjs";
 import { openPickForBatch } from "./pick-app.mjs";
 import { runMigrations } from "./migrate.mjs";
 import { migrateFromAiImageGen } from "./migrate-id.mjs";
+import { initVault, listenVault } from "./key-vault.mjs";
 import { syncOptimizerProfile } from "./optimize.mjs";
 import { generateImage, estimateGeneration } from "./api.mjs";
 
@@ -87,6 +88,8 @@ Hooks.once("ready", async () => {
   }
   // Settings copied from the old id first (keys, limits, types, batch slots), then the schema migrations on the new namespace.
   if (game.user.isGM) await migrateFromAiImageGen();
+  // W6-H: API keys from the GM-only world store into memory + one-time copy of this browser's client keys (never cleared)
+  if (game.user.isGM) { listenVault(); await initVault(); }
   game.modules.get(MODULE_ID).api = api;
   // AI builder pack registry (spec 3.3): GM only, loaded dynamically; it imports a system pack only for the matching system, and a failure never touches image generation.
   if (game.user.isGM) import("./build/registry.mjs").then((m) => m.startBuildRegistry(api)).catch((e) => console.error(`${MODULE_ID} | AI builder registry failed to load`, e));

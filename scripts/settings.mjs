@@ -4,6 +4,7 @@ import { syncOptimizerProfile } from "./optimize.mjs";
 import { DEFAULT_MODEL as ENHANCE_DEFAULT_MODEL, DEFAULT_EFFORT as ENHANCE_DEFAULT_EFFORT, EFFORTS } from "./enhance/anthropic.mjs";
 import { registerBuildSettings } from "./build/build-settings.mjs";
 import { normalizeApiKey } from "./key-check.mjs";
+import { vaultKey, MIGRATED_FLAG, FOLLOW_STORE } from "./key-vault.mjs";
 
 const { NumberField, StringField, ObjectField, BooleanField } = foundry.data.fields;
 
@@ -11,7 +12,9 @@ const { NumberField, StringField, ObjectField, BooleanField } = foundry.data.fie
 export const SCHEMA_VERSION = 2;
 
 export function registerSettings() {
-  // API keys: client scope on purpose. World-scope settings sync to every player.
+  // API keys. W6-H: the GM-only world store (key-store.mjs, a private file directory) is the main copy; these client-scope
+  // settings are the old per-browser copies, kept and never cleared (key-vault.mjs migrates them, read-only).
+  // Client scope on purpose: world-scope settings sync to every player.
   // config: false (W5-F): v14's Configure Settings shows CLIENT settings to players too (`restricted` only matters for
   // world settings), so the keys are edited in the GM-only window of keys-app.mjs (restricted settings menu, password inputs).
   for (const p of PROVIDER_IDS) {
@@ -120,6 +123,13 @@ export function registerSettings() {
   game.settings.register(MODULE_ID, MIGRATED_CLIENT, {
     scope: "client", config: false, type: new BooleanField({ initial: false })
   });
+  // W6-H: per browser: its client keys were copied to the world store (read back OK) / providers that follow the store
+  game.settings.register(MODULE_ID, MIGRATED_FLAG, {
+    scope: "client", config: false, type: new BooleanField({ initial: false })
+  });
+  game.settings.register(MODULE_ID, FOLLOW_STORE, {
+    scope: "client", config: false, type: new ObjectField({ initial: {} })
+  });
   game.settings.register(MODULE_ID, MIGRATED_WORLD, {
     scope: "world", config: false, type: new BooleanField({ initial: false })
   });
@@ -136,5 +146,6 @@ export function registerSettings() {
 // W6-B: invisible characters of a pasted key (NBSP, zero-width, BOM, newline...) are stripped on every read, so a key
 // saved before the keys window normalised it still works. A visible non-ASCII character stays: the request paths refuse
 // it with a clear message (key-check.mjs) instead of letting fetch() throw.
-export const getKey = (provider) => normalizeApiKey(game.settings.get(MODULE_ID, `apiKey.${provider}`));
+// W6-H: the value comes from key-vault.mjs (world store in memory, else this browser's client copy); "" for a non-GM.
+export const getKey = (provider) => normalizeApiKey(vaultKey(provider));
 export const getLimit = (key) => game.settings.get(MODULE_ID, `limit.${key}`);
