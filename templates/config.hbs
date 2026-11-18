@@ -1,3 +1,13 @@
+{{#*inline "sliderRow"}}
+<div class="aiimg-field aiimg-range">
+  <label class="aiimg-lbl" for="{{id}}">{{label}}</label>
+  <div class="aiimg-range-row">
+    <input id="{{id}}" type="range" name="{{name}}" value="{{value}}" min="{{min}}" max="{{max}}" step="{{step}}" data-fmt="{{fmt}}" {{#if hint}}aria-describedby="{{id}}-hint"{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
+    <output for="{{id}}" data-role="rangeVal">{{text}}</output>
+  </div>
+  {{#if hint}}<p class="hint" id="{{id}}-hint">{{hint}}</p>{{/if}}
+</div>
+{{/inline}}
 <section class="aiimg-layout">
   <nav class="aiimg-types">
     <div class="aiimg-filters">
@@ -26,6 +36,17 @@
     {{#if selected}}
     <h2>{{selected.label}} <small>{{selected.group}}</small></h2>
 
+    {{!-- W6-G: tabs. Both panels stay in the form (hidden, not removed), so a save always carries image and depth. --}}
+    <div class="aiimg-tabs" role="tablist" aria-label="{{localize 'AIIMG.Tabs.Label'}}">
+      {{#each tabs}}
+      <button type="button" role="tab" id="aiimg-tab-{{id}}" data-tab="{{id}}" aria-controls="aiimg-panel-{{id}}"
+        aria-selected="{{#if active}}true{{else}}false{{/if}}" tabindex="{{#if active}}0{{else}}-1{{/if}}" class="aiimg-tab{{#if active}} active{{/if}}">
+        <i class="{{icon}}" aria-hidden="true"></i> <span>{{label}}</span>{{#if badge}} <em class="aiimg-tag">{{badge}}</em>{{/if}}
+      </button>
+      {{/each}}
+    </div>
+
+    <div class="aiimg-tabpanel" role="tabpanel" id="aiimg-panel-image" aria-labelledby="aiimg-tab-image" data-tab="image" {{#unless tabImage}}hidden{{/unless}}>
     <div class="aiimg-cols">
       <div class="aiimg-col">
         <section class="aiimg-card" aria-labelledby="aiimg-c-model">
@@ -267,6 +288,180 @@
           {{#if refInfo.total}}<p class="aiimg-ref-total" role="status">{{refInfo.total}}</p>{{/if}}
           {{#if isGM}}<p class="hint">{{localize "AIIMG.Config.RefsUploadHint"}}</p>{{/if}}
         </section>
+      </div>
+    </div>
+    </div>
+
+    {{!-- W6-G: depth settings (stored in cfg.depth, nothing reads them yet: every card says "coming soon"). --}}
+    <div class="aiimg-tabpanel aiimg-depth" role="tabpanel" id="aiimg-panel-depth" aria-labelledby="aiimg-tab-depth" data-tab="depth" {{#unless tabDepth}}hidden{{/unless}}>
+      <p class="aiimg-depth-banner" role="note"><i class="fa-solid fa-person-digging" aria-hidden="true"></i> <span>{{localize "AIIMG.Depth.Banner"}}</span></p>
+      <div class="aiimg-cols">
+        <div class="aiimg-col">
+          <section class="aiimg-card" aria-labelledby="aiimg-c-dmain">
+            <h3 id="aiimg-c-dmain">{{localize "AIIMG.Depth.CardMain"}} <em class="aiimg-tag aiimg-soon">{{localize "AIIMG.Depth.Soon"}}</em></h3>
+            <div class="aiimg-field">
+              <label class="aiimg-check">
+                <input type="checkbox" name="depth.enabled" {{#if depth.enabled}}checked{{/if}} {{#unless isGM}}disabled{{/unless}}>
+                <span>{{localize "AIIMG.Depth.Enabled"}}</span>
+              </label>
+              <p class="hint">{{localize "AIIMG.Depth.EnabledHint"}}</p>
+            </div>
+          </section>
+
+          <section class="aiimg-card" aria-labelledby="aiimg-c-dengine">
+            <h3 id="aiimg-c-dengine">{{localize "AIIMG.Depth.CardEngine"}} <em class="aiimg-tag aiimg-soon">{{localize "AIIMG.Depth.Soon"}}</em></h3>
+            <div class="aiimg-field">
+              <span class="aiimg-lbl" id="aiimg-l-dengine">{{localize "AIIMG.Depth.Engine"}}</span>
+              <div class="aiimg-seg" role="radiogroup" aria-labelledby="aiimg-l-dengine">
+                {{#each depth.engines}}
+                <label class="aiimg-seg-item">
+                  <input type="radio" name="depth.engine" value="{{id}}" {{#if selected}}checked{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
+                  <span>{{label}}</span>
+                </label>
+                {{/each}}
+              </div>
+              {{#if depth.isBrowser}}
+              <p class="hint" data-role="webgpu" data-state="{{#if depth.webgpu}}yes{{else}}no{{/if}}">{{depth.webgpuText}}</p>
+              <label class="aiimg-check">
+                <input type="checkbox" name="depth.fallback" {{#if depth.fallback}}checked{{/if}} {{#unless isGM}}disabled{{/unless}}>
+                <span>{{localize "AIIMG.Depth.Fallback"}}</span>
+              </label>
+              {{else}}
+              <label class="aiimg-lbl" for="aiimg-dcomfy">{{localize "AIIMG.Depth.ComfyUrl"}}</label>
+              <input id="aiimg-dcomfy" type="text" name="depth.comfyUrl" value="{{depth.comfyUrl}}" spellcheck="false" inputmode="url" aria-describedby="aiimg-dcomfy-hint" {{#unless isGM}}disabled{{/unless}}>
+              <p class="hint" id="aiimg-dcomfy-hint">{{localize "AIIMG.Depth.ComfyUrlHint"}}</p>
+              {{/if}}
+            </div>
+
+            <div class="aiimg-field">
+              <span class="aiimg-lbl" id="aiimg-l-dmodel">{{localize "AIIMG.Depth.Model"}}</span>
+              <div class="aiimg-depth-models" role="radiogroup" aria-labelledby="aiimg-l-dmodel">
+                {{#each depth.models}}
+                <label class="aiimg-depth-model">
+                  <input type="radio" name="depth.model" value="{{key}}" {{#if selected}}checked{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
+                  <span class="aiimg-depth-model-body">
+                    <span class="aiimg-depth-model-name"><strong>{{label}}</strong>{{#if isDefault}} <em class="aiimg-tag">{{localize "AIIMG.Depth.Default"}}</em>{{/if}}{{#if experimental}} <em class="aiimg-tag aiimg-exp">{{localize "AIIMG.Depth.Experimental"}}</em>{{/if}}</span>
+                    <small class="aiimg-depth-id">{{id}}{{#if file}} · {{file}}{{/if}}</small>
+                    <small>{{download}}</small>
+                    <small>{{licence}} · {{speed}}</small>
+                    <small class="aiimg-depth-note">{{note}}</small>
+                  </span>
+                </label>
+                {{/each}}
+              </div>
+              {{#if depth.source}}<p class="hint"><a href="{{depth.source}}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i> {{localize "AIIMG.Depth.ModelCard"}}: {{depth.sourceLabel}}</a></p>{{/if}}
+              <p class="hint">{{localize "AIIMG.Depth.SizesNote"}}</p>
+            </div>
+
+            <div class="aiimg-field">
+              <span class="aiimg-lbl" id="aiimg-l-dprec">{{localize "AIIMG.Depth.Precision"}}</span>
+              <div class="aiimg-seg wrap" role="radiogroup" aria-labelledby="aiimg-l-dprec" aria-describedby="aiimg-dprec-hint">
+                {{#each depth.precisions}}
+                <label class="aiimg-seg-item{{#if disabled}} is-off{{/if}}" {{#if disabled}}data-tooltip="AIIMG.Config.NotForModel"{{/if}}>
+                  <input type="radio" name="depth.precision" value="{{id}}" {{#if selected}}checked{{/if}} {{#if disabled}}disabled{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
+                  <span>{{label}}</span>
+                </label>
+                {{/each}}
+              </div>
+              <p class="hint" id="aiimg-dprec-hint">{{localize "AIIMG.Depth.PrecisionHint"}}</p>
+            </div>
+
+            <div class="aiimg-field">
+              <span class="aiimg-lbl" id="aiimg-l-dres">{{localize "AIIMG.Depth.Resolution"}}</span>
+              <div class="aiimg-seg wrap" role="radiogroup" aria-labelledby="aiimg-l-dres" aria-describedby="aiimg-dres-hint">
+                {{#each depth.resolutions}}
+                <label class="aiimg-seg-item">
+                  <input type="radio" name="depth.resolution" value="{{px}}" {{#if selected}}checked{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
+                  <span>{{label}}{{#if experimental}} <em class="aiimg-tag">{{localize "AIIMG.Depth.Experimental"}}</em>{{/if}}</span>
+                </label>
+                {{/each}}
+              </div>
+              <p class="hint" id="aiimg-dres-hint">{{localize "AIIMG.Depth.ResolutionHint"}}</p>
+            </div>
+          </section>
+        </div>
+
+        <div class="aiimg-col">
+          <section class="aiimg-card" aria-labelledby="aiimg-c-dmask">
+            <h3 id="aiimg-c-dmask">{{localize "AIIMG.Depth.CardMask"}} <em class="aiimg-tag aiimg-soon">{{localize "AIIMG.Depth.Soon"}}</em></h3>
+            <div class="aiimg-field">
+              <label class="aiimg-check">
+                <input type="checkbox" name="depth.mask.enabled" {{#if depth.mask.enabled}}checked{{/if}} {{#unless isGM}}disabled{{/unless}}>
+                <span>{{localize "AIIMG.Depth.Mask"}}</span>
+              </label>
+              <p class="hint">{{localize "AIIMG.Depth.MaskHint"}}</p>
+            </div>
+            <div class="aiimg-field">
+              <label class="aiimg-lbl" for="aiimg-dmaskm">{{localize "AIIMG.Depth.MaskModel"}}</label>
+              <select id="aiimg-dmaskm" name="depth.mask.model" aria-describedby="aiimg-dmaskm-hint" {{#unless isGM}}disabled{{/unless}}>
+                {{#each depth.masks}}<option value="{{key}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}
+              </select>
+              <p class="hint" id="aiimg-dmaskm-hint" data-role="maskNote">{{depth.maskNote}}</p>
+            </div>
+          </section>
+
+          <section class="aiimg-card" aria-labelledby="aiimg-c-dpost">
+            <h3 id="aiimg-c-dpost">{{localize "AIIMG.Depth.CardPost"}} <em class="aiimg-tag aiimg-soon">{{localize "AIIMG.Depth.Soon"}}</em></h3>
+            <div class="aiimg-field">
+              <label class="aiimg-check">
+                <input type="checkbox" name="depth.post.normalize" {{#if depth.post.normalize}}checked{{/if}} {{#unless isGM}}disabled{{/unless}}>
+                <span>{{localize "AIIMG.Depth.Normalize"}}</span>
+              </label>
+              <div class="aiimg-depth-pct">
+                <label>{{localize "AIIMG.Depth.LowPct"}} <input type="number" name="depth.post.lowPct" value="{{depth.post.lowPct}}" min="{{depth.ranges.lowPct.[0]}}" max="{{depth.ranges.lowPct.[1]}}" step="{{depth.ranges.lowPct.[2]}}" {{#unless isGM}}disabled{{/unless}}></label>
+                <label>{{localize "AIIMG.Depth.HighPct"}} <input type="number" name="depth.post.highPct" value="{{depth.post.highPct}}" min="{{depth.ranges.highPct.[0]}}" max="{{depth.ranges.highPct.[1]}}" step="{{depth.ranges.highPct.[2]}}" {{#unless isGM}}disabled{{/unless}}></label>
+              </div>
+            </div>
+            {{#each depth.postToggles}}
+            <div class="aiimg-field">
+              <label class="aiimg-check">
+                <input type="checkbox" name="{{name}}" {{#if checked}}checked{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
+                <span>{{label}}</span>
+              </label>
+            </div>
+            {{/each}}
+            {{#each depth.postSliders}}
+            {{> sliderRow}}
+            {{/each}}
+          </section>
+
+          <section class="aiimg-card" aria-labelledby="aiimg-c-dout">
+            <h3 id="aiimg-c-dout">{{localize "AIIMG.Depth.CardOutput"}} <em class="aiimg-tag aiimg-soon">{{localize "AIIMG.Depth.Soon"}}</em></h3>
+            <div class="aiimg-field">
+              <span class="aiimg-lbl" id="aiimg-l-dfmt">{{localize "AIIMG.Depth.Format"}}</span>
+              <div class="aiimg-seg" role="radiogroup" aria-labelledby="aiimg-l-dfmt" aria-describedby="aiimg-dfmt-hint">
+                {{#each depth.outputs}}
+                <label class="aiimg-seg-item">
+                  <input type="radio" name="depth.output.format" value="{{id}}" {{#if selected}}checked{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
+                  <span>{{label}}</span>
+                </label>
+                {{/each}}
+              </div>
+              <p class="hint" id="aiimg-dfmt-hint">{{localize "AIIMG.Depth.FormatHint"}}</p>
+            </div>
+            <div class="aiimg-field">
+              <label class="aiimg-check">
+                <input type="checkbox" name="depth.output.maskChannel" {{#if depth.output.maskChannel}}checked{{/if}} {{#unless isGM}}disabled{{/unless}}>
+                <span>{{localize "AIIMG.Depth.MaskChannel"}}</span>
+              </label>
+            </div>
+          </section>
+
+          <section class="aiimg-card" aria-labelledby="aiimg-c-dpar">
+            <h3 id="aiimg-c-dpar">{{localize "AIIMG.Depth.CardParallax"}} <em class="aiimg-tag aiimg-soon">{{localize "AIIMG.Depth.Soon"}}</em></h3>
+            {{#each depth.parallaxSliders}}
+            {{> sliderRow}}
+            {{/each}}
+            <div class="aiimg-depth-toggles">
+              {{#each depth.parallaxToggles}}
+              <label class="aiimg-check">
+                <input type="checkbox" name="{{name}}" {{#if checked}}checked{{/if}} {{#unless @root.isGM}}disabled{{/unless}}>
+                <span>{{label}}</span>
+              </label>
+              {{/each}}
+            </div>
+          </section>
+        </div>
       </div>
     </div>
 

@@ -283,3 +283,39 @@ button.link:focus-visible { outline: 2px solid var(--color-warm-2, #c9593f); out
 .aiimg-extra-row { display: flex; gap: 8px; align-items: flex-start; }
 .aiimg-extra-row .aiimg-extra-ref { flex: 0 0 56px; }
 .aiimg-extra-info { font-size: var(--font-size-11, 11px); }
+
+/* W6-G: editor tabs (Obraz / Głębia) and the depth tab. Colours from Foundry theme variables or currentColor, so the
+   rules read in the dark and the light theme; the tab row scrolls sideways instead of wrapping at narrow widths. */
+.aiimg-tabs { display: flex; gap: 2px; margin: 0 0 12px; border-bottom: 1px solid var(--color-border-dark-4, #444); overflow-x: auto; scrollbar-width: thin; }
+.aiimg-tab { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; width: auto; min-height: 30px; margin: 0 0 -1px; padding: 4px 14px; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; background: none; color: inherit; font-size: var(--font-size-13, 13px); line-height: 1.2; white-space: nowrap; opacity: .75; cursor: pointer; box-shadow: none; }
+.aiimg-tab:hover { opacity: 1; background: rgba(127, 127, 127, .12); }
+.aiimg-tab.active, .aiimg-tab[aria-selected="true"] { opacity: 1; font-weight: 600; border-color: var(--color-border-dark-4, #444); border-bottom: 2px solid var(--color-warm-2, #ff6400); background: rgba(127, 127, 127, .08); }
+.aiimg-tab:focus-visible { outline: 2px solid var(--color-warm-2, #ff6400); outline-offset: -2px; }
+.aiimg-tab i { margin: 0; }
+.aiimg-tabpanel[hidden] { display: none; }
+.aiimg-soon { border: 1px dashed currentColor; background: none; text-transform: lowercase; vertical-align: middle; font-weight: 400; opacity: .7; }
+.aiimg-depth-banner { display: flex; gap: 8px; align-items: baseline; margin: 0 0 12px; padding: 8px 10px; border: 1px dashed var(--color-level-warning, #b37400); border-radius: 6px; font-size: var(--font-size-12, 12px); line-height: 1.4; }
+.aiimg-depth-banner i { color: var(--color-level-warning, #b37400); flex: 0 0 auto; }
+.aiimg-depth-models { display: flex; flex-direction: column; gap: 6px; }
+.aiimg-depth-model { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border: 1px solid var(--color-border-dark-4, #444); border-radius: 6px; cursor: pointer; min-width: 0; }
+.aiimg-depth-model:hover { background: rgba(127, 127, 127, .1); }
+.aiimg-depth-model:has(input:checked) { border-color: var(--color-warm-2, #ff6400); box-shadow: inset 3px 0 0 var(--color-warm-2, #ff6400); }
+.aiimg-depth-model:has(input:focus-visible) { outline: 2px solid var(--color-warm-2, #ff6400); outline-offset: 1px; }
+.aiimg-depth-model:has(input:disabled) { cursor: default; }
+.aiimg-depth-model input { flex: 0 0 auto; margin: 2px 0 0; }
+.aiimg-depth-model-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; font-size: var(--font-size-12, 12px); line-height: 1.35; }
+.aiimg-depth-model-body small { font-size: var(--font-size-11, 11px); opacity: .8; overflow-wrap: anywhere; }
+.aiimg-depth-model-name { overflow-wrap: anywhere; }
+.aiimg-depth-id { font-family: var(--font-monospace, monospace); }
+.aiimg-depth-note { opacity: .7; }
+.aiimg-depth .aiimg-tag { border: 1px solid currentColor; background: none; }
+.aiimg-depth .aiimg-seg-item:has(input:checked) .aiimg-tag { border-color: rgba(255, 255, 255, .7); }
+.aiimg-depth .hint a { color: inherit; text-decoration: underline; overflow-wrap: anywhere; }
+.aiimg-depth-pct { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 4px; font-size: var(--font-size-12, 12px); }
+.aiimg-depth-pct label { display: inline-flex; align-items: center; gap: 6px; }
+.aiimg-depth-pct input[type=number] { width: 64px; }
+.aiimg-depth-toggles { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 4px; }
+.aiimg-depth input[type=text] { width: 100%; font-family: var(--font-monospace, monospace); }
+.aiimg-depth .aiimg-range-row output { flex-basis: 3.6em; }
+.aiimg-depth [data-role=webgpu][data-state="no"] { color: var(--color-level-warning, #b37400); opacity: 1; }
+.aiimg-depth .aiimg-seg-item span { white-space: normal; }

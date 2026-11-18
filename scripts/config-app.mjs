@@ -2,7 +2,11 @@ import { MODULE_ID } from "./constants.mjs";
 import { MAX_EDGES, FORMATS, OPTIMIZER_ID, optimizeEnabled, optimizerApi, outputOptsFromConfig, fmtBytes } from "./optimize.mjs";
 import { safeMessage } from "./redact.mjs";
 import { detectImageTypes, virtualGroups } from "./image-types.mjs";
-import { getConfig, setConfig, resetConfig, isConfigured, sizePresetsFor, fitConfig, clampCount } from "./config-store.mjs";
+import { getConfig, setConfig, resetConfig, isConfigured, sizePresetsFor, fitConfig, clampCount, depthEnv } from "./config-store.mjs";
+import {
+  ENGINES, PRECISIONS, OUTPUT_FORMATS, MASK_MODELS, RANGES, modelByKey, maskByKey, modelsFor, defaultModelKey,
+  depthFromForm, fmtMB, sizeLine
+} from "./depth-settings.mjs";
 import * as providers from "./providers/index.mjs";
 import { getUsage } from "./limits.mjs";
 import { saveRefFile, saveTestExampleEx } from "./save-image.mjs";
@@ -24,6 +28,18 @@ const ALL_IMAGE_SIZES = ["0.5K", "1K", "2K", "4K"];
 const ALL_THINKING = ["minimal", "medium", "high"];
 const filePicker = () => foundry.applications.apps.FilePicker.implementation;
 const esc = (s) => foundry.utils.escapeHTML(String(s ?? ""));
+/** W6-G: editor tabs (Obraz / Głębia), in tab order. */
+const TABS = [
+  { id: "image", icon: "fa-solid fa-image", label: "AIIMG.Tabs.Image" },
+  { id: "depth", icon: "fa-solid fa-layer-group", label: "AIIMG.Tabs.Depth" }
+];
+/** Readout of a depth slider: px, percent of 0..1, or two decimals (gamma). */
+const fmtSlider = (fmt, v) => {
+  const n = Number(v);
+  if (fmt === "px") return `${n} px`;
+  if (fmt === "pct") return `${Math.round(n * 100)}%`;
+  return n.toFixed(2);
+};
 
 export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
   static DEFAULT_OPTIONS = {
@@ -66,6 +82,12 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
   groupFilter = "all";
   /** Unsaved edits for the selected type; discarded on type switch. */
   draft = null;
+  /** W6-G: open editor tab; kept across type switches and while this page lives (the window is a singleton). */
+  activeTab = "image";
+  /** W6-G: a tab had keyboard focus before the re-render (its id), so focus returns to it afterwards. */
+  #tabFocus = null;
+  /** W6-G: name of a depth control to re-focus after a re-render (engine / model radio groups). */
+  #focusDepth = null;
 
   /**
    * Test drawer state. Runs live in memory only (Blob + object URL), newest first, max MAX_RUNS; nothing
@@ -273,6 +295,67 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     try { return costBreakdown(fitTestConfig(cfg), { refTokens: this.#refTokens }); } catch { return null; }
   }
 
+  /** W6-G: context of the "Głębia" tab. Every model shows download size, licence and a speed class marked as estimate. */
+  #depthContext(cfg) {
+    const L = (k) => game.i18n.localize(k);
+    const F = (k, d) => game.i18n.format(k, d);
+    const env = depthEnv();
+    const dp = cfg.depth;
+    const model = modelByKey(dp.model);
+    const mask = maskByKey(dp.mask.model);
+    const slider = (name, key, value, fmt, hint) => {
+      const [min, max, step] = RANGES[name];
+      const id = `aiimg-d-${name}`;
+      return { id, name: key, label: L(`AIIMG.Depth.${hint?.label ?? name[0].toUpperCase() + name.slice(1)}`), value, min, max, step, fmt, text: fmtSlider(fmt, value), hint: hint?.text ? L(hint.text) : "" };
+    };
+    return {
+      ...dp,
+      ranges: RANGES,
+      isBrowser: dp.engine === "browser",
+      webgpu: env.webgpu,
+      webgpuText: L(env.webgpu ? "AIIMG.Depth.WebGPUYes" : "AIIMG.Depth.WebGPUNo"),
+      engines: ENGINES.map((id) => ({ id, label: L(`AIIMG.Depth.Engine.${id}`), selected: id === dp.engine })),
+      models: modelsFor(dp.engine).map((m) => ({
+        key: m.key, id: m.id, file: m.file ?? "", label: m.label, selected: m.key === dp.model,
+        isDefault: m.key === defaultModelKey(dp.engine, env), experimental: !!m.experimental,
+        download: F("AIIMG.Depth.Download", { sizes: sizeLine(m) }),
+        licence: F("AIIMG.Depth.Licence", { lic: m.licence }),
+        speed: F("AIIMG.Depth.SpeedLine", { speed: L(`AIIMG.Depth.Speed.${m.speed}`) }),
+        note: L(`AIIMG.Depth.ModelNote.${m.note}`)
+      })),
+      source: model?.source ?? "",
+      sourceLabel: model?.id ?? "",
+      precisions: PRECISIONS.map((p) => {
+        const mb = model?.sizes?.[p];
+        return { id: p, selected: p === dp.precision, disabled: mb == null, label: mb == null ? p : `${p} · ${model.sizesEstimated ? "~" : ""}${fmtMB(mb)}` };
+      }),
+      resolutions: (model?.resolutions ?? []).map((r) => ({
+        px: r.px, selected: r.px === dp.resolution, experimental: !!r.experimental, label: `${r.px} px · ${L(`AIIMG.Depth.Tier.${r.tier}`)}`
+      })),
+      masks: MASK_MODELS.map((m) => ({
+        key: m.key, selected: m.key === dp.mask.model,
+        label: [m.label, sizeLine(m) || L("AIIMG.Depth.SizeUnknown"), m.licence, m.experimental ? L("AIIMG.Depth.Experimental") : ""].filter(Boolean).join(" · ")
+      })),
+      maskNote: mask ? L(`AIIMG.Depth.MaskNote.${mask.note}`) : "",
+      outputs: OUTPUT_FORMATS.map((id) => ({ id, selected: id === dp.output.format, label: L(`AIIMG.Depth.Format.${id}`) })),
+      postToggles: [
+        { name: "depth.post.flyingPixels", label: L("AIIMG.Depth.FlyingPixels"), checked: dp.post.flyingPixels },
+        { name: "depth.post.guided", label: L("AIIMG.Depth.Guided"), checked: dp.post.guided }
+      ],
+      postSliders: [
+        slider("edgeSnap", "depth.post.edgeSnap", dp.post.edgeSnap, "pct"),
+        slider("dilatePx", "depth.post.dilatePx", dp.post.dilatePx, "px", { label: "Dilate", text: "AIIMG.Depth.DilateHint" }),
+        slider("smoothPx", "depth.post.smoothPx", dp.post.smoothPx, "px", { label: "Smooth" }),
+        slider("gamma", "depth.post.gamma", dp.post.gamma, "dec", { label: "Gamma", text: "AIIMG.Depth.GammaHint" })
+      ],
+      parallaxSliders: [
+        slider("strength", "depth.parallax.strength", dp.parallax.strength, "pct"),
+        slider("sway", "depth.parallax.sway", dp.parallax.sway, "pct")
+      ],
+      parallaxToggles: ["light", "rim", "dust"].map((k) => ({ name: `depth.parallax.${k}`, label: L(`AIIMG.Depth.${k[0].toUpperCase()}${k.slice(1)}`), checked: dp.parallax[k] }))
+    };
+  }
+
   async _prepareContext() {
     const types = detectImageTypes();
     if (!this.selectedKey || !types.some((t) => t.key === this.selectedKey)) {
@@ -376,7 +459,15 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       refInfo,
       breakdown: this.#breakdown(cfg),
       usage: { day: usage.day.toFixed(2), month: usage.month.toFixed(2) },
-      isGM: game.user.isGM
+      isGM: game.user.isGM,
+      // W6-G: tabs + depth settings
+      tabs: TABS.map((t) => ({
+        id: t.id, icon: t.icon, label: L(t.label), active: t.id === this.activeTab,
+        badge: t.id === "depth" && cfg.depth?.enabled ? L("AIIMG.Tabs.DepthOn") : ""
+      })),
+      tabImage: this.activeTab === "image",
+      tabDepth: this.activeTab === "depth",
+      depth: this.#depthContext(cfg)
     };
   }
 
@@ -401,6 +492,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     d.refPurpose = fd.refPurpose ?? d.refPurpose;
     if (fd.refMaxEdge !== undefined && fd.refMaxEdge !== "") d.refMaxEdge = Number(fd.refMaxEdge);
     if (fd.outQualityPct !== undefined && fd.outQualityPct !== "") d.outQuality = Number(fd.outQualityPct) / 100;
+    // W6-G: the depth tab's fields are named depth.<path>; a field not in the form keeps the draft's value
+    d.depth = depthFromForm(fd, d.depth, depthEnv());
     if (fd.size && fd.size !== "custom") {
       const [w, h] = fd.size.split("x").map(Number);
       d.width = w;
@@ -411,9 +504,87 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     }
   }
 
+  /** W6-G: remember a focused tab, so the re-render can give the focus back to it. */
+  async _preRender(context, options) {
+    await super._preRender?.(context, options);
+    const a = document.activeElement;
+    this.#tabFocus = a && this.element?.contains(a) && a.matches?.("[role=tab][data-tab]") ? a.dataset.tab : null;
+  }
+
+  /** W6-G: WAI-ARIA tabs with automatic activation: click, Left/Right (wrapping), Home/End. No re-render on switch. */
+  #wireTabs(el) {
+    const tabs = [...el.querySelectorAll("[role=tab][data-tab]")];
+    if (!tabs.length) return;
+    const activate = (tab, focus) => {
+      this.activeTab = tab.dataset.tab;
+      for (const t of tabs) {
+        const on = t === tab;
+        t.setAttribute("aria-selected", String(on));
+        t.tabIndex = on ? 0 : -1;
+        t.classList.toggle("active", on);
+        const panel = el.querySelector(`#${t.getAttribute("aria-controls")}`);
+        if (panel) panel.hidden = !on;
+      }
+      if (focus) tab.focus();
+    };
+    tabs.forEach((tab, i) => {
+      tab.addEventListener("click", () => activate(tab, true));
+      tab.addEventListener("keydown", (ev) => {
+        const n = tabs.length;
+        const j = { ArrowRight: (i + 1) % n, ArrowLeft: (i - 1 + n) % n, Home: 0, End: n - 1 }[ev.key];
+        if (j === undefined) return;
+        ev.preventDefault();
+        activate(tabs[j], true);
+      });
+    });
+    if (this.#tabFocus) {
+      tabs.find((t) => t.dataset.tab === this.#tabFocus)?.focus();
+      this.#tabFocus = null;
+    }
+  }
+
+  /** W6-G: engine / model change the lists below them (re-render); sliders update their readout in place. */
+  #wireDepth(el) {
+    const panel = el.querySelector("#aiimg-panel-depth");
+    if (!panel) return;
+    for (const name of ["depth.engine", "depth.model"]) {
+      panel.querySelectorAll(`input[name="${name}"]`).forEach((r) => r.addEventListener("change", () => {
+        this.#focusDepth = name;
+        this.#readForm(); // normalisation moves model / precision / resolution to values the new choice has
+        this.render();
+      }));
+    }
+    panel.querySelectorAll("input[type=range][data-fmt]").forEach((r) => r.addEventListener("input", () => {
+      const out = r.closest(".aiimg-range-row")?.querySelector("[data-role=rangeVal]");
+      if (out) out.textContent = fmtSlider(r.dataset.fmt, r.value);
+    }));
+    panel.querySelector("select[name='depth.mask.model']")?.addEventListener("change", (ev) => {
+      const m = maskByKey(ev.target.value);
+      const note = panel.querySelector("[data-role=maskNote]");
+      if (note) note.textContent = m ? game.i18n.localize(`AIIMG.Depth.MaskNote.${m.note}`) : "";
+    });
+    // the "on" badge on the Depth tab follows the checkbox without a re-render
+    panel.querySelector("input[name='depth.enabled']")?.addEventListener("change", (ev) => {
+      const tab = el.querySelector("#aiimg-tab-depth");
+      let badge = tab?.querySelector(".aiimg-tag");
+      if (ev.target.checked && tab && !badge) {
+        badge = document.createElement("em");
+        badge.className = "aiimg-tag";
+        badge.textContent = game.i18n.localize("AIIMG.Tabs.DepthOn");
+        tab.append(" ", badge);
+      } else if (!ev.target.checked) badge?.remove();
+    });
+    if (this.#focusDepth) {
+      panel.querySelector(`input[name="${this.#focusDepth}"]:checked`)?.focus();
+      this.#focusDepth = null;
+    }
+  }
+
   _onRender(context, options) {
     super._onRender?.(context, options);
     const el = this.element;
+    this.#wireTabs(el);
+    this.#wireDepth(el);
     // Provider change: fall back to that provider's first model (and Fast if no batch).
     el.querySelectorAll("input[name=provider]").forEach((r) => r.addEventListener("change", () => {
       this.#focusAfterRender = "provider";

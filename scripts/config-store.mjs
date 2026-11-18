@@ -4,6 +4,7 @@ import { DEFAULT_OUTPUT, MAX_EDGES, FORMATS } from "./optimize.mjs";
 import { defaultEdgeForKey } from "./output-preview.mjs";
 import { virtualDefaults } from "./image-types.mjs";
 import { DEFAULTS as EST, fitPurpose, clampMaxEdge, PURPOSE_IDS } from "./image-cost.mjs";
+import { normalizeDepth } from "./depth-settings.mjs";
 
 // The default model is the provider's first catalogue entry (W6-F: gpt-image-2.6-flare). It only fills types with no
 // saved model: setConfig always stores the chosen model, so existing saves keep theirs (no migration needed).
@@ -111,6 +112,9 @@ export function fitConfig(cfg) {
 
 const all = () => game.settings.get(MODULE_ID, "imageTypes") ?? {};
 
+/** W6-G: only decides the default depth model (V2 Large with WebGPU, V2 Small without) for types with no saved depth. */
+export const depthEnv = () => ({ webgpu: !!globalThis.navigator?.gpu });
+
 /**
  * Where a retired model goes: a GPT Image save moves to the provider's default GPT Image Flare (W6-F: 2.6 Flare; same
  * provider, so OpenRouter saves stay on OpenRouter), anything else to the provider's first model.
@@ -158,6 +162,8 @@ export function getConfig(key) {
   const base = sk(key) in store ? dflt : { ...dflt, outMaxEdge: vd?.outMaxEdge ?? defaultEdgeForKey(key) };
   const cfg = { ...base, ...saved, refs: cleanRefs(saved.refs ?? (vd ? dflt.refs : undefined)) };
   Object.assign(cfg, normalizeRefOpts(cfg));
+  // W6-G: depth settings (tab "Głębia") live under cfg.depth; old saves without them get the defaults.
+  cfg.depth = normalizeDepth(saved.depth ?? vd?.depth, depthEnv());
   // Zapis z nieznanym dostawcą (usunięty/przemianowany) psułby każde renderowanie okien: wróć do domyślnego.
   if (!PROVIDER_IDS.includes(cfg.provider)) { cfg.provider = DEFAULT_CONFIG.provider; cfg.model = DEFAULT_CONFIG.model; }
   if (!QUALITIES.includes(cfg.quality)) cfg.quality = DEFAULT_CONFIG.quality; // old saves lack it
@@ -202,7 +208,9 @@ export async function setConfig(key, data) {
     imageSize: String(data.imageSize ?? DEFAULT_CONFIG.imageSize),
     thinkingLevel: String(data.thinkingLevel ?? ""),
     ...normalizeOutput(data),
-    ...normalizeRefOpts(data, cleanRefs(data.refs))
+    ...normalizeRefOpts(data, cleanRefs(data.refs)),
+    // W6-G: a caller that sends no depth (older code paths) keeps the saved one
+    depth: normalizeDepth(data.depth ?? all()[sk(key)]?.depth, depthEnv())
   };
   clean = fitConfig(clean);
   if (!providers.supportsBatchFor(clean.provider, clean.model)) clean.defaultMode = "fast";
