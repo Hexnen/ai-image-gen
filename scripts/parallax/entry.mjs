@@ -2,6 +2,7 @@
 // `<name>_depth.png` exists next to the image) and the button in the depth result window. The window code loads on first use.
 import { depthIndex } from "../depth/depth-index.mjs";
 import { portraitApi } from "./portrait.mjs";
+import { tokenApi } from "./token-parallax.mjs";
 import { resolveTypeKey } from "../image-types.mjs";
 import { getConfig } from "../config-store.mjs";
 
@@ -57,7 +58,9 @@ export function registerParallax() {
       /** The open window (or null): setLook, setView, setCompare, benchmark, status for macros and checks. */
       get app() { return import("./parallax-app.mjs").then((m) => m.ParallaxApp.instance); },
       /** W6-N: sheet portraits: status(), refresh(), resume(), drawNow(look?), benchmark(frames?) */
-      portraits: portraitApi
+      portraits: portraitApi,
+      /** W6-O: canvas tokens: status(), refresh(), resume(), setPointer(p), stepNow(n, dt), whyNot(token) */
+      tokens: tokenApi
     };
     /**
      * W6-N: the shared image -> depth map lookup (every client; writes are GM only). For the sheet portraits and the

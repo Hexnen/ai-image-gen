@@ -6,6 +6,7 @@ import { registerBuildSettings } from "./build/build-settings.mjs";
 import { normalizeApiKey } from "./key-check.mjs";
 import { vaultKey, MIGRATED_FLAG, FOLLOW_STORE } from "./key-vault.mjs";
 import { registerPortraitSetting } from "./parallax/portrait.mjs";
+import { registerTokenSettings } from "./parallax/token-parallax.mjs";
 import { registerDepthIndexSetting } from "./depth/depth-index.mjs";
 
 const { NumberField, StringField, ObjectField, BooleanField } = foundry.data.fields;
@@ -88,6 +89,7 @@ export function registerSettings() {
 
   // W6-N: depth parallax on actor sheet portraits (on by default) + the shared image -> depth map index (hidden)
   registerPortraitSetting();
+  registerTokenSettings();    // W6-O: depth parallax on canvas tokens
   registerDepthIndexSetting();
 
   // W6-D: stawki i tabela tokenów wyjścia dla SZACUNKÓW pokazywanych w UI (referencje i obraz wyjściowy). Nie zmieniają
