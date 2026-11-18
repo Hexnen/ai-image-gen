@@ -1,4 +1,4 @@
-import { OPENAI_RATES, getModel, fitGeminiSize, fitOpenAIQuality, openaiSizeFor, openai25OutputTokens, openrouterEstimate } from "../providers/models.mjs";
+import { OPENAI_RATES, getModel, fitGeminiSize, fitOpenAIQuality, openaiSizeFor, openaiOutputTokens, openrouterEstimate } from "../providers/models.mjs";
 
 // Stawki batch (USD / token) i koszt z usage. Port z roleplay workshopBatch/cost.ts.
 // OpenAI batch = sync ÷ 2: text-in $2.50, image-in $4, image-out $15 za 1M tok.
@@ -73,8 +73,9 @@ export function estimateBatchCost(provider, model, items) {
     if (provider === "openai") {
       const quality = fitOpenAIQuality(model, it.quality ?? "medium");
       const [w, h] = openaiSizeFor(model, { width: it.width, height: it.height }).split("x").map(Number);
-      // tokeny z pomiarów niezależnych testerów (models.mjs), bez skalowania liniowego po polu
-      const outCost = openai25OutputTokens(quality, w, h) * OPENAI_BATCH_OUT;
+      // tokeny z pomiarów niezależnych testerów (models.mjs), bez skalowania liniowego po polu; tabela wg rodziny (2.6 / 2.5).
+      // gpt-image-2.6 nie ma Batch API: dla niego liczy się tylko estimateSyncCost (= ta kwota × 2, czyli stawki standard).
+      const outCost = openaiOutputTokens(model, quality, w, h) * OPENAI_BATCH_OUT;
       total += outCost + refs * 1536 * OPENAI_BATCH_IMAGE_IN + 150 * OPENAI_BATCH_TEXT_IN;
     } else if (provider === "gemini") {
       const r = GEMINI_BATCH[geminiTierOf(model)];

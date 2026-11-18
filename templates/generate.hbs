@@ -93,7 +93,7 @@
     <button type="button" data-action="runFast" class="{{#if fastDefault}}primary{{/if}}" {{#if busy}}disabled{{/if}}>
       <i class="fa-solid {{#if busyFast}}fa-spinner fa-spin{{else}}fa-bolt{{/if}}"></i> {{localize "AIIMG.Fast"}}
     </button>
-    <span {{#unless canBatch}}data-tooltip="AIIMG.Gen.NoBatchTip"{{/unless}}>
+    <span {{#unless canBatch}}data-tooltip="{{noBatchTip}}"{{/unless}}>
       <button type="button" data-action="runBatch" class="{{#if batchDefault}}primary{{/if}}" {{#if batchDisabled}}disabled{{/if}}>
         <i class="fa-solid {{#if busyBatch}}fa-spinner fa-spin{{else}}fa-layer-group{{/if}}"></i> {{localize "AIIMG.Batch"}}
       </button>

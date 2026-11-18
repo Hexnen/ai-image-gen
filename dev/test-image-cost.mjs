@@ -6,6 +6,8 @@ import {
   planRef, openaiInputTokens, clampMaxEdge, rulesFor, outputFamily, outputTokens, estimateRequest, cheaperSize,
   mergeTables, usd, REF_PURPOSES, OUTPUT_TABLES, DEFAULTS
 } from "../scripts/image-cost.mjs";
+import { OPENAI_26_TOKENS, openaiOutputTokens, openaiPriceFloor } from "../scripts/providers/models.mjs";
+import { estimateSyncCost, estimateBatchCost } from "../scripts/batch/cost.mjs";
 
 let passed = 0;
 const test = (name, fn) => {
@@ -196,6 +198,39 @@ test("table overrides from the world setting (JSON), bad input ignored", () => {
   assert.equal(outputTokens("gpt-image-3", "low", 1024, 1024, { tables: t }), 20);
   assert.deepEqual(mergeTables("{not json"), JSON.parse(JSON.stringify(OUTPUT_TABLES)));
   assert.deepEqual(mergeTables(""), JSON.parse(JSON.stringify(OUTPUT_TABLES)));
+});
+
+// ---------- W6-F: gpt-image-2.6 wired into the catalogue cost maths (limits, fallback price, batch estimate) ----------
+test("W6-F: 2.6 family for both variants, direct and via OpenRouter", () => {
+  for (const id of ["gpt-image-2.6-flare", "gpt-image-2.6-sunburst"]) {
+    assert.equal(outputFamily("openai", id), "gpt-image-2.6", id);
+    assert.equal(outputFamily("openrouter", `openai/${id}`), "gpt-image-2.6", id);
+    assert.equal(rulesFor("openai", id), "openai");
+  }
+});
+test("W6-F: the 2.6 square column is the catalogue's OPENAI_26_TOKENS (one source)", () => {
+  for (const q of ["low", "medium", "high", "xhigh", "max"]) assert.equal(OUTPUT_TABLES["gpt-image-2.6"].square[q], OPENAI_26_TOKENS[q], q);
+  assert.equal(outputTokens("gpt-image-2.6", "auto", 1024, 1024), 1756, "auto = high");
+});
+test("W6-F: catalogue output tokens / price floor pick the 2.6 table by model id (2.5 unchanged)", () => {
+  assert.equal(openaiOutputTokens("gpt-image-2.6-flare", "low", 1024, 1024), 824);
+  assert.equal(openaiOutputTokens("gpt-image-2.6-sunburst", "medium", 1024, 1024), 1449);
+  assert.equal(openaiOutputTokens("openai/gpt-image-2.6-flare", "high", 1024, 1024), 1756);
+  assert.equal(openaiOutputTokens("gpt-image-2.5-flare", "low", 1024, 1024), 196);
+  assert.equal(openaiOutputTokens("gpt-image-2.6-flare", "high", 3840, 2160), Math.round(1756 * 1.9));
+  // owner's summary: 4K high ≈ $0.10
+  assert.ok(Math.abs(usd(openaiOutputTokens("gpt-image-2.6-flare", "high", 3840, 2160), 30) - 0.10) < 0.005);
+  assert.equal(openaiPriceFloor("low", 1024, 1024, "gpt-image-2.6-flare").toFixed(4), "0.0247");
+  assert.equal(openaiPriceFloor("low", 1024, 1024).toFixed(5), (196 * 30 / 1e6).toFixed(5), "no model = old 2.5 floor");
+});
+test("W6-F: sync table estimate (limits) for 2.6 is about 4x the 2.5 one at low", () => {
+  const it = [{ quality: "low", width: 1024, height: 1024 }];
+  const s26 = estimateSyncCost("openai", "gpt-image-2.6-flare", it);
+  const s25 = estimateSyncCost("openai", "gpt-image-2.5-flare", it);
+  // sync = standard rates: 824 tok × $30/1M + 150 text tok × $5/1M
+  assert.equal(s26.toFixed(6), (824 * 30 / 1e6 + 150 * 5 / 1e6).toFixed(6));
+  assert.ok(s26 / s25 > 3.5 && s26 / s25 < 4.5, String(s26 / s25));
+  assert.ok(estimateBatchCost("openai", "gpt-image-2.6-flare", it) > 0, "estimator still answers (batch itself is refused elsewhere)");
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", some FAILED" : ""}`);

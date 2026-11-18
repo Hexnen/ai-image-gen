@@ -2,7 +2,7 @@
 import { getKey } from "../settings.mjs";
 import { requireUsableKey } from "../key-check.mjs";
 import { reserveBudget } from "../limits.mjs";
-import { PROVIDERS } from "../providers/index.mjs";
+import { PROVIDERS, supportsBatchFor } from "../providers/index.mjs";
 import { estimateBatchCost } from "./cost.mjs";
 import { estimateBatchLimit } from "../cost-learning.mjs";
 import { newBatchId } from "./util.mjs";
@@ -31,6 +31,8 @@ export async function submitBatch({ provider, model, items, pick = false }) {
   if (!PROVIDERS[provider]?.supportsBatch || !SUBMIT[provider]) {
     throw new Error(`Provider "${provider}" nie obsługuje batcha (OpenRouter: brak Batch API).`);
   }
+  // W6-F: gpt-image-2.6 (Flare/Sunburst) has no Batch API (OpenAI model pages): refuse before any upload
+  if (!supportsBatchFor(provider, model)) throw new Error(`Model "${model}" nie obsługuje batcha (OpenAI: brak Batch API dla gpt-image-2.6); użyj trybu Teraz.`);
   if (!items?.length) throw new Error("Batch: brak itemów.");
   if (new Set(items.map((i) => i.id)).size !== items.length) throw new Error("Batch: id itemów muszą być unikalne.");
   // Id pozycji są kluczami w rekordzie (ustawienie świata rozwija kropki w kluczach) i custom_id u dostawcy.

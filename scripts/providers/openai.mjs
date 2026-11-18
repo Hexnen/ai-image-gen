@@ -1,5 +1,7 @@
-// OpenAI Images (gpt-image-2.5-flare / -sunburst) bezpośrednio. Port z roleplay imageGen/openai.ts.
-// Bez refs: JSON /images/generations; z refs: multipart /images/edits (max 16).
+// OpenAI Images (gpt-image-2.6-flare / -sunburst, gpt-image-2.5-flare / -sunburst) bezpośrednio. Port z roleplay imageGen/openai.ts.
+// Bez refs: JSON /images/generations; z refs: multipart /images/edits (max 16; dla 2.6 niezweryfikowane, wg resellera 1–16).
+// 2.6 dostaje te same pola co 2.5 (model, prompt, size, quality, n, background/output_format). Nie wysyłamy `complexity`
+// (pominięte = "high" wg przewodnika OpenAI), partial_images, SVG ani GIF.
 import { GPT_IMAGE_TIMEOUT_MS, withTimeout, scaledTimeout, httpError, b64ToBlob, mimeOf } from "./util.mjs";
 import { OPENAI_RATES, openaiSizeFor, fitOpenAIQuality, openaiPriceFloor, supportsTransparent } from "./models.mjs";
 import { estimateSyncCost } from "../batch/cost.mjs";
@@ -76,6 +78,6 @@ function costOf(model, json, quality, size, count = 1) {
   if (isFinite(inTok) && isFinite(outTok) && inTok + outTok > 0) return { cost: inCost + outTok * IMG_OUT, estimated: false };
   // Brak usage: nigdy 0 — tabela cen (skalowana polem dla nowych rozmiarów/jakości) albo szacunek tokenowy.
   const [w, h] = size.split("x").map(Number);
-  const per = Math.max(openaiPriceFloor(quality, w, h), estimateSyncCost("openai", model, [{ quality, width: w, height: h }]));
+  const per = Math.max(openaiPriceFloor(quality, w, h, model), estimateSyncCost("openai", model, [{ quality, width: w, height: h }]));
   return { cost: per * count, estimated: true };
 }

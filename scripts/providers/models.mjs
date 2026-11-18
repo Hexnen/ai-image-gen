@@ -2,8 +2,14 @@
 // providerów, batcha i UI. Dane z oficjalnych stron OpenAI/Google (research 2026-10).
 // Wszystko, co nie było sprawdzone z prawdziwym kluczem, jest oznaczone `unverified`.
 
-// OpenAI: tylko rodzina gpt-image-2.5 (Flare i Sunburst); starsze modele GPT Image zostały usunięte z katalogu.
+// OpenAI: rodziny gpt-image-2.6 i gpt-image-2.5 (Flare i Sunburst); starsze modele GPT Image zostały usunięte z katalogu.
+// W6-F: 2.6 (wydany 2026-11-04) jest domyślny. Id zweryfikowane na stronach modeli OpenAI (2026-11-18):
+// https://developers.openai.com/api/docs/models/gpt-image-2.6-flare i .../gpt-image-2.6-sunburst — te same stawki co 2.5
+// ($5 / $8 / $30 za 1M), Image API generations + edits: tak, Batch (/v1/batch): NIE, Responses: nie.
+// Przewodnik (developers.openai.com/api/docs/guides/image-generation): 2.6 ma te same jakości (low..max, auto) i te same
+// reguły rozmiaru co 2.5 (×16, 1:3–3:1, krawędź ≤ 3840, 655 360–8 294 400 px), bez dopisku „> 2560x1440 eksperymentalne”.
 export const OPENAI_QUALITIES_25 = ["low", "medium", "high", "xhigh", "max", "auto"];
+export const OPENAI_QUALITIES_26 = OPENAI_QUALITIES_25;
 
 // Ceny za 1M tokenów (USD).
 export const OPENAI_RATES = {
@@ -21,20 +27,39 @@ export const OPENAI_RATES = {
 export const OPENAI_25_TOKENS = {
   low: 196, medium: 439, high: 1772, xhigh: 3122, max: 7024, auto: 1772, // 1024x1024, górna granica
 };
+// gpt-image-2.6 (Flare; Sunburst tyle samo przy low/medium, przy high +19 tok.): tokeny wyjścia 1024x1024 z podsumowania
+// właściciela (pomiary osób trzecich, nie dane OpenAI). Kwadrat jest droższy niż 1536x1024, więc to górna granica do ~2,4 Mpx;
+// 4K high ≈ $0,10 z podsumowania zgadza się ze wzrostem ~1,9× (1756 × 1,9 ≈ 3336 tok. ≈ $0,100). auto = high.
+// Uwaga: 2.6 przy low/medium jest ok. 4× droższy niż 2.5.
+export const OPENAI_26_TOKENS = {
+  low: 824, medium: 1449, high: 1756, xhigh: 3122, max: 7024, auto: 1756, // 1024x1024
+};
 const PX_FLAT = 2_400_000, PX_4K = 3840 * 2160, GROWTH_4K = 1.9;
 
-/** Ostrożna liczba tokenów wyjścia obrazu dla gpt-image-2.5. */
-export function openai25OutputTokens(quality, width, height) {
-  const base = OPENAI_25_TOKENS[quality] ?? OPENAI_25_TOKENS.medium;
+/** Tabela tokenów wyjścia (1024x1024) dla id modelu OpenAI (także "openai/…" przez OpenRouter): 2.6 albo 2.5. */
+export const openaiTokenTable = (modelId = "") => (/gpt-image-2\.6/i.test(String(modelId)) ? OPENAI_26_TOKENS : OPENAI_25_TOKENS);
+
+function scaleTokens(table, quality, width, height) {
+  const base = table[quality] ?? table.medium;
   const px = (Number(width) || 1024) * (Number(height) || 1024);
   if (px <= PX_FLAT) return base;
   const k = Math.min(1, (px - PX_FLAT) / (PX_4K - PX_FLAT));
   return Math.round(base * (1 + (GROWTH_4K - 1) * k));
 }
 
+/** Ostrożna liczba tokenów wyjścia obrazu dla gpt-image-2.5. */
+export function openai25OutputTokens(quality, width, height) {
+  return scaleTokens(OPENAI_25_TOKENS, quality, width, height);
+}
+
+/** Ostrożna liczba tokenów wyjścia obrazu dla modelu OpenAI (tabela wg rodziny 2.6 / 2.5). */
+export function openaiOutputTokens(modelId, quality, width, height) {
+  return scaleTokens(openaiTokenTable(modelId), quality, width, height);
+}
+
 /** Ostrożna cena SYNC obrazu OpenAI (USD): dolna granica szacunku i fallback, gdy odpowiedź nie ma `usage`. */
-export function openaiPriceFloor(quality, width, height) {
-  return openai25OutputTokens(quality, width, height) * OPENAI_RATES.sync.imageOut / 1e6;
+export function openaiPriceFloor(quality, width, height, modelId = "") {
+  return openaiOutputTokens(modelId, quality, width, height) * OPENAI_RATES.sync.imageOut / 1e6;
 }
 
 /** Konserwatywny szacunek za obraz przez OpenRouter (brak cennika w kodzie): gpt-image/pro drogie, reszta tania. */
@@ -49,16 +74,30 @@ const ASPECTS_BASE = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "
 const ASPECTS_WIDE = [...ASPECTS_BASE, "1:4", "4:1", "1:8", "8:1"];
 
 export const MODELS = {
+  // The FIRST entry is the default model for new OpenAI types (defaultModelId, DEFAULT_CONFIG, provider switch, retired saves).
   openai: [
     {
-      id: "gpt-image-2.5-flare", label: "GPT Image 2.5 Flare", note: "fast", // OpenAI's default; default model for new OpenAI types
-      transparent: true, // OpenAI image guide: both 2.5 models take background:"transparent" with output_format png/webp
-      qualities: OPENAI_QUALITIES_25, defaultQuality: "medium", presets: PRESETS_25,
+      // W6-F default: Flare = OpenAI's "fast, high-quality everyday" variant, same token price as Sunburst, and the variant
+      // the owner's cost summary is built on. No Batch API for 2.6 (OpenAI model page), so `batch: false`.
+      id: "gpt-image-2.6-flare", label: "GPT Image 2.6 Flare", note: "flare26", family: "2.6", batch: false,
+      // The guide's transparent-background sentence is model-agnostic (not repeated in the 2.6 section): not checked live for 2.6.
+      transparent: true,
+      qualities: OPENAI_QUALITIES_26, defaultQuality: "medium", presets: PRESETS_25, maxRefs: 16, // 16: reseller figure, unverified
     },
     {
-      id: "gpt-image-2.5-sunburst", label: "GPT Image 2.5 Sunburst", note: "detailed", // same token cost as Flare, ~50% slower (independent tests)
+      id: "gpt-image-2.6-sunburst", label: "GPT Image 2.6 Sunburst", note: "sunburst26", family: "2.6", batch: false,
+      transparent: true, // as Flare 2.6 (unverified live)
+      qualities: OPENAI_QUALITIES_26, defaultQuality: "medium", presets: PRESETS_25, maxRefs: 16,
+    },
+    {
+      id: "gpt-image-2.5-flare", label: "GPT Image 2.5 Flare", note: "flare25", family: "2.5", batch: true, // default until W6-F
+      transparent: true, // OpenAI image guide: both 2.5 models take background:"transparent" with output_format png/webp
+      qualities: OPENAI_QUALITIES_25, defaultQuality: "medium", presets: PRESETS_25, maxRefs: 16,
+    },
+    {
+      id: "gpt-image-2.5-sunburst", label: "GPT Image 2.5 Sunburst", note: "detailed", family: "2.5", batch: true, // same token cost as Flare, ~50% slower (independent tests)
       transparent: true, // same as Flare (OpenAI image guide)
-      qualities: OPENAI_QUALITIES_25, defaultQuality: "medium", presets: PRESETS_25,
+      qualities: OPENAI_QUALITIES_25, defaultQuality: "medium", presets: PRESETS_25, maxRefs: 16,
     },
   ],
   gemini: [
@@ -101,8 +140,11 @@ export const MODELS = {
   // Ids come from OpenRouter's public Images API list (GET /api/v1/images/models, 2026-10). No per-image prices:
   // the list gives none, so costs stay a conservative estimate (openrouterEstimate) until usage.cost arrives.
   openrouter: [
+    // W6-F: openai/gpt-image-2.6-* are on that list too (checked 2026-11-18). OpenRouter's first model stays Nano Banana 2.1.
     { id: "google/gemini-nano-banana-2.1", label: "Nano Banana 2.1", note: "newest" },
-    { id: "openai/gpt-image-2.5-flare", label: "GPT Image 2.5 Flare", note: "fast" },
+    { id: "openai/gpt-image-2.6-flare", label: "GPT Image 2.6 Flare", note: "flare26or" },
+    { id: "openai/gpt-image-2.6-sunburst", label: "GPT Image 2.6 Sunburst", note: "sunburst26" },
+    { id: "openai/gpt-image-2.5-flare", label: "GPT Image 2.5 Flare", note: "flare25" },
     { id: "openai/gpt-image-2.5-sunburst", label: "GPT Image 2.5 Sunburst", note: "detailed" },
     { id: "google/gemini-3.1-flash-lite-image", label: "Nano Banana 2 Lite", note: "cheapest" },
     { id: "google/gemini-3.1-flash-image", label: "Nano Banana 2" },
@@ -122,6 +164,9 @@ export const supportsTransparent = (provider, id) => provider === "openai" && ge
 
 /** Pierwszy model providera (domyślny dla nowych konfiguracji). */
 export const defaultModelId = (provider) => MODELS[provider]?.[0]?.id ?? "";
+
+/** Does the MODEL allow batch (its provider must too: providers/index.mjs supportsBatchFor)? Only `batch: false` says no (gpt-image-2.6). */
+export const modelHasBatch = (provider, id) => getModel(provider, id)?.batch !== false;
 
 const r16 = (v) => Math.round(v / 16) * 16;
 const MAX_RATIO = 2.9;

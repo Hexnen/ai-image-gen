@@ -5,9 +5,11 @@ import { defaultEdgeForKey } from "./output-preview.mjs";
 import { virtualDefaults } from "./image-types.mjs";
 import { DEFAULTS as EST, fitPurpose, clampMaxEdge, PURPOSE_IDS } from "./image-cost.mjs";
 
+// The default model is the provider's first catalogue entry (W6-F: gpt-image-2.6-flare). It only fills types with no
+// saved model: setConfig always stores the chosen model, so existing saves keep theirs (no migration needed).
 export const DEFAULT_CONFIG = Object.freeze({
   provider: "openai",
-  model: "gpt-image-2.5-flare",
+  model: providers.defaultModelId("openai"),
   width: 1024,
   height: 1024,
   promptTemplate: "{description}",
@@ -109,10 +111,13 @@ export function fitConfig(cfg) {
 
 const all = () => game.settings.get(MODULE_ID, "imageTypes") ?? {};
 
-/** Where a retired model goes: a GPT Image save moves to GPT Image 2.5 Flare (same provider), anything else to the provider's first model. */
+/**
+ * Where a retired model goes: a GPT Image save moves to the provider's default GPT Image Flare (W6-F: 2.6 Flare; same
+ * provider, so OpenRouter saves stay on OpenRouter), anything else to the provider's first model.
+ */
 export function replacementModel(provider, oldId, models = providers.listModels(provider)) {
   if (/gpt-?(\d+(\.\d+)?-)?image/i.test(String(oldId))) {
-    const flare = models.find((m) => /gpt-image-2\.5-flare$/.test(m.id));
+    const flare = models.find((m) => /gpt-image-[\d.]+-flare$/.test(m.id));
     if (flare) return flare.id;
   }
   return models[0]?.id ?? "";
@@ -166,8 +171,8 @@ export function getConfig(key) {
     cfg.model = replacementModel(cfg.provider, cfg.model, models);
   }
   Object.assign(cfg, fitConfig(cfg));
-  // Batch is impossible for providers without it.
-  if (cfg.defaultMode === "batch" && !providers.PROVIDERS[cfg.provider]?.supportsBatch) cfg.defaultMode = "fast";
+  // Batch is impossible for providers or models without it (gpt-image-2.6 has no Batch API).
+  if (cfg.defaultMode === "batch" && !providers.supportsBatchFor(cfg.provider, cfg.model)) cfg.defaultMode = "fast";
   return cfg;
 }
 
@@ -200,7 +205,7 @@ export async function setConfig(key, data) {
     ...normalizeRefOpts(data, cleanRefs(data.refs))
   };
   clean = fitConfig(clean);
-  if (!providers.PROVIDERS[clean.provider]?.supportsBatch) clean.defaultMode = "fast";
+  if (!providers.supportsBatchFor(clean.provider, clean.model)) clean.defaultMode = "fast";
   await game.settings.set(MODULE_ID, "imageTypes", { ...all(), [sk(key)]: clean });
   return clean;
 }

@@ -11,7 +11,7 @@
 // Co z tego robimy przy wysyłce (planRef): drabinka progów 512 → 384 → 304 → 208, cel wg „przeznaczenia” referencji,
 // nigdy nie powiększamy (poza dociągnięciem do pełnego kafelka, < 16 px), boki w wielokrotnościach 16, nigdy 513–1023.
 // Proporcje szersze niż 3:1 są tylko oznaczane (wide): obcinać ich nie wolno, a padding i tak dolicza openaiInputTokens.
-import { OPENAI_25_TOKENS } from "./providers/models.mjs";
+import { OPENAI_25_TOKENS, OPENAI_26_TOKENS } from "./providers/models.mjs";
 
 export const TILE = 16;
 /** Progi dłuższego boku wysyłanej referencji (OpenAI). Kolejność: od największego. */
@@ -130,7 +130,8 @@ export const usd = (tokens, pricePerM) => (Number(tokens) || 0) * (Number(priceP
  */
 export const OUTPUT_TABLES = Object.freeze({
   "gpt-image-2.6": {
-    square: { low: 824, medium: 1449, high: 1756, xhigh: 3122, max: 7024 },
+    // square = OPENAI_26_TOKENS z katalogu (jedno źródło, W6-F): 824 / 1449 / 1756 / 3122 / 7024
+    square: { low: OPENAI_26_TOKENS.low, medium: OPENAI_26_TOKENS.medium, high: OPENAI_26_TOKENS.high, xhigh: OPENAI_26_TOKENS.xhigh, max: OPENAI_26_TOKENS.max },
     wide: { low: 664, medium: 1132, high: 1353, xhigh: 2470, max: 5500 }
   },
   "gpt-image-2.5": {

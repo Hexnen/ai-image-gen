@@ -102,7 +102,7 @@ export function assertCanApply(doc) {
 
 /** Maks. liczba obrazów referencyjnych dla modelu (OpenAI edits 16, Gemini wg katalogu, reszta 14). */
 export function maxRefsFor(provider, model) {
-  if (provider === "openai") return 16;
+  if (provider === "openai") return providers.modelCaps("openai", model)?.maxRefs ?? 16;
   if (provider === "gemini") return providers.modelCaps("gemini", model)?.maxRefs ?? 14;
   return 14;
 }
@@ -119,7 +119,8 @@ export function readiness(document) {
     hasKey: !!getKey(cfg.provider),
     providerLabel: provider?.label ?? cfg.provider,
     modelLabel: providers.listModels(cfg.provider).find((m) => m.id === cfg.model)?.label ?? cfg.model,
-    canBatch: !!provider?.supportsBatch,
+    canBatch: providers.supportsBatchFor(cfg.provider, cfg.model), // W6-F: gpt-image-2.6 has no Batch API
+    noBatchReason: providers.noBatchReason(cfg.provider, cfg.model),
     maxRefs: maxRefsFor(cfg.provider, cfg.model)
   };
 }

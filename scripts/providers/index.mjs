@@ -11,7 +11,7 @@ import * as openai from "./openai.mjs";
 import { requireUsableKey } from "../key-check.mjs";
 import * as gemini from "./gemini.mjs";
 import * as openrouter from "./openrouter.mjs";
-import { MODELS, getModel, defaultModelId } from "./models.mjs";
+import { MODELS, getModel, defaultModelId, modelHasBatch } from "./models.mjs";
 import { normalizeError } from "./util.mjs";
 
 export * from "./models.mjs";
@@ -32,6 +32,13 @@ export function listModels(provider) {
 /** Możliwości jednego modelu (albo null dla nieznanego/OpenRouter). */
 export const modelCaps = (provider, id) => getModel(provider, id);
 export { defaultModelId };
+
+/** Batch possible for this provider AND model (gpt-image-2.6 has no Batch API although OpenAI has one). */
+export const supportsBatchFor = (provider, model) => !!PROVIDERS[provider]?.supportsBatch && modelHasBatch(provider, model);
+
+/** Why batch is off: "provider" (no batch API at all), "model" (this model has none), or "" (batch is possible). */
+export const noBatchReason = (provider, model) =>
+  !PROVIDERS[provider]?.supportsBatch ? "provider" : !modelHasBatch(provider, model) ? "model" : "";
 
 export async function generate({ provider, ...rest }) {
   const impl = IMPL[provider];

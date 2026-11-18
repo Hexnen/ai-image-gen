@@ -217,6 +217,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const m = providers.listModels(cfg.provider).find((x) => x.id === cfg.model);
     const parts = [];
     if (m?.note) parts.push(L(`AIIMG.ModelNote.${m.note}`));
+    // W6-F: a model without batch on a provider that has it (gpt-image-2.6) says so right under the model choice
+    if (providers.noBatchReason(cfg.provider, cfg.model) === "model") parts.push(L("AIIMG.ModelNote.noBatch"));
     const price = caps?.price ? caps.price[cfg.imageSize] ?? Object.values(caps.price)[0] : null;
     if (price != null) parts.push(game.i18n.format("AIIMG.Config.ModelFrom", { cost: String(Number(price)) }));
     else if (cfg.provider === "openrouter") parts.push(L("AIIMG.Config.ModelPriceRough"));
@@ -305,7 +307,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const sizes = presets.map((s) => ({
       ...s, label: `${s.width}×${s.height}`, selected: !customSize && s.id === sizeId, tip: sizeTip(s.width, s.height)
     }));
-    const supportsBatch = !!providers.PROVIDERS[cfg.provider]?.supportsBatch;
+    const supportsBatch = providers.supportsBatchFor(cfg.provider, cfg.model);
+    const noBatchWhy = providers.noBatchReason(cfg.provider, cfg.model);
     const usage = getUsage();
     const refInfo = this.selectedKey ? await this.#refsContext(cfg) : null;
 
@@ -333,6 +336,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       isFast: cfg.defaultMode === "fast",
       isBatch: cfg.defaultMode === "batch",
       supportsBatch,
+      noBatchKey: noBatchWhy === "model" ? "AIIMG.Config.NoBatchModel" : "AIIMG.Config.NoBatch",
+      batchFallbackKey: noBatchWhy === "model" ? "AIIMG.Config.BatchFallbackModel" : "AIIMG.Config.BatchFallback",
       isOpenAI: cfg.provider === "openai",
       isGemini: cfg.provider === "gemini",
       allowCustomSize: cfg.provider !== "openai" || exactSize,
@@ -417,7 +422,7 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       const models = providers.listModels(this.draft.provider);
       this.draft.model = models[0]?.id ?? "";
       this.draft.retiredModel = undefined; // the user chose a model: the "retired" note is no longer true
-      if (!providers.PROVIDERS[this.draft.provider]?.supportsBatch) this.draft.defaultMode = "fast";
+      if (!providers.supportsBatchFor(this.draft.provider, this.draft.model)) this.draft.defaultMode = "fast";
       Object.assign(this.draft, fitConfig(this.draft));
       this.draft.custom = false;
       this.#noteSizeFit(prev);
@@ -429,6 +434,8 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       this.#readForm();
       this.draft.retiredModel = undefined;
       const prev = { w: this.draft.width, h: this.draft.height, t: !!this.draft.transparent };
+      // W6-F: gpt-image-2.6 has no Batch API: the default mode falls back to Fast (the Mode card says why)
+      if (!providers.supportsBatchFor(this.draft.provider, this.draft.model)) this.draft.defaultMode = "fast";
       Object.assign(this.draft, fitConfig(this.draft));
       this.draft.custom = false;
       this.#noteSizeFit(prev);

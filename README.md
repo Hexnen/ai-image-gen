@@ -59,15 +59,18 @@ These are properties of Foundry itself, not something the module can work around
   reference images you send.
 
 ## Transparent background
-OpenAI `gpt-image-2.5-flare` / `-sunburst` get a "Transparent background"
-switch in the type's settings and a one-off checkbox in the generate dialog. The request carries `background: "transparent"`
+OpenAI `gpt-image-2.6-flare` / `-sunburst` and `gpt-image-2.5-flare` / `-sunburst` get a "Transparent background"
+switch (for 2.6 not yet checked against the live API) in the type's settings and a one-off checkbox in the generate dialog. The request carries `background: "transparent"`
 with PNG output; the saved file is WebP or PNG (JPEG has no alpha, so it is switched to WebP). Gemini and OpenRouter models have
 no switch because no native alpha is documented.
 
 ## Models
-OpenAI is limited to `gpt-image-2.5-flare` (default) and `-sunburst`; older GPT Image models (1, 1-mini, 1.5, 2) are no longer
-offered, also on OpenRouter. A type saved with an old model keeps all its other settings: it runs on Flare (size and quality are
-fitted to 2.5) and the editor says so until you save the type again. Old entries in the call log keep their model names.
+OpenAI is limited to `gpt-image-2.6-flare` (default), `gpt-image-2.6-sunburst`, `gpt-image-2.5-flare` and `-sunburst`; older
+GPT Image models (1, 1-mini, 1.5, 2) are no longer offered, also on OpenRouter (where `openai/gpt-image-2.6-*` are listed too).
+The default only applies to types with no saved settings: a type you saved keeps the model you chose. GPT Image 2.6 has **no
+Batch API** (OpenAI model pages), so Batch is off for it; 2.5 keeps Batch at half price and is about 4× cheaper at low/medium.
+A type saved with an old model keeps all its other settings: it runs on the default Flare (size and quality are fitted) and the
+editor says so until you save the type again. Old entries in the call log keep their model names.
 
 ## Enhance a description with Claude (wand)
 The magic-wand button next to the description (the "Generate image" dialog and the test drawer's sample description)

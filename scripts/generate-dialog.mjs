@@ -167,6 +167,7 @@ export class GenerateDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       configured: r.configured,
       hasKey: r.hasKey,
       canBatch: r.canBatch,
+      noBatchTip: r.noBatchReason === "model" ? "AIIMG.Gen.NoBatchModelTip" : "AIIMG.Gen.NoBatchTip",
       busy: !!this.busy,
       busyFast: this.busy === "fast",
       busyBatch: this.busy === "batch",
