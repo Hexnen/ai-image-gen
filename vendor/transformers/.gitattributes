@@ -1,0 +1,2 @@
+# Vendored third-party files stay byte-exact (sha256 pinned in VENDOR.md and dev/test-depth-post.mjs): no CRLF conversion
+* -text
