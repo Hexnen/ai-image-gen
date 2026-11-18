@@ -23,7 +23,8 @@ const state = {
   keys: {},             // store keys
   migration: "pending", // pending | done | failed | skipped
   store: null,
-  deps: null
+  deps: null,
+  gen: 0                // bumped on every local save (an older in-flight reload must not overwrite it)
 };
 
 const MODULE = "moinens-ai-gen";
@@ -33,14 +34,26 @@ const defaultDeps = () => ({
   getSetting: (k, fallback) => { try { return game.settings.get(MODULE, k); } catch { return fallback; } },
   setSetting: (k, v) => game.settings.set(MODULE, k, v),
   notify: (level, i18nKey) => { try { ui.notifications?.[level]?.(game.i18n.localize(i18nKey), { permanent: level === "error" }); } catch { /* no ui */ } },
-  emit: () => { try { game.socket?.emit?.(`module.${MODULE}`, { type: SOCKET_TYPE }); } catch { /* no socket */ } },
-  store: () => createKeyStore(foundryAdapter())
+  // W6-S: sent only to the other active GM users (server option `recipients`); the message carries no values.
+  emit: () => {
+    try {
+      const me = game.user?.id;
+      const gms = (game.users?.filter?.((u) => u.isGM && u.active && u.id !== me) ?? []).map((u) => u.id);
+      if (gms.length) game.socket?.emit?.(`module.${MODULE}`, { type: SOCKET_TYPE }, { recipients: gms });
+    } catch { /* no socket */ }
+  },
+  store: () => createKeyStore(foundryAdapter()),
+  isUserGM: (id) => { try { return !!(id && globalThis.game?.users?.get(id)?.isGM); } catch { return false; } },
+  onSocket: (handler) => game.socket?.on?.(`module.${MODULE}`, handler),
+  now: () => Date.now(),
+  setTimer: (fn, ms) => setTimeout(fn, ms)
 });
 
 /** Tests: inject fakes. Resets the state. */
 export function configureVault(deps = {}) {
   state.deps = { ...defaultDeps(), ...deps };
   state.store = null; state.loaded = false; state.error = null; state.keys = {}; state.migration = "pending";
+  ping.running = false; ping.pending = false; ping.timer = null; ping.last = -Infinity;
 }
 const D = () => state.deps ?? (state.deps = defaultDeps());
 const store = () => state.store ?? (state.store = D().store());
@@ -71,8 +84,10 @@ export const vaultStatus = () => ({ loaded: state.loaded, error: state.error, mi
 /** Reload the store into memory (GM). Never throws; keeps the old cache on failure. */
 export async function reloadVault() {
   if (!D().isGM()) return false;
+  const gen = state.gen;
   try {
     const r = await store().load();
+    if (gen !== state.gen) return true;   // W6-S: a local save landed meanwhile; its keys are newer than this read
     state.keys = r.keys; state.loaded = true; state.error = null;
     if (r.wasPublic) D().notify("warn", "AIIMG.KeyStore.WasPublic");
     return true;
@@ -105,7 +120,7 @@ export async function initVault() {
     if (Object.keys(copy).length) {
       const back = await store().save({ ...state.keys, ...copy });
       for (const [p, v] of Object.entries(copy)) if (back[p] !== v) throw new Error("read-back mismatch");
-      state.keys = back;
+      state.keys = back; state.gen++;
       state.loaded = true;
     }
     await D().setSetting(MIGRATED_FLAG, true);
@@ -130,7 +145,7 @@ export async function saveVault(values) {
   const same = STORE_PROVIDERS.every((p) => (next[p] ?? "") === (state.keys[p] ?? ""));
   if (!same || !state.loaded) {
     const back = await store().save(next);
-    state.keys = back; state.loaded = true; state.error = null;
+    state.keys = back; state.loaded = true; state.error = null; state.gen++;
     D().emit();
   }
   const f = { ...follow() };
@@ -139,9 +154,39 @@ export async function saveVault(values) {
   return true;
 }
 
+// W6-S: the ping is coalesced. A burst of pings gives at most one reload in flight plus one trailing reload, and two
+// ping reloads start at least PING_GAP_MS apart. Local calls (initVault, saveVault, the keys window) are not throttled.
+export const PING_GAP_MS = 3000;
+const ping = { running: false, pending: false, timer: null, last: -Infinity };
+
+function runPingReload() {
+  ping.timer = null; ping.pending = false; ping.running = true; ping.last = D().now();
+  return reloadVault().finally(() => {
+    ping.running = false;
+    if (ping.pending) schedulePingReload();
+  });
+}
+
+function schedulePingReload() {
+  if (ping.running || ping.timer) { ping.pending = true; return; }
+  const wait = ping.last + PING_GAP_MS - D().now();
+  if (wait <= 0) { runPingReload(); return; }
+  ping.pending = true;
+  ping.timer = D().setTimer(runPingReload, wait);
+}
+
+/**
+ * Socket handler. Foundry's server relays a module message as (data, senderUserId) with the sender id set by the server
+ * (dist/server/sockets.mjs handleCustomSocket), so it cannot be forged. Only a ping from a GM user, received by a GM
+ * client, is acted on. Returns true when the ping was accepted (tests).
+ */
+export function onVaultPing(msg, senderId) {
+  if (msg?.type !== SOCKET_TYPE || !D().isGM() || !D().isUserGM(senderId)) return false;
+  schedulePingReload();
+  return true;
+}
+
 /** Other GM clients reload when one GM saved (the message carries no values). */
 export function listenVault() {
-  try {
-    game.socket?.on?.(`module.${MODULE}`, (msg) => { if (msg?.type === SOCKET_TYPE && D().isGM()) reloadVault(); });
-  } catch { /* no socket */ }
+  try { D().onSocket(onVaultPing); } catch { /* no socket */ }
 }

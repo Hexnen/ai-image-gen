@@ -7,7 +7,8 @@ import {
   createKeyStore, encodeStore, decodeStore, randomName, STORE_PREFIX, STORE_FILE, STORE_PROVIDERS
 } from "../scripts/key-store.mjs";
 import {
-  configureVault, initVault, vaultKey, vaultConflicts, vaultStatus, saveVault, reloadVault, MIGRATED_FLAG, FOLLOW_STORE
+  configureVault, initVault, vaultKey, vaultConflicts, vaultStatus, saveVault, reloadVault, MIGRATED_FLAG, FOLLOW_STORE,
+  listenVault, SOCKET_TYPE, PING_GAP_MS
 } from "../scripts/key-vault.mjs";
 
 let passed = 0;
@@ -275,6 +276,111 @@ await test("settings.getKey normalises the vault value (W6-B) and is empty for a
   const p = fakeClient({ openai: "sk-TEST-0000" }, { isGM: false });
   configureVault(p.deps(srv));
   assert.equal(getKey("openai"), "");
+});
+
+// ---- W6-S: socket ping (sender check + coalescing) ----
+/** Vault deps with a counting, manually-resolved store load and a fake clock/timers. */
+function pingRig({ isGM = true } = {}) {
+  const rig = { loads: 0, inFlight: 0, maxInFlight: 0, resolvers: [], clock: 0, timers: [], handler: null };
+  const users = { gm1: true, gm2: true, pl1: false };
+  configureVault({
+    isGM: () => isGM,
+    getClient: () => "", getSetting: (k, fb) => fb, setSetting: async () => {}, notify: () => {}, emit: () => {},
+    store: () => ({
+      load: () => {
+        rig.loads++; rig.inFlight++; rig.maxInFlight = Math.max(rig.maxInFlight, rig.inFlight);
+        return new Promise((res) => rig.resolvers.push(() => { rig.inFlight--; res({ keys: { openai: `sk-TEST-${rig.loads}` }, wasPublic: false }); }));
+      },
+      save: async (k) => k
+    }),
+    isUserGM: (id) => !!users[id],
+    onSocket: (h) => { rig.handler = h; },
+    now: () => rig.clock,
+    setTimer: (fn, ms) => { const t = { at: rig.clock + ms, fn }; rig.timers.push(t); return t; }
+  });
+  listenVault();
+  rig.finishAll = async () => { while (rig.resolvers.length) rig.resolvers.shift()(); await new Promise((r) => setTimeout(r, 0)); };
+  rig.advance = async (ms) => {
+    rig.clock += ms;
+    for (const t of rig.timers.filter((t) => t.at <= rig.clock)) { rig.timers.splice(rig.timers.indexOf(t), 1); t.fn(); }
+    await new Promise((r) => setTimeout(r, 0));
+  };
+  return rig;
+}
+const PING = { type: SOCKET_TYPE };
+
+await test("W6-S: ping from a non-GM sender (or with no sender) is ignored", async () => {
+  const rig = pingRig();
+  assert.equal(typeof rig.handler, "function");
+  assert.equal(rig.handler(PING, "pl1"), false);
+  assert.equal(rig.handler(PING, undefined), false);
+  assert.equal(rig.handler(PING, "nobody"), false);
+  assert.equal(rig.handler({ type: "other" }, "gm2"), false);
+  await rig.advance(PING_GAP_MS * 3);
+  assert.equal(rig.loads, 0);
+});
+
+await test("W6-S: ping from a GM sender reloads the cache on a GM client; a player client never loads", async () => {
+  const rig = pingRig();
+  assert.equal(rig.handler(PING, "gm2"), true);
+  assert.equal(rig.loads, 1);
+  await rig.finishAll();
+  assert.equal(vaultKey("openai"), "sk-TEST-1");
+  const pr = pingRig({ isGM: false });
+  assert.equal(pr.handler(PING, "gm2"), false);
+  await pr.advance(PING_GAP_MS * 3);
+  assert.equal(pr.loads, 0);
+  assert.equal(vaultKey("openai"), "");
+});
+
+await test("W6-S: a flood of 500 GM pings = 1 reload in flight + 1 trailing reload, spaced by the gap", async () => {
+  const rig = pingRig();
+  for (let i = 0; i < 500; i++) rig.handler(PING, "gm2");
+  assert.equal(rig.loads, 1);
+  assert.equal(rig.maxInFlight, 1);
+  await rig.finishAll();
+  for (let i = 0; i < 500; i++) rig.handler(PING, "gm2");   // more while the gap runs
+  assert.equal(rig.loads, 1);
+  assert.equal(rig.timers.length, 1);
+  await rig.advance(PING_GAP_MS - 1);
+  assert.equal(rig.loads, 1);
+  await rig.advance(1);
+  assert.equal(rig.loads, 2);
+  await rig.finishAll();
+  await rig.advance(PING_GAP_MS * 5);
+  assert.equal(rig.loads, 2);
+  assert.equal(rig.maxInFlight, 1);
+  // pings arriving while a reload is in flight: still one trailing reload, only after the gap
+  rig.handler(PING, "gm1");
+  assert.equal(rig.loads, 3);
+  for (let i = 0; i < 100; i++) rig.handler(PING, "gm1");
+  await rig.advance(PING_GAP_MS);   // in flight, not finished: no second load
+  assert.equal(rig.loads, 3);
+  await rig.finishAll();
+  assert.equal(rig.loads, 4);       // gap already passed -> trailing reload runs at once
+  await rig.finishAll();
+  await rig.advance(PING_GAP_MS * 5);
+  assert.equal(rig.loads, 4);
+  assert.equal(rig.maxInFlight, 1);
+});
+
+await test("W6-S: the saving GM updates its own cache at once (no wait for a ping) and notifies; old reload cannot overwrite it", async () => {
+  const rig = pingRig();
+  rig.handler(PING, "gm2");                 // a ping reload is in flight
+  assert.equal(rig.loads, 1);
+  await saveVault({ openai: "sk-TEST-SAVED" });
+  assert.equal(vaultKey("openai"), "sk-TEST-SAVED");
+  await rig.finishAll();                    // the older read finishes after the save
+  assert.equal(vaultKey("openai"), "sk-TEST-SAVED");
+  // the saving client emits the ping (fake client counts emits); the local save is not throttled
+  const srv = fakeServer();
+  const c = fakeClient({});
+  configureVault(c.deps(srv));
+  await initVault();
+  await saveVault({ openai: "sk-TEST-0000" });
+  await saveVault({ openai: "sk-TEST-0001" });
+  assert.equal(c.emits, 2);
+  assert.equal(vaultKey("openai"), "sk-TEST-0001");
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);

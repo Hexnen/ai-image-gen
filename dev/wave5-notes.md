@@ -917,3 +917,16 @@ Zgłoszenie właściciela (prawdziwy Foundry, `InvincibleActorSheet`, karta otwa
 
 ### Niezweryfikowane
 - DPR 2 na żywo (tylko test `backingSize` i kod), prawdziwy panel Tokenizera (porównanie tylko z jego sposobem rysowania: drawImage obrazu naturalnego), odświeżanie u gracza w chwili zmiany ustawienia przez MG (wymaga dwóch przeglądarek naraz; Foundry wywołuje onChange ustawień świata na każdym kliencie), prawdziwy obraz z profilem ICC przez cały tor modułu (sprawdzony dekoder: `createImageBitmap` none vs default vs `<img>`), przewijanie zakładki z portretem (w teście brak przepełnienia), serwer właściciela (zakaz). Przyczyna `position: static` u właściciela ustalona z pomiaru leada; którego arkusza / wersji pliku to dotyczyło, nie sprawdzano (nieistotne po przejściu na styl inline).
+
+## W6-S key ping: ping gniazda magazynu kluczy tylko od MG, z ograniczeniem (przegląd adversary do W6-H)
+
+- Problem (`scripts/key-vault.mjs`, `listenVault`): każdy użytkownik mógł wysłać `game.socket.emit("module.moinens-ai-gen", {type:"moinens-ai-gen.keys-changed"})`, a każdy klient MG odpalał wtedy `reloadVault()` (browse folderu świata, GET keys.svg bez cache, czasem `configurePath` + ostrzeżenie WasPublic) bez sprawdzenia nadawcy i bez ograniczenia; pętla w makrze gracza zalewała klientów MG i serwer.
+- Źródło Foundry v14 (`dist/server/sockets.mjs`, `handleCustomSocket`): serwer przekazuje wiadomość modułu jako `(data, senderUserId)`, id nadawcy ustawia serwer (`this.user.id`), więc nie da się go podrobić; opcja `{recipients:[ids]}` wysyła tylko do wskazanych użytkowników.
+- Poprawka:
+  - `onVaultPing(msg, senderId)`: działa tylko gdy typ się zgadza, ten klient jest MG ORAZ `game.users.get(senderId)?.isGM`; inaczej nic.
+  - Łączenie: najwyżej jedno przeładowanie z pingu w toku i najwyżej jedno kolejne (końcowe); dwa przeładowania z pingu startują co najmniej `PING_GAP_MS` = 3000 ms od siebie. Wywołania lokalne (`initVault`, `saveVault`, otwarcie okna kluczy) bez ograniczeń.
+  - MG, który zapisał, ma nową pamięć od razu (jak dotąd) i wysyła ping; ping idzie teraz tylko do pozostałych aktywnych MG (`recipients`), gracze go w ogóle nie dostają (i tak nigdy nie dostawali kluczy, ping nie niesie wartości). Brak innych aktywnych MG = brak pingu.
+  - Licznik zapisów (`state.gen`): przeładowanie, które zaczęło się przed lokalnym zapisem, nie nadpisuje nowszych kluczy po swoim końcu.
+  - Zależności wstrzykiwane (`isUserGM`, `onSocket`, `now`, `setTimer`) dla testów węzłowych.
+- Testy: `dev/test-key-store.mjs` +4 (18): ping od gracza / bez nadawcy / od nieznanego id ignorowany; ping od MG przeładowuje u MG, klient gracza nic nie czyta; 500 pingów = 1 w toku + 1 końcowe po przerwie (także pingi w trakcie przeładowania); zapisujący MG ma klucz od razu, wysyła ping, a starsze przeładowanie go nie nadpisuje. Wszystkie `dev/test-*.mjs` (30) exit 0.
+- Niezweryfikowane na żywo: dwóch MG na serwerze (doręczenie z `recipients`, prawdziwe id nadawcy), zachowanie przy wylogowanym drugim MG.
