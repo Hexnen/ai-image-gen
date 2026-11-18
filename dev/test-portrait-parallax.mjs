@@ -10,7 +10,8 @@ import {
 } from "../scripts/depth/depth-index.mjs";
 import {
   parsePosition, objectFitRect, intersectRect, placementFor, panelPixels, lookFromPointer, settled, portraitView,
-  effectAmount, portraitTextureSide, createFrameGuard, sameImage
+  effectAmount, portraitTextureSide, createFrameGuard, sameImage, cssBoxFor, rectsMatch, OVERLAY_STYLE, cropForLook,
+  overlayOpacity, FADE_AT, PORTRAIT_TEXTURE_CAP
 } from "../scripts/parallax/portrait-core.mjs";
 
 let passed = 0;
@@ -322,12 +323,78 @@ await test("portraitView: seeded from the type, no sway / dust / vignette; light
   near(effectAmount(0.6, { x: 3, y: 4 }), 0.6);
 });
 
-await test("portraitTextureSide: ~1.5x device pixels, 256..1024", () => {
-  assert.equal(portraitTextureSide(200, 200, 1), 320);
-  assert.equal(portraitTextureSide(200, 300, 2), 960);
-  assert.equal(portraitTextureSide(1000, 1000, 2), 1024);
-  assert.equal(portraitTextureSide(20, 20, 1), 256);
-  assert.equal(portraitTextureSide(0, 0, 1), 768);
+await test("W6-Q portraitTextureSide: natural size, capped by MAX_TEXTURE_SIZE and 4096 only", () => {
+  assert.equal(PORTRAIT_TEXTURE_CAP, 4096);
+  assert.equal(portraitTextureSide(941, 1672), 1672, "the owner's 941x1672 picture is NOT downscaled (was 768)");
+  assert.equal(portraitTextureSide(941, 1672, 16384), 1672);
+  assert.equal(portraitTextureSide(6000, 3000), 4096);
+  assert.equal(portraitTextureSide(6000, 3000, 2048), 2048, "GPU limit wins");
+  assert.equal(portraitTextureSide(200, 120), 200, "small pictures are never upscaled");
+  assert.equal(portraitTextureSide(0, 0, 8192), 4096, "unknown natural size = cap (loader downscales only above it)");
+  assert.equal(portraitTextureSide(0, 0, 0), 4096);
+});
+
+await test("W6-Q cssBoxFor: absolute box over a screen rect, any containing block / scale / scroll / border", () => {
+  const v = { x: 437, y: 165, w: 373, h: 507 };
+  // plain parent at (100, 50), border 3, no scale
+  const plain = { rect: { left: 100, top: 50, width: 600, height: 800 }, offsetWidth: 600, offsetHeight: 800, clientLeft: 3, clientTop: 3, scrollLeft: 0, scrollTop: 0 };
+  let c = cssBoxFor(v, plain);
+  near(c.left, 334); near(c.top, 112); near(c.width, 373); near(c.height, 507);
+  // the canvas' own screen rect = parent rect + border + left/top (what the browser does) -> equals v
+  const screen = (c, P, sx = 1, sy = 1) => ({ x: P.rect.left + (P.clientLeft + c.left - P.scrollLeft) * sx, y: P.rect.top + (P.clientTop + c.top - P.scrollTop) * sy, w: c.width * sx, h: c.height * sy });
+  assert.ok(rectsMatch(screen(c, plain), v, 1e-9));
+  // scrolled parent (the content scrolled up by 490 px)
+  const scrolled = { ...plain, scrollTop: 490 };
+  c = cssBoxFor(v, scrolled);
+  assert.ok(rectsMatch(screen(c, scrolled), v, 1e-9));
+  near(c.top, 602);
+  // scaled ancestor (window scaled 0.8: rect is 0.8 x offset size)
+  const scaled = { rect: { left: 10, top: 20, width: 480, height: 640 }, offsetWidth: 600, offsetHeight: 800, clientLeft: 0, clientTop: 0, scrollLeft: 0, scrollTop: 0 };
+  c = cssBoxFor(v, scaled);
+  near(c.width, 373 / 0.8); near(c.height, 507 / 0.8);
+  assert.ok(rectsMatch(screen(c, scaled, 0.8, 0.8), v, 1e-9));
+  // hidden parent / missing -> null (no placement while the tab is display:none)
+  assert.equal(cssBoxFor(v, { ...plain, offsetWidth: 0, rect: { left: 0, top: 0, width: 0, height: 0 } }), null);
+  assert.equal(cssBoxFor(v, null), null);
+  assert.equal(cssBoxFor(null, plain), null);
+});
+
+await test("W6-Q rectsMatch: 1 px tolerance on every edge, DOMRect-like or {x,y,w,h}", () => {
+  assert.ok(rectsMatch({ left: 437.4, top: 165, width: 373, height: 507.6 }, { x: 437, y: 165, w: 373, h: 507 }));
+  assert.ok(!rectsMatch({ left: 449, top: 656, width: 282, height: 474 }, { x: 437, y: 165, w: 373, h: 507 }), "the owner's broken rects");
+  assert.ok(!rectsMatch({ x: 437, y: 165, w: 375, h: 507 }, { x: 437, y: 165, w: 373, h: 507 }));
+  assert.ok(!rectsMatch(null, { x: 0, y: 0, w: 1, h: 1 }));
+});
+
+await test("W6-Q overlay style is complete and set inline (never relies on the stylesheet)", () => {
+  assert.equal(OVERLAY_STYLE.position, "absolute");
+  assert.equal(OVERLAY_STYLE["pointer-events"], "none");
+  for (const k of ["display", "margin", "transform", "opacity", "filter", "mix-blend-mode", "max-width", "z-index"]) assert.ok(k in OVERLAY_STYLE, k);
+  assert.ok(Object.isFrozen(OVERLAY_STYLE));
+  const src = readFileSync(new URL("../scripts/parallax/portrait.mjs", import.meta.url), "utf8");
+  assert.match(src, /OVERLAY_STYLE\)\) this\.canvas\.style\.setProperty\(k, val, "important"\)/);
+  assert.match(src, /cssBoxFor\(p\.visible/);
+});
+
+await test("W6-Q cropForLook: no overscan at rest (1:1 with the <img>), full margin at full tilt, always covers the shift", () => {
+  const full = { x: 0.04, y: 0.02 };
+  assert.deepEqual(cropForLook(full, { x: 0, y: 0 }), { x: 0, y: 0 });
+  rectNear({ ...cropForLook(full, { x: 1, y: 0 }), w: 0, h: 0 }, { x: 0.04, y: 0.02, w: 0, h: 0 });
+  rectNear({ ...cropForLook(full, { x: 0.3, y: 0.4 }), w: 0, h: 0 }, { x: 0.02, y: 0.01, w: 0, h: 0 });
+  rectNear({ ...cropForLook(full, { x: 3, y: 4 }), w: 0, h: 0 }, { x: 0.04, y: 0.02, w: 0, h: 0 }, 1e-9);
+  // the shift is linear in the look: margin(look) / shift(look) is constant, so samples stay inside at every tilt
+  for (const m of [0.05, 0.2, 0.5, 0.9]) near(cropForLook(full, { x: m, y: 0 }).x / m, 0.04, 1e-12);
+});
+
+await test("W6-Q overlayOpacity: 0 at rest (plain <img>), fades in over the first FADE_AT of tilt, 1 with breathing / dust", () => {
+  assert.equal(overlayOpacity({ x: 0, y: 0 }), 0);
+  assert.equal(overlayOpacity({ x: 0.00005, y: 0 }), 0);
+  near(overlayOpacity({ x: FADE_AT / 2, y: 0 }), 0.5);
+  assert.equal(overlayOpacity({ x: 0.5, y: 0.5 }), 1);
+  assert.equal(overlayOpacity({ x: 0, y: 0 }, true), 1);
+  // monotone in the tilt
+  let last = -1;
+  for (let i = 0; i <= 20; i++) { const o = overlayOpacity({ x: i / 200, y: 0 }); assert.ok(o >= last); last = o; }
 });
 
 await test("frame guard: warm-up, ok at 60 fps, bad on a sustained low rate or heavy draws, stalls ignored", () => {

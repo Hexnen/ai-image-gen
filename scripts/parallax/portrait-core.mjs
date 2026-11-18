@@ -77,6 +77,43 @@ export function placementFor({ content, natW, natH, fit = "fill", position = "50
   return { drawn, visible, panel };
 }
 
+/**
+ * W6-Q: CSS left / top / width / height (px, in the containing block's own units) that put an absolutely positioned
+ * element exactly over the screen rect `visible`, given its containing block (`parent` = the element's offsetParent:
+ * `rect` = its getBoundingClientRect, its offset size, border (clientLeft / clientTop) and scroll offsets). Handles a
+ * scaled ancestor (rect / offset size). null when the parent is missing or has no size (hidden).
+ */
+export function cssBoxFor(visible, parent) {
+  if (!visible || !parent?.rect) return null;
+  const o = parent.rect;
+  if (!(parent.offsetWidth > 0 && parent.offsetHeight > 0 && o.width > 0 && o.height > 0)) return null;
+  const sx = o.width / parent.offsetWidth, sy = o.height / parent.offsetHeight;
+  return {
+    left: (visible.x - o.left) / sx - (parent.clientLeft || 0) + (parent.scrollLeft || 0),
+    top: (visible.y - o.top) / sy - (parent.clientTop || 0) + (parent.scrollTop || 0),
+    width: visible.w / sx, height: visible.h / sy
+  };
+}
+
+/** W6-Q: does a screen rect `got` sit on `want` (both {x, y, w, h} or DOMRect-like) within `tol` px on every edge? */
+export function rectsMatch(got, want, tol = 1) {
+  if (!got || !want) return false;
+  const g = { x: got.x ?? got.left, y: got.y ?? got.top, w: got.w ?? got.width, h: got.h ?? got.height };
+  const w = { x: want.x ?? want.left, y: want.y ?? want.top, w: want.w ?? want.width, h: want.h ?? want.height };
+  return Math.abs(g.x - w.x) <= tol && Math.abs(g.y - w.y) <= tol && Math.abs(g.x + g.w - (w.x + w.w)) <= tol && Math.abs(g.y + g.h - (w.y + w.h)) <= tol;
+}
+
+/**
+ * W6-Q: the overlay canvas' positioning, set INLINE with `important` from JS so the placement never depends on our
+ * stylesheet being loaded (a cached / stale CSS on a remote server left the canvas `position: static`, in the flow
+ * below the picture) nor on another stylesheet's rules for canvases.
+ */
+export const OVERLAY_STYLE = Object.freeze({
+  position: "absolute", display: "block", margin: "0", padding: "0", border: "0", "box-sizing": "content-box",
+  "z-index": "1", "pointer-events": "none", "max-width": "none", "max-height": "none", "min-width": "0", "min-height": "0",
+  transform: "none", opacity: "1", filter: "none", "mix-blend-mode": "normal", right: "auto", bottom: "auto", float: "none"
+});
+
 /** Canvas pixels of the panel rect (clamped to the canvas): the only part copied to the sheet (letterbox stays clear). */
 export function panelPixels(panel, w, h) {
   const x0 = clamp(Math.floor(panel.x * w), 0, w), y0 = clamp(Math.floor(panel.y * h), 0, h);
@@ -116,11 +153,41 @@ export function portraitView(typeParallax) {
  */
 export const effectAmount = (base, look) => base * clamp(Math.hypot(look.x, look.y), 0, 1);
 
-/** Longest side of the portrait texture: about 1.5 × its device-pixel size on the sheet, 256..1024. */
-export function portraitTextureSide(cssW, cssH, dpr = 1) {
-  const px = Math.max(cssW || 0, cssH || 0) * Math.min(Math.max(1, dpr || 1), 2);
-  if (!(px > 0)) return 768;
-  return clamp(Math.ceil((px * 1.5) / 64) * 64, 256, 1024);
+/**
+ * W6-Q: longest side of the portrait texture = the picture's NATURAL size (an <img> / Tokenizer-style canvas samples the
+ * full-resolution source; a pre-downscaled texture made the overlay softer than the plain picture), capped only by the
+ * GPU's MAX_TEXTURE_SIZE and a memory limit (4096). 0 = no downscale needed (unknown natural size: the loader keeps
+ * the source size). The old rule (1.5 × displayed px, 256..1024, 768 when the <img> was hidden) is gone: the size no
+ * longer depends on the <img> being visible when the view loads.
+ */
+export const PORTRAIT_TEXTURE_CAP = 4096;
+export function portraitTextureSide(natW, natH, maxTexture = PORTRAIT_TEXTURE_CAP) {
+  const cap = Math.min(PORTRAIT_TEXTURE_CAP, maxTexture > 0 ? maxTexture : PORTRAIT_TEXTURE_CAP);
+  const n = Math.max(natW || 0, natH || 0);
+  if (!(n > 0)) return cap;
+  return Math.min(n, cap);
+}
+
+/**
+ * W6-Q: overscan margin for the current tilt: the full margin (overscanFor) scales with |look| (the shift is linear
+ * in the look, so the margin always covers it), so an untilted portrait maps the texture 1:1 onto the picture's box,
+ * exactly like the plain <img>.
+ */
+export function cropForLook(crop, look) {
+  const k = clamp(Math.hypot(look?.x || 0, look?.y || 0), 0, 1);
+  return { x: (crop?.x || 0) * k, y: (crop?.y || 0) * k };
+}
+
+/**
+ * W6-Q: opacity of the overlay canvas. At rest (no tilt) the plain <img> shows and the canvas is transparent and not
+ * drawn; it fades in over the first `fadeAt` of tilt (a few frames of easing) and out the same way. Breathing / dust
+ * (an always-animating extra the viewer chose) keep it fully shown.
+ */
+export const FADE_AT = 0.06;
+export function overlayOpacity(look, animates = false, fadeAt = FADE_AT) {
+  if (animates) return 1;
+  const m = Math.hypot(look?.x || 0, look?.y || 0);
+  return m <= 1e-4 ? 0 : clamp(m / fadeAt, 0, 1);
 }
 
 /**

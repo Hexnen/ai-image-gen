@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  FX_DEFAULTS, FX_RANGES, FX_KEYS, fxSettingKey, cleanFxStrength, normalizeFx, effectiveFx, breathLook, withBreath,
+  FX_DEFAULTS, FX_RANGES, FX_KEYS, FX_DEVICE_OFF_KEY, fxSettingKey, cleanFxStrength, normalizeFx, effectiveFx, breathLook, withBreath,
   phaseOf, pickAnimated, inView, dustScale, BREATH_MAX, IDLE_FRAME_MS, MAX_ANIMATED_TOKENS, GLSL_FX
 } from "../scripts/parallax/parallax-fx.mjs";
 import { TOKEN_FS } from "../scripts/parallax/token-core.mjs";
@@ -18,21 +18,35 @@ const test = async (name, fn) => {
 };
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 
-await test("defaults: portraits light on / breathing + dust off; tokens everything off", () => {
+await test("W6-Q defaults: breathing, light and dust ON for portraits and tokens; strengths unchanged; device opt-out", () => {
   const p = normalizeFx(undefined, "portrait"), t = normalizeFx(null, "token");
-  assert.deepEqual([p.breath, p.light, p.dust], [false, true, false]);
-  assert.equal(p.lightStrength, 1, "portrait light multiplier 1 = the type's own light / rim (as before W6-P)");
-  assert.deepEqual([t.breath, t.light, t.dust], [false, false, false]);
-  assert.equal(effectiveFx(t).animates, false);
-  assert.equal(effectiveFx(p).animates, false, "portrait defaults need no frame loop at rest (as before)");
+  assert.deepEqual([p.breath, p.light, p.dust], [true, true, true]);
+  assert.deepEqual([t.breath, t.light, t.dust], [true, true, true]);
+  assert.deepEqual([p.breathStrength, p.lightStrength, p.dustStrength], [0.5, 1, 0.4], "portrait strengths as in W6-P");
+  assert.deepEqual([t.breathStrength, t.lightStrength, t.dustStrength], [0.5, 0.6, 0.4], "token strengths as in W6-P");
+  assert.equal(effectiveFx(t).animates, true);
+  assert.equal(effectiveFx(p).animates, true);
+  // reduced motion still forces breathing + dust off (light stays); the device opt-out turns all three off
+  const rm = effectiveFx(p, { reducedMotion: true });
+  assert.deepEqual([rm.breath, rm.light, rm.dust, rm.animates], [false, true, false, false]);
+  for (const x of [p, t]) {
+    const d = effectiveFx(x, { deviceOff: true });
+    assert.deepEqual([d.breath, d.light, d.dust, d.animates], [false, false, false, false]);
+  }
+  // a saved false (a client / world that chose off) is kept: defaults only fill missing values, no migration
+  assert.equal(normalizeFx({ breath: false, dust: false, light: false }, "token").breath, false);
+  assert.equal(FX_DEVICE_OFF_KEY, "parallaxFxDeviceOff");
+  assert.doesNotMatch(FX_DEVICE_OFF_KEY, /\./);
   assert.deepEqual(Object.keys(p).sort(), [...FX_KEYS].sort());
 });
 
 await test("normalizeFx: booleans only from booleans, strengths clamped and snapped, junk = default, idempotent", () => {
   const n = normalizeFx({ breath: "yes", light: 0, dust: true, breathStrength: 7, lightStrength: "0.333", dustStrength: NaN, junk: 1 }, "token");
-  assert.equal(n.breath, false);
-  assert.equal(n.light, false);
+  assert.equal(n.breath, FX_DEFAULTS.token.breath, "a non-boolean = the default");
+  assert.equal(n.light, FX_DEFAULTS.token.light, "a non-boolean = the default");
   assert.equal(n.dust, true);
+  const off = normalizeFx({ breath: false, light: false, dust: false }, "portrait");
+  assert.deepEqual([off.breath, off.light, off.dust], [false, false, false], "saved booleans win over the defaults");
   assert.equal(n.breathStrength, 1);
   assert.equal(n.lightStrength, 0.35);
   assert.equal(n.dustStrength, FX_DEFAULTS.token.dustStrength);
@@ -211,15 +225,19 @@ await test("GLSL token: extras only recolour inside the token, alpha out = alpha
   assert.ok(TOKEN_FS.indexOf("if (orig.a <= 0.0") < i1);
 });
 
-await test("wiring: client settings next to the parallax ones, reduced motion, cap, idle frame rate", () => {
+await test("wiring: W6-Q world settings (GM) + one device opt-out next to the parallax ones, reduced motion, cap, idle frame rate", () => {
   const portrait = read("scripts/parallax/portrait.mjs"), token = read("scripts/parallax/token-parallax.mjs");
   assert.match(portrait, /registerFxSettings\("portrait"/);
-  assert.match(portrait, /scope: "client", config: true, type, onChange/);
+  assert.match(portrait, /scope: "world", config: true, restricted: true, type, onChange/);
+  assert.doesNotMatch(portrait, /fxSettingKey\(target, k\), \{[^}]*scope: "client"/);
+  assert.match(portrait, /register\(MODULE_ID, FX_DEVICE_OFF_KEY, \{[\s\S]{0,200}scope: "client", config: true/);
+  assert.match(portrait, /deviceOff: fxDeviceOff\(\)/);
+  assert.match(token, /deviceOff: fxDeviceOff\(\)/);
   assert.match(token, /registerFxSettings\("token"/);
   assert.ok(token.indexOf('registerFxSettings("token"') > token.indexOf("STRENGTH_SETTING, {"), "after the token strength setting");
   assert.ok(portrait.indexOf('registerFxSettings("portrait"') > portrait.indexOf("game.settings.register(MODULE_ID, SETTING"), "after the portrait switch");
   assert.match(portrait, /effectiveFx\(normalizeFx\(raw, "portrait"\), \{ reducedMotion:/);
-  assert.match(token, /effectiveFx\(normalizeFx\(raw, "token"\), \{ reducedMotion: reducedMotion\(\) \}\)/);
+  assert.match(token, /effectiveFx\(normalizeFx\(raw, "token"\), \{ reducedMotion: reducedMotion\(\), deviceOff: fxDeviceOff\(\) \}\)/);
   assert.match(portrait, /if \(idle && t - this\.lastDrawT < IDLE_FRAME_MS\)/, "portrait idle draws capped");
   assert.match(token, /if \(now - lastIdleT >= IDLE_FRAME_MS\) \{ lastIdleT = now; fxTimeMs = now; \}/, "token idle clock capped");
   assert.match(token, /cap: MAX_ANIMATED_TOKENS/);
@@ -241,6 +259,11 @@ await test("lang: every extra has name + hint in en and pl; token hints state th
     for (const T of ["Portrait", "Token"]) for (const k of FX_KEYS) for (const s of ["Name", "Hint"]) {
       const key = `AIIMG.ParallaxFx.${T}.${k[0].toUpperCase()}${k.slice(1)}.${s}`;
       assert.ok(typeof j[key] === "string" && j[key].length > 3, `${l}: ${key}`);
+    }
+    for (const s of ["Name", "Hint"]) assert.ok(typeof j[`AIIMG.ParallaxFx.DeviceOff.${s}`] === "string", `${l}: DeviceOff.${s}`);
+    for (const T of ["Portrait", "Token"]) for (const k of FX_KEYS) {
+      const h = j[`AIIMG.ParallaxFx.${T}.${k[0].toUpperCase()}${k.slice(1)}.Hint`];
+      assert.match(h, l === "en" ? /Set by the GM for all players\./ : /Ustawia MG dla wszystkich graczy\./, `${l}: ${T}.${k} hint says the GM sets it`);
     }
     for (const k of ["Breath", "Dust"]) {
       const h = j[`AIIMG.ParallaxFx.Token.${k}.Hint`];

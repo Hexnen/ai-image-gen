@@ -137,6 +137,9 @@ export class ParallaxRenderer {
     this.#build();
   }
 
+  /** W6-Q: the GPU's largest texture side (portraits upload at natural size up to this). */
+  get maxTextureSize() { try { return this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE) || 0; } catch { return 0; } }
+
   /** The window's portrait texture (key "main"). */
   get image() { return this.images.get("main") ?? null; }
 
@@ -173,6 +176,9 @@ export class ParallaxRenderer {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, img);
     gl.generateMipmap(gl.TEXTURE_2D);
     this.#params(gl.LINEAR_MIPMAP_LINEAR);
+    // W6-Q: anisotropic filtering where available (sharper when the picture is minified unevenly)
+    const an = gl.getExtension("EXT_texture_filter_anisotropic");
+    if (an) gl.texParameterf(gl.TEXTURE_2D, an.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(an.MAX_TEXTURE_MAX_ANISOTROPY_EXT) || 1));
     this.images.set(key, { tex, w: img.width, h: img.height });
   }
 

@@ -23,23 +23,29 @@ async function rgbaOf(blob) {
   return { rgba: data, w: c.width, h: c.height };
 }
 
-/** Portrait → {bitmap, w, h}. `crop` as in resolveCrop (pixels / fractions / "top-square"). */
-export async function loadPortrait(path, { crop = null, maxSide = 0 } = {}) {
+/**
+ * Portrait → {bitmap, w, h}. `crop` as in resolveCrop (pixels / fractions / "top-square").
+ * W6-Q: `colorManaged` = decode like an <img> does (embedded ICC profile / gAMA converted to sRGB); without it the raw
+ * bytes are used (a Display-P3 or Adobe-RGB picture then looks washed out next to the same <img>). Sheet portraits use
+ * it; the W6-L window keeps its old decoding.
+ */
+export async function loadPortrait(path, { crop = null, maxSide = 0, colorManaged = false } = {}) {
   const { bytes, type } = await fetchBytes(path);
   const blob = new Blob([bytes], { type: type || "image/png" });
-  let bmp = await createImageBitmap(blob, { premultiplyAlpha: "none", colorSpaceConversion: "none" });
+  const csc = colorManaged ? "default" : "none";
+  let bmp = await createImageBitmap(blob, { premultiplyAlpha: "none", colorSpaceConversion: csc });
   const natural = { w: bmp.width, h: bmp.height };
   const rect = resolveCrop(crop, bmp.width, bmp.height);
   if (rect) {
     const full = bmp;
-    bmp = await createImageBitmap(full, rect[0], rect[1], rect[2], rect[3], { premultiplyAlpha: "none", colorSpaceConversion: "none" });
+    bmp = await createImageBitmap(full, rect[0], rect[1], rect[2], rect[3], { premultiplyAlpha: "none", colorSpaceConversion: csc });
     full.close?.();
   }
   // W6-N: a sheet portrait shown at ~200 px does not need a 2048 px texture
   if (maxSide > 0 && Math.max(bmp.width, bmp.height) > maxSide) {
     const k = maxSide / Math.max(bmp.width, bmp.height);
     const full = bmp;
-    bmp = await createImageBitmap(full, { resizeWidth: Math.max(1, Math.round(full.width * k)), resizeHeight: Math.max(1, Math.round(full.height * k)), resizeQuality: "high", premultiplyAlpha: "none", colorSpaceConversion: "none" });
+    bmp = await createImageBitmap(full, { resizeWidth: Math.max(1, Math.round(full.width * k)), resizeHeight: Math.max(1, Math.round(full.height * k)), resizeQuality: "high", premultiplyAlpha: "none", colorSpaceConversion: csc });
     full.close?.();
   }
   return { bitmap: bmp, w: bmp.width, h: bmp.height, natural };

@@ -137,16 +137,17 @@ await test("W5-F: API keys and pre-warm are client settings with config:false (n
     assert.equal(cfg.scope, "client", k);
     assert.equal(cfg.config, false, k);
   }
-  // nothing else client-scoped is shown in the settings window either, except the W6-P parallax extras (breathing /
-  // light / dust: a viewer's own preference for their own screen, meant to be visible to players)
-  const fxShown = /^moinens-ai-gen\.(portrait|token)Fx(Breath|Light|Dust)(Strength)?$/;
-  let fxCount = 0;
+  // nothing else client-scoped is shown in the settings window either, except ONE: the W6-Q per-device opt-out of
+  // the parallax extras (the 12 extras themselves are world settings set by the GM since W6-Q)
+  const shownOk = new Set(["moinens-ai-gen.parallaxFxDeviceOff"]);
+  let shown = 0;
   for (const [id, cfg] of game.settings.settings) {
+    if (/^moinens-ai-gen\.(portrait|token)Fx(Breath|Light|Dust)(Strength)?$/.test(id)) { assert.equal(cfg.scope, "world", id); assert.equal(cfg.restricted, true, id); continue; }
     if (cfg.scope !== "client") continue;
-    if (fxShown.test(id)) { fxCount++; assert.equal(cfg.config, true, id); continue; }
+    if (shownOk.has(id)) { shown++; assert.equal(cfg.config, true, id); continue; }
     assert.notEqual(cfg.config, true, id);
   }
-  assert.equal(fxCount, 12, "the 12 W6-P parallax extras");
+  assert.equal(shown, 1, "the one device opt-out");
 });
 
 await test("every copied key is registered in the new namespace", () => {

@@ -22,12 +22,12 @@
 // - GM: "Generate depth" in the sheet's header controls opens the depth window on the portrait (its own estimate +
 //   confirmation before every paid call). The finished map lands in the index and every client's open sheet picks it up.
 import { MODULE_ID } from "../constants.mjs";
-import { FX_DEFAULTS, FX_KEYS, FX_RANGES, IDLE_FRAME_MS, fxSettingKey, normalizeFx, effectiveFx, breathLook } from "./parallax-fx.mjs";
+import { FX_DEFAULTS, FX_KEYS, FX_RANGES, FX_DEVICE_OFF_KEY, IDLE_FRAME_MS, fxSettingKey, normalizeFx, effectiveFx, breathLook } from "./parallax-fx.mjs";
 import { depthIndex, normalizeImagePath } from "../depth/depth-index.mjs";
 import { offsetFor, overscanFor, stepsFor, easeToward, backingSize, downscaleMap, conditionDepth, normalizeView } from "./parallax-core.mjs";
 import {
   placementFor, panelPixels, lookFromPointer, settled, portraitView, effectAmount, portraitTextureSide,
-  createFrameGuard, sameImage
+  createFrameGuard, sameImage, cssBoxFor, OVERLAY_STYLE, cropForLook, overlayOpacity
 } from "./portrait-core.mjs";
 
 export const SETTING = "portraitParallax";
@@ -45,12 +45,17 @@ let seq = 0;
 const guard = createFrameGuard();
 let fxNow = null;           // W6-P: effective extras (breathing / light / dust) on this client
 
-/** W6-P: the viewer's extras for portraits (client settings), after the reduced-motion rule. */
+/** W6-Q: this device opted out of breathing / light / dust (the one client setting). */
+export function fxDeviceOff() {
+  try { return game.settings.get(MODULE_ID, FX_DEVICE_OFF_KEY) === true; } catch { return false; }
+}
+
+/** W6-P: the extras for portraits (W6-Q: world settings set by the GM), after the reduced-motion and device rules. */
 export function portraitFx() {
   if (!fxNow) {
     const raw = {};
     for (const k of FX_KEYS) { try { raw[k] = game.settings.get(MODULE_ID, fxSettingKey("portrait", k)); } catch { /* not registered */ } }
-    fxNow = effectiveFx(normalizeFx(raw, "portrait"), { reducedMotion: globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false });
+    fxNow = effectiveFx(normalizeFx(raw, "portrait"), { reducedMotion: globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false, deviceOff: fxDeviceOff() });
   }
   return fxNow;
 }
@@ -210,6 +215,8 @@ class PortraitView {
     this.canvas = document.createElement("canvas");
     this.canvas.className = "aiimg-portrait-plx";
     this.canvas.setAttribute("aria-hidden", "true");
+    // W6-Q: positioning inline (+ important): never depends on styles/parallax.css being loaded / current
+    for (const [k, val] of Object.entries(OVERLAY_STYLE)) this.canvas.style.setProperty(k, val, "important");
     this.canvas.style.visibility = "hidden";
     this.ctx = this.canvas.getContext("2d");
     this.bitmap = null;
@@ -228,19 +235,25 @@ class PortraitView {
     this.style = null;
     this.clipEls = [];
     this.unbind = [];
+    this.scrollUnbind = [];
+    this.ro = null;
+    this.roParent = null;      // the offsetParent the ResizeObserver watches (found only once the picture is shown)
+    this.settleTimer = 0;
     this.destroyed = false;
     this.draws = 0;
   }
 
   /** Attach to (a new) <img> of the sheet. */
   bind(img, root) {
-    if (this.img === img && this.root === root && this.canvas.isConnected) return;
+    if (this.img === img && this.root === root && this.canvas.isConnected) { this.relayout(); return; }
     this.#unbindAll();
     this.img = img;
     this.root = root;
     img.after(this.canvas);
     this.#readStyle();
-    const dirty = () => { this.layoutUntil = performance.now() + 450; this.dirty = true; kick(); };
+    // W6-Q: every layout trigger also re-places the canvas right away (no frame needed: a hidden / throttled page has
+    // no animation frames) and once more when transitions are over
+    const dirty = () => this.relayout();
     const on = (el, type, fn, opt) => { el.addEventListener(type, fn, opt); this.unbind.push(() => el.removeEventListener(type, fn, opt)); };
     on(root, "pointermove", (ev) => {
       if (!this.place) return;
@@ -252,25 +265,70 @@ class PortraitView {
     on(img, "load", () => { this.#readStyle(); dirty(); });
     on(root, "transitionend", dirty, { passive: true });
     on(root, "animationend", dirty, { passive: true });
+    on(globalThis, "resize", dirty, { passive: true });
+    const appEl = this.app.element instanceof HTMLElement ? this.app.element : root;
     if (typeof ResizeObserver === "function") {
       const ro = new ResizeObserver(() => { this.#readStyle(); dirty(); });
-      for (const el of new Set([img, img.parentElement, this.canvas.offsetParent].filter(Boolean))) ro.observe(el);
-      this.unbind.push(() => ro.disconnect());
+      this.ro = ro;
+      for (const el of new Set([img, img.parentElement, appEl].filter(Boolean))) ro.observe(el);
+      this.unbind.push(() => { ro.disconnect(); if (this.ro === ro) { this.ro = null; this.roParent = null; } });
     }
     if (typeof IntersectionObserver === "function") {
-      const io = new IntersectionObserver((ents) => { this.visible = ents.some((e) => e.isIntersecting); if (this.visible) dirty(); });
+      // a tab switch (display: none <-> shown) lands here in both directions
+      const io = new IntersectionObserver((ents) => {
+        const last = ents[ents.length - 1];
+        this.visible = !!last?.isIntersecting;
+        if (this.visible) dirty();
+        else if (!(last?.boundingClientRect?.width > 1)) this.#hide(); // hidden (no box), not just scrolled away
+      });
       io.observe(img);
       this.unbind.push(() => io.disconnect());
     }
-    // the window moving / scaling (style attribute of the app element), other modules' CSS variables on it
-    const appEl = this.app.element instanceof HTMLElement ? this.app.element : root;
+    // the window moving / scaling / minimising (style + class of the app element), other modules' CSS variables on it
     const mo = new MutationObserver(dirty);
     mo.observe(appEl, { attributes: true, attributeFilter: ["style", "class"] });
     this.unbind.push(() => mo.disconnect());
-    // scrolling containers move the picture without resizing anything
-    for (const el of this.clipEls) on(el, "scroll", dirty, { passive: true });
+    // tab switches toggle classes inside the sheet (the picture's own box may keep its size)
+    const mo2 = new MutationObserver(dirty);
+    mo2.observe(root, { attributes: true, attributeFilter: ["class", "hidden"], subtree: true });
+    this.unbind.push(() => mo2.disconnect());
+    // the picture's own style / class / src (object-fit, border, a new image) may change without resizing its box
+    const mo3 = new MutationObserver(() => { this.#readStyle(); dirty(); });
+    mo3.observe(img, { attributes: true, attributeFilter: ["style", "class", "src"] });
+    this.unbind.push(() => mo3.disconnect());
+    this.unbind.push(() => { clearTimeout(this.settleTimer); this.settleTimer = 0; });
     dirty();
   }
+
+  /**
+   * W6-Q: layout changed: re-place the canvas now (synchronously, in the observer / event that saw the change), mark it
+   * for a redraw, run the loop briefly, and re-place once more after transitions (window minimise / restore, fades).
+   */
+  relayout() {
+    if (this.destroyed) return;
+    this.layoutUntil = performance.now() + 450;
+    this.dirty = true;
+    this.reposition();
+    kick();
+    clearTimeout(this.settleTimer);
+    this.settleTimer = setTimeout(() => { this.settleTimer = 0; if (!this.destroyed) { this.reposition(); this.dirty = true; kick(); } }, 500);
+  }
+
+  /** W6-Q: place / size the canvas over the picture without drawing (a hidden picture = canvas hidden, nothing drawn). */
+  reposition() {
+    if (this.destroyed) return null;
+    const p = this.#placement();
+    if (!p) { this.place = null; this.#hide(); return null; }
+    const before = [this.canvas.width, this.canvas.height];
+    const b = this.#applyPlacement(p);
+    if (!b) { this.place = null; this.#hide(); return null; }
+    this.place = p;
+    // a changed backing store is cleared until the next draw: keep it hidden (the plain <img> shows) till then
+    if (before[0] !== this.canvas.width || before[1] !== this.canvas.height) { this.dirty = true; this.#hide(); }
+    return p;
+  }
+
+  #hide() { this.canvas.style.visibility = "hidden"; }
 
   #readStyle() {
     const img = this.img;
@@ -290,10 +348,14 @@ class PortraitView {
       if (el === this.root) break;
     }
     this.clipEls = clips;
+    // scrolling containers move the picture without resizing anything (re-bound when the clipping ancestors change)
+    for (const f of this.scrollUnbind.splice(0)) f();
+    const fn = () => this.relayout();
+    for (const el of clips) { el.addEventListener("scroll", fn, { passive: true }); this.scrollUnbind.push(() => el.removeEventListener("scroll", fn)); }
   }
 
   #unbindAll() {
-    for (const f of this.unbind.splice(0)) { try { f(); } catch { /* gone */ } }
+    for (const f of [...this.unbind.splice(0), ...this.scrollUnbind.splice(0)]) { try { f(); } catch { /* gone */ } }
   }
 
   /** Load the picture and its map, condition, upload. */
@@ -302,8 +364,9 @@ class PortraitView {
       const L = await import("./parallax-load.mjs");
       const vp = await typeParallaxOf(this.doc);
       this.view = portraitView(vp);
-      const side = portraitTextureSide(this.img?.offsetWidth, this.img?.offsetHeight, globalThis.devicePixelRatio ?? 1);
-      const p = await L.loadPortrait(this.imagePath, { maxSide: side });
+      // W6-Q: natural resolution (capped by MAX_TEXTURE_SIZE / 4096 only), not a copy sized from the <img> on screen
+      const side = portraitTextureSide(0, 0, host?.gl?.maxTextureSize ?? 0);
+      const p = await L.loadPortrait(this.imagePath, { maxSide: side, colorManaged: true });
       if (this.destroyed) { p.bitmap.close?.(); return; }
       this.bitmap = p.bitmap;
       this.tex = { w: p.w, h: p.h, natural: p.natural };
@@ -365,20 +428,22 @@ class PortraitView {
 
   #applyPlacement(p) {
     const cv = this.canvas;
+    if (cv.style.getPropertyValue("position") !== "absolute") cv.style.setProperty("position", "absolute", "important");
     const op = cv.offsetParent;
     if (!op) return null;
-    const o = op.getBoundingClientRect();
-    const sx = o.width / Math.max(1, op.offsetWidth), sy = o.height / Math.max(1, op.offsetHeight);
-    const css = {
-      left: (p.visible.x - o.left) / sx - op.clientLeft + op.scrollLeft,
-      top: (p.visible.y - o.top) / sy - op.clientTop + op.scrollTop,
-      width: p.visible.w / sx, height: p.visible.h / sy
-    };
+    // W6-Q: the containing block is known only while the picture is shown: watch its size from then on
+    if (this.ro && this.roParent !== op) { if (this.roParent) this.ro.unobserve(this.roParent); this.ro.observe(op); this.roParent = op; }
+    const css = cssBoxFor(p.visible, {
+      rect: op.getBoundingClientRect(), offsetWidth: op.offsetWidth, offsetHeight: op.offsetHeight,
+      clientLeft: op.clientLeft, clientTop: op.clientTop, scrollLeft: op.scrollLeft, scrollTop: op.scrollTop
+    });
+    if (!css) return null;
     const s = cv.style;
-    s.left = `${css.left}px`; s.top = `${css.top}px`; s.width = `${css.width}px`; s.height = `${css.height}px`;
+    s.setProperty("left", `${css.left}px`, "important"); s.setProperty("top", `${css.top}px`, "important");
+    s.setProperty("width", `${css.width}px`, "important"); s.setProperty("height", `${css.height}px`, "important");
     const whole = Math.abs(p.visible.w - p.content.w) < 1 && Math.abs(p.visible.h - p.content.h) < 1;
-    s.borderRadius = whole ? this.style.radius : "";
-    const b = backingSize(p.visible.w, p.visible.h, globalThis.devicePixelRatio ?? 1, { cap: 2, maxPixels: 1.5e6 });
+    s.setProperty("border-radius", whole ? this.style.radius : "0", "important");
+    const b = backingSize(p.visible.w, p.visible.h, globalThis.devicePixelRatio ?? 1, { cap: 4, maxPixels: 8.3e6 });
     if (cv.width !== b.w || cv.height !== b.h) { cv.width = b.w; cv.height = b.h; }
     return b;
   }
@@ -400,6 +465,14 @@ class PortraitView {
     // idle animation only (pointer away, no layout change, look near its breathing target): at most ~30 fps
     const idle = fx.animates && !this.inside && !layout && !this.dirty && Math.hypot(this.look.x - target.x, this.look.y - target.y) < 0.05;
     if (idle && t - this.lastDrawT < IDLE_FRAME_MS) return { busy, drew: false, idle };
+    // W6-Q: untilted (and no breathing / dust) = the plain <img> shows; the canvas is transparent and not drawn
+    if (overlayOpacity(this.look, fx.animates) <= 0) {
+      if (layout || this.dirty) this.reposition();
+      this.#hide();
+      this.drawnLook = { ...this.look };
+      this.dirty = false;
+      return { busy, drew: false };
+    }
     this.draw(t);
     this.lastDrawT = t;
     return { busy, drew: true, idle };
@@ -416,7 +489,7 @@ class PortraitView {
     const v = this.view, tw = this.tex.w, th = this.tex.h, fx = portraitFx();
     // the panel sits at the top-left of the shared canvas (the renderer's panels are y-down from the top)
     g.draw([{ key: this.depKey, image: this.imgKey, x: 0, y: 0, w: b.w, h: b.h }], {
-      off: offsetFor(this.look, v.strength, tw, th), crop: overscanFor(v.strength, v.focus, tw, th), look: this.look,
+      off: offsetFor(this.look, v.strength, tw, th), crop: cropForLook(overscanFor(v.strength, v.focus, tw, th), this.look), look: this.look,
       bg: [0, 0, 0], focus: v.focus, gamma: v.gamma, contrast: v.contrast,
       light: v.on.light && fx.light ? effectAmount(v.light * fx.lightStrength, this.look) : 0,
       rim: v.on.rim && fx.light ? effectAmount(v.rim * fx.lightStrength, this.look) : 0,
@@ -427,7 +500,10 @@ class PortraitView {
     const px = panelPixels(p.panel, b.w, b.h);
     this.ctx.clearRect(0, 0, b.w, b.h);
     if (px.w > 0 && px.h > 0) this.ctx.drawImage(hc, px.x, px.y, px.w, px.h, px.x, px.y, px.w, px.h);
-    this.canvas.style.visibility = "";
+    // W6-Q: fade in / out with the tilt (0 at rest: the plain <img> shows)
+    const op = overlayOpacity(this.look, fx.animates);
+    this.canvas.style.setProperty("opacity", String(Math.round(op * 1000) / 1000), "important");
+    this.canvas.style.visibility = op > 0 ? "" : "hidden";
     this.drawnLook = { ...this.look };
     this.dirty = false;
     this.draws++;
@@ -449,7 +525,7 @@ class PortraitView {
     return {
       actor: this.doc?.uuid, image: this.imagePath, depth: this.info.depth, format: this.info.format, status: this.status, error: this.error,
       texture: this.tex ? [this.tex.w, this.tex.h] : null, depthSize: this.src ? [this.src.w, this.src.h] : null,
-      canvas: [this.canvas.width, this.canvas.height], placed: !!this.place, visible: this.visible, inside: this.inside,
+      canvas: [this.canvas.width, this.canvas.height], placed: !!this.place, shown: this.canvas.style.visibility !== "hidden", opacity: Number(this.canvas.style.opacity || 0), visible: this.visible, inside: this.inside,
       look: { ...this.look }, draws: this.draws, bound: !!this.img?.isConnected && this.canvas.isConnected
     };
   }
@@ -565,10 +641,13 @@ export function registerPortraitSetting() {
 }
 
 /**
- * W6-P: the viewer's extras (client scope: each viewer decides what their own screen / GPU does), registered right
- * after the target's parallax settings so they sit next to them in Configure Settings. Shared with token-parallax.mjs.
+ * W6-P extras, registered right after the target's parallax settings so they sit next to them in Configure Settings.
+ * Shared with token-parallax.mjs. W6-Q: WORLD scope (the GM sets them for all players; onChange runs on every client,
+ * so open views update live), plus ONE client setting registered after the token extras: "no extras on this device".
  */
+const fxListeners = [];
 export function registerFxSettings(target, onChange) {
+  fxListeners.push(onChange);
   const D = FX_DEFAULTS[target];
   const T = target === "token" ? "Token" : "Portrait";
   for (const k of FX_KEYS) {
@@ -576,14 +655,21 @@ export function registerFxSettings(target, onChange) {
     const type = k.endsWith("Strength")
       ? new foundry.data.fields.NumberField({ initial: D[k], min: FX_RANGES[k][0], max: FX_RANGES[k][1], step: FX_RANGES[k][2], nullable: false })
       : new foundry.data.fields.BooleanField({ initial: D[k] });
-    game.settings.register(MODULE_ID, fxSettingKey(target, k), { name: `${L}.Name`, hint: `${L}.Hint`, scope: "client", config: true, type, onChange });
+    game.settings.register(MODULE_ID, fxSettingKey(target, k), { name: `${L}.Name`, hint: `${L}.Hint`, scope: "world", config: true, restricted: true, type, onChange });
+  }
+  if (target === "token" && !game.settings.settings.has(`${MODULE_ID}.${FX_DEVICE_OFF_KEY}`)) {
+    game.settings.register(MODULE_ID, FX_DEVICE_OFF_KEY, {
+      name: "AIIMG.ParallaxFx.DeviceOff.Name", hint: "AIIMG.ParallaxFx.DeviceOff.Hint", scope: "client", config: true,
+      type: new foundry.data.fields.BooleanField({ initial: false }),
+      onChange: () => { for (const f of fxListeners) { try { f(); } catch (e) { console.warn(`${MODULE_ID} | parallax extras`, e); } } }
+    });
   }
 }
 
 /** For macros / checks: `api.parallax.portraits`. */
 export const portraitApi = {
   status: () => ({
-    active: portraitParallaxActive(), setting: settingOn(), disabled, reducedMotion: reducedMotion(), fx: { ...portraitFx() },
+    active: portraitParallaxActive(), setting: settingOn(), disabled, reducedMotion: reducedMotion(), fx: { ...portraitFx() }, deviceOff: fxDeviceOff(),
     context: !!host?.gl && !host.gl.lost, running: !!host?.raf, guard: guard.state(),
     views: [...views.values()].map((v) => v.report())
   }),

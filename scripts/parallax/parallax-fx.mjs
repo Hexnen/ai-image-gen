@@ -21,9 +21,16 @@ export const FX_RANGES = Object.freeze({
  * dust off. Tokens: everything off (a token with breathing / dust keeps its filter running at rest).
  */
 export const FX_DEFAULTS = Object.freeze({
-  portrait: Object.freeze({ breath: false, breathStrength: 0.5, light: true, lightStrength: 1, dust: false, dustStrength: 0.4 }),
-  token: Object.freeze({ breath: false, breathStrength: 0.5, light: false, lightStrength: 0.6, dust: false, dustStrength: 0.4 })
+  // W6-Q (owner: "uruchom efekty"): breathing, light and dust ON by default for portraits and tokens; strengths unchanged
+  portrait: Object.freeze({ breath: true, breathStrength: 0.5, light: true, lightStrength: 1, dust: true, dustStrength: 0.4 }),
+  token: Object.freeze({ breath: true, breathStrength: 0.5, light: true, lightStrength: 0.6, dust: true, dustStrength: 0.4 })
 });
+
+/**
+ * W6-Q: the 12 extras are WORLD settings (the GM sets them for everyone). The one per-device escape hatch (client
+ * setting, default off): on = breathing, light and dust off on this device (the tilt itself stays).
+ */
+export const FX_DEVICE_OFF_KEY = "parallaxFxDeviceOff";
 
 export const FX_TARGETS = Object.freeze(["portrait", "token"]);
 export const FX_KEYS = Object.freeze(["breath", "breathStrength", "light", "lightStrength", "dust", "dustStrength"]);
@@ -55,9 +62,10 @@ export function normalizeFx(raw, target = "portrait") {
  * What actually runs: `prefers-reduced-motion: reduce` forces breathing and dust OFF (light stays, it only follows a
  * tilt the viewer made). `animates` = needs a frame loop at rest.
  */
-export function effectiveFx(fx, { reducedMotion = false } = {}) {
+export function effectiveFx(fx, { reducedMotion = false, deviceOff = false } = {}) {
   const f = { ...fx };
   if (reducedMotion) { f.breath = false; f.dust = false; }
+  if (deviceOff) { f.breath = false; f.dust = false; f.light = false; }   // W6-Q: this device opted out of the extras
   f.animates = !!(f.breath || f.dust);
   return f;
 }

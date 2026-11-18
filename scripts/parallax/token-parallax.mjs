@@ -28,7 +28,7 @@ import { MODULE_ID } from "../constants.mjs";
 import { depthIndex } from "../depth/depth-index.mjs";
 import { conditionDepth, downscaleMap, stepsFor, easeToward } from "./parallax-core.mjs";
 import { createFrameGuard, effectAmount } from "./portrait-core.mjs";
-import { registerFxSettings } from "./portrait.mjs";
+import { registerFxSettings, fxDeviceOff } from "./portrait.mjs";
 import {
   FX_KEYS, fxSettingKey, normalizeFx, effectiveFx, breathLook, withBreath, phaseOf, pickAnimated, inView, dustScale,
   IDLE_FRAME_MS, MAX_ANIMATED_TOKENS
@@ -74,12 +74,12 @@ const worldOn = () => get(SETTING, true) !== false;
 const drive = () => (DRIVES.includes(get(DRIVE_SETTING, "pointer")) ? get(DRIVE_SETTING, "pointer") : "pointer");
 const strength = () => cleanStrength(get(STRENGTH_SETTING, STRENGTH_DEFAULT));
 
-/** W6-P: the viewer's extras for tokens (client settings), after the reduced-motion rule. */
+/** W6-P: the extras for tokens (W6-Q: world settings set by the GM), after the reduced-motion and device rules. */
 export function tokenFx() {
   if (!fxCache) {
     const raw = {};
     for (const k of FX_KEYS) raw[k] = get(fxSettingKey("token", k), undefined);
-    fxCache = effectiveFx(normalizeFx(raw, "token"), { reducedMotion: reducedMotion() });
+    fxCache = effectiveFx(normalizeFx(raw, "token"), { reducedMotion: reducedMotion(), deviceOff: fxDeviceOff() });
   }
   return fxCache;
 }
@@ -657,7 +657,7 @@ export function registerTokenSettings() {
     type: new foundry.data.fields.NumberField({ initial: STRENGTH_DEFAULT, min, max, step, nullable: false }),
     onChange
   });
-  // W6-P: the viewer's extras for tokens (client scope), next to the token parallax settings
+  // W6-P extras for tokens (W6-Q: world scope, set by the GM; + the per-device opt-out), next to the token parallax settings
   registerFxSettings("token", () => {
     fxCache = null;
     lastPickT = 0;
