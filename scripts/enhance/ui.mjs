@@ -3,10 +3,11 @@
 import { MODULE_ID } from "../constants.mjs";
 import { redact } from "../redact.mjs";
 import { enhanceDescription, DEFAULT_MODEL, EFFORTS, MAX_INPUT_CHARS } from "./anthropic.mjs";
+import { normalizeApiKey } from "../key-check.mjs";
 
 const L = (k, data) => (data ? game.i18n.format(`AIIMG.Enhance.${k}`, data) : game.i18n.localize(`AIIMG.Enhance.${k}`));
 
-export const enhanceKey = () => String(game.settings.get(MODULE_ID, "apiKey.anthropic") ?? "").trim();
+export const enhanceKey = () => normalizeApiKey(game.settings.get(MODULE_ID, "apiKey.anthropic"));
 
 function enhanceSettings() {
   const model = String(game.settings.get(MODULE_ID, "enhance.model") ?? "").trim() || DEFAULT_MODEL;
@@ -33,7 +34,7 @@ export function enhanceErrorText(e) {
       return L("Err.model", { model: enhanceSettings().model });
     case "request": case "server":
       return detail ? `${L(`Err.${kind}`)} (${detail})` : L(`Err.${kind}`);
-    case "no-key": case "empty-input": case "network": case "auth": case "permission": case "overloaded": case "timeout":
+    case "no-key": case "bad-key": case "empty-input": case "network": case "auth": case "permission": case "overloaded": case "timeout":
     case "cancelled": case "refusal": case "truncated": case "empty-response": case "bad-response":
       return L(`Err.${kind}`);
     default:
@@ -192,7 +193,7 @@ async function run(store, getContext) {
     if (e?.kind !== "cancelled") console.warn(`${MODULE_ID} | enhance failed:`, redact(e?.message ?? String(e)));
     store.status = e?.kind === "cancelled"
       ? null
-      : { type: "error", text: enhanceErrorText(e), openSettings: e?.kind === "no-key" || e?.kind === "auth" || e?.kind === "model" };
+      : { type: "error", text: enhanceErrorText(e), openSettings: e?.kind === "no-key" || e?.kind === "bad-key" || e?.kind === "auth" || e?.kind === "model" };
   } finally {
     if (!store.controller) paint(store);
   }

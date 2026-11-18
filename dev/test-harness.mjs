@@ -1356,4 +1356,30 @@ await test("B9 bughunt-1: 'Not run' names the reason of the turn that left the t
   assert.match(f.calls[2].body.messages.at(-1).content[0].content, /stopped \(max_tokens\)/);
 });
 
+await test("W6-B: pasted key with NBSP / zero-width / newline is normalised and sent; key with '…' or '—' is refused (Polish notice, no fetch, key never echoed)", async () => {
+  const dirty = "﻿ sk-ant-TEST-0000​\r\n";
+  const f = fakeModel([reply({ text: "ok" })]);
+  const { deps } = makeDeps({ pack: makePack(), fetchImpl: f, key: dirty });
+  const r = await (await createHarness(deps).openSession(ACTOR)).send("x");
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].headers["x-api-key"], "sk-ant-TEST-0000");
+  assert.equal(t("MAIG.Build.BadKey", {}, { i18n: { lang: "pl" } }), "Klucz API zawiera znak spoza ASCII (np. wielokropek lub twarda spacja) — wklej go ponownie");
+  for (const bad of ["sk-ant-TEST…0000", "sk-ant-TEST—0000"]) {
+    const g = fakeModel([reply({ text: "never" })]);
+    const d = makeDeps({ pack: makePack(), fetchImpl: g, key: bad, settings: { prewarm: true } });
+    const notices = [];
+    const s = await createHarness(d.deps).openSession(ACTOR);
+    s.on("notice", (n) => notices.push(n));
+    const rr = await s.send("x");
+    assert.equal(rr.reason, "bad-key");
+    assert.equal(rr.notice.level, "error");
+    assert.equal(g.calls.length, 0, "no fetch for a refused key");
+    assert.ok(!JSON.stringify([rr, notices]).includes("TEST"), "the key is never echoed");
+    const pw = await s.prewarm({ force: true });
+    assert.equal(pw.skipped, "bad-key");
+    assert.equal(g.calls.length, 0, "no pre-warm fetch either");
+  }
+});
+
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);

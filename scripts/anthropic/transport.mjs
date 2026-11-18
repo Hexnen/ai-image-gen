@@ -7,6 +7,7 @@
 
 import { SSEParser, MessageAccumulator, StreamProtocolError, kindForErrorType } from "./sse.mjs";
 import { costOfUsage, normalizeUsage, addUsage, emptyUsage } from "./pricing.mjs";
+import { assertHeadersSafe } from "../key-check.mjs";
 
 export const REQUEST_TIMEOUT_MS = 10 * 60_000; // whole request incl. streaming (the harness has its own 5 min turn clock)
 export const IDLE_TIMEOUT_MS = 90_000;        // no bytes at all for this long (pings included) -> "stalled"
@@ -15,7 +16,7 @@ export const RETRY_BASE_MS = 1_000;
 export const RETRY_MAX_MS = 30_000;
 export const MAX_RETRY_AFTER_S = 60;          // a longer server wait is surfaced to the GM instead of sleeping
 
-/** Kinds: no-key, auth, billing, permission, model, too-long, rate-limit, overloaded, server, request, network,
+/** Kinds: no-key, bad-key (W6-B: non-ASCII key, refused before fetch), auth, billing, permission, model, too-long, rate-limit, overloaded, server, request, network,
  *  timeout, stalled, cancelled, bad-stream, bad-response. `retryable` tells the harness whether a later retry makes sense. */
 export class TransportError extends Error {
   constructor(kind, detail = "", extra = {}) {
@@ -116,6 +117,10 @@ export async function streamMessage(req, o = {}) {
   const attempts = [];
 
   if (!String(key).trim()) throw new TransportError("no-key");
+  // W6-B: fetch() throws a TypeError for a header value outside ISO-8859-1, which used to come back as a retried
+  // "network" error. Refuse it here, not retryable, with a message that never contains the key.
+  try { assertHeadersSafe(req.headers); }
+  catch (e) { throw new TransportError(e?.kind === "bad-key" ? "bad-key" : "request", e?.message ?? "bad header", { attempts }); }
   if (typeof fetchImpl !== "function") throw new TransportError("network", "fetch is not available");
   if (o.signal?.aborted) throw new TransportError("cancelled", "", { attempts });
 

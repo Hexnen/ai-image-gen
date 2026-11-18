@@ -27,6 +27,7 @@
 // Events (session.on(type, fn); "*" = all): see EVENT_TYPES. The drawer (T7) renders from them and from transcript().
 
 import * as anthropic from "../anthropic/index.mjs";
+import { checkApiKey } from "../key-check.mjs";
 import { HARNESS_RULES } from "./harness-prompt.mjs";
 import { decideSheetBlock, encodeHeld, decodeHeld } from "./sheet-sync.mjs";
 import { docKey } from "./session-store.mjs";
@@ -403,7 +404,7 @@ export class Session {
   #notice(code, level = "info", data = {}, err = null) {
     const h = this.#h;
     const keyMap = {
-      storage: "MAIG.Build.Storage", noKey: "MAIG.Build.NoKey", noPack: "MAIG.Build.NoPack", busy: "MAIG.Build.Busy",
+      storage: "MAIG.Build.Storage", noKey: "MAIG.Build.NoKey", badKey: "MAIG.Build.BadKey", noPack: "MAIG.Build.NoPack", busy: "MAIG.Build.Busy",
       empty: "MAIG.Build.Empty", historyFull: "MAIG.Build.HistoryFull", limit: "MAIG.Build.Limit", error: "MAIG.Build.Error",
       sheetFailed: "MAIG.Build.SheetFailed", settingsDrift: "MAIG.Build.SettingsDrift", prefixChanged: "MAIG.Build.PrefixChanged",
       "stop.stopped": "MAIG.Build.Stop.user", "stop.refusal": "MAIG.Build.Stop.refusal", "stop.max_tokens": "MAIG.Build.Stop.maxTokens",
@@ -548,7 +549,7 @@ export class Session {
   /**
    * Run one GM turn. Resolves with a TurnSummary (never rejects for model/transport/limit problems):
    * { ok, reason, cap?, turn, requests, toolCalls, usage, usd, text, progress, stop, proposal, error? }
-   * reason: done | submitted | cap | stopped | refusal | max_tokens | context | error | limit | busy | empty | no-key | no-pack | history-full
+   * reason: done | submitted | cap | stopped | refusal | max_tokens | context | error | limit | busy | empty | no-key | bad-key | no-pack | history-full
    *   submitted (W3-4): a successful submit ended the turn without another request; ok true, text "" (the drawer shows
    *   the proposal's rationale), stop "tool_use".
    * text (W3-5): text of the assistant message that ended the turn without a tool call ("" when the last one called
@@ -568,9 +569,11 @@ export class Session {
     if (!msg) return early("empty", "empty", "info");
     const pack = safePack(h.deps);
     if (!hasPrompt(pack)) return early("no-pack", "noPack");
-    let apiKey = "";
-    try { apiKey = String(h.deps.getApiKey?.() ?? "").trim(); } catch { apiKey = ""; }
+    let apiKey = "", keyOk = true;
+    try { ({ key: apiKey, ok: keyOk } = checkApiKey(h.deps.getApiKey?.())); } catch { apiKey = ""; }
     if (!apiKey) return early("no-key", "noKey");
+    // W6-B: a key with a visible non-ASCII character (e.g. "…") would make fetch throw; refuse before any request
+    if (!keyOk) return early("bad-key", "badKey", "error");
     const s = h.settings();
     if (!this.record.messages.length) { this.record.model = s.model; this.record.effort = s.effort; this.record.pack = pack.id; this.record.packVersion = pack.version; }
     const estHistory = (this.record.lastPromptTokens || 0) + anthropic.estimateTokens(msg);
@@ -847,9 +850,10 @@ export class Session {
     if (this.busy) return done({ ok: true, skipped: "busy" });
     const pack = safePack(h.deps);
     if (!hasPrompt(pack)) return done({ ok: false, skipped: "no-pack" });
-    let apiKey = "";
-    try { apiKey = String(h.deps.getApiKey?.() ?? "").trim(); } catch { /* none */ }
+    let apiKey = "", keyOk = true;
+    try { ({ key: apiKey, ok: keyOk } = checkApiKey(h.deps.getApiKey?.())); } catch { /* none */ }
     if (!apiKey) return done({ ok: false, skipped: "no-key" });
+    if (!keyOk) return done({ ok: false, skipped: "bad-key" });
     const model = this.record.messages.length ? this.record.model : s.model;
     const effort = this.record.messages.length ? this.record.effort : s.effort;
     try {

@@ -294,6 +294,7 @@
   "AIIMG.Enhance.Done": "Description enhanced. Edit it or restore the previous one.",
   "AIIMG.Enhance.OpenSettings": "Open API keys",
   "AIIMG.Enhance.Err.no-key": "No Anthropic API key. Add it in the module settings.",
+  "AIIMG.Enhance.Err.bad-key": "The API key contains a non-ASCII character (e.g. an ellipsis or a non-breaking space) — paste it again",
   "AIIMG.Enhance.Err.empty-input": "Type a short description first, e.g. \"young superhero\".",
   "AIIMG.Enhance.Err.too-long": "The description is too long to enhance (max {max} characters).",
   "AIIMG.Enhance.Err.auth": "Anthropic rejected the API key. Check it in the settings.",
@@ -440,6 +441,8 @@
   "AIIMG.Keys.Show": "Show or hide the key",
   "AIIMG.Keys.Save": "Save",
   "AIIMG.Keys.Saved": "API keys saved in this browser.",
+  "AIIMG.Keys.NonAscii": "The API key contains a non-ASCII character (e.g. an ellipsis or a non-breaking space) — paste it again",
+  "AIIMG.Keys.NonAsciiField": "The API key contains a non-ASCII character (e.g. an ellipsis or a non-breaking space) — paste it again: {keys}. That key was not saved.",
   "MAIG.Drawer.MenuClose": "Close the AI builder",
   "MAIG.Drawer.OpenFailed": "The AI builder could not open: {error}"
 }

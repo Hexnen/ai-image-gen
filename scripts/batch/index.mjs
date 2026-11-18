@@ -1,5 +1,6 @@
 // Silnik batch (bez UI). Zdarzenie: Hooks.callAll("aiImageGen.batchUpdate", record).
 import { getKey } from "../settings.mjs";
+import { requireUsableKey } from "../key-check.mjs";
 import { reserveBudget } from "../limits.mjs";
 import { PROVIDERS } from "../providers/index.mjs";
 import { estimateBatchCost } from "./cost.mjs";
@@ -34,7 +35,7 @@ export async function submitBatch({ provider, model, items, pick = false }) {
   if (new Set(items.map((i) => i.id)).size !== items.length) throw new Error("Batch: id itemów muszą być unikalne.");
   // Id pozycji są kluczami w rekordzie (ustawienie świata rozwija kropki w kluczach) i custom_id u dostawcy.
   if (items.some((i) => !/^[A-Za-z0-9_-]{1,64}$/.test(String(i.id)))) throw new Error("Batch: id itemów mogą zawierać tylko litery, cyfry, _ i -.");
-  const apiKey = getKey(provider);
+  const apiKey = requireUsableKey(getKey(provider)); // W6-B: non-ASCII key -> ApiKeyError before any upload
   if (!apiKey) throw new Error(`Brak klucza API dla ${PROVIDERS[provider].label}.`);
 
   const estimatedCost = estimateBatchLimit(provider, model, items); // learned (with margin) when the log has real runs, else the table

@@ -8,6 +8,7 @@
 // Uwagi: wywołania idą z przeglądarki (CORS niezweryfikowany). Wymiary są mapowane
 // na najbliższe wspierane przez dostawcę (OpenAI: 3 rozmiary; Gemini/OpenRouter: aspekt).
 import * as openai from "./openai.mjs";
+import { requireUsableKey } from "../key-check.mjs";
 import * as gemini from "./gemini.mjs";
 import * as openrouter from "./openrouter.mjs";
 import { MODELS, getModel, defaultModelId } from "./models.mjs";
@@ -35,6 +36,8 @@ export { defaultModelId };
 export async function generate({ provider, ...rest }) {
   const impl = IMPL[provider];
   if (!impl) throw new Error(`Nieznany provider: ${provider}`);
+  // W6-B: niewidoczne znaki zdjęte; widoczny znak spoza ASCII -> ApiKeyError (bez klucza w tekście), zanim fetch rzuci
+  rest.apiKey = requireUsableKey(rest.apiKey);
   if (!rest.apiKey) throw new Error(`Brak klucza API dla ${PROVIDERS[provider].label}.`);
   try {
     return await impl.generate(rest);

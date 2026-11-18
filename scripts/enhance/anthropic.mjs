@@ -2,6 +2,8 @@
 // Czysty moduł: bez globali Foundry, żeby dało się go testować w Node (dev/test-enhance.mjs).
 // Surowy fetch zamiast @anthropic-ai/sdk: moduł nie ma bundlera ani zależności npm.
 
+import { checkApiKey, normalizeApiKey } from "../key-check.mjs";
+
 export const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 export const ANTHROPIC_VERSION = "2026-10-21";
 export const DEFAULT_MODEL = "claude-sonnet-5-5";
@@ -69,7 +71,7 @@ export function buildRequest({ apiKey, model = DEFAULT_MODEL, effort = DEFAULT_E
   if (effort && EFFORTS.includes(effort)) body.output_config = { effort };
   const headers = {
     "content-type": "application/json",
-    "x-api-key": String(apiKey ?? ""),
+    "x-api-key": normalizeApiKey(apiKey), // W6-B: bez niewidocznych znaków wklejonego klucza
     "anthropic-version": ANTHROPIC_VERSION,
     // Wymagane przy wywołaniu z przeglądarki (CORS); klucz i tak żyje tylko w ustawieniu klienta GM-a.
     "anthropic-dangerous-direct-browser-access": "true"
@@ -164,15 +166,18 @@ function linkSignals(signal, ms) {
 
 /**
  * Ulepsz opis. Zwraca { text, model, usage }. Rzuca EnhanceError o rodzaju:
- * no-key, empty-input, too-long, auth, permission, model, rate-limit, overloaded, server, request,
+ * no-key, bad-key, empty-input, too-long, auth, permission, model, rate-limit, overloaded, server, request,
  * network, timeout, cancelled, refusal, truncated, empty-response, bad-response.
  */
 export async function enhanceDescription({ apiKey, model, effort, text, context, signal, fetchImpl = globalThis.fetch, timeoutMs = timeoutFor(effort ?? DEFAULT_EFFORT) } = {}) {
   const input = String(text ?? "").trim();
-  if (!apiKey || !String(apiKey).trim()) throw new EnhanceError("no-key");
+  // W6-B: niewidoczne znaki (NBSP, zero-width, BOM, koniec linii) zdjęte; widoczny znak spoza ASCII (np. „…”) = odmowa przed fetch
+  const { key, ok } = checkApiKey(apiKey);
+  if (!key) throw new EnhanceError("no-key");
+  if (!ok) throw new EnhanceError("bad-key");
   if (!input) throw new EnhanceError("empty-input");
   if (input.length > MAX_INPUT_CHARS) throw new EnhanceError("too-long", "", { max: MAX_INPUT_CHARS });
-  const req = buildRequest({ apiKey: String(apiKey).trim(), model, effort, text: input, context });
+  const req = buildRequest({ apiKey: key, model, effort, text: input, context });
   let res;
   try {
     res = await fetchImpl(req.url, { method: "POST", headers: req.headers, body: JSON.stringify(req.body), signal: linkSignals(signal, timeoutMs) });

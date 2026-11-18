@@ -18,6 +18,7 @@
   </div>
   {{#if dry}}<p class="maig-banner is-dry"><i class="fa-solid fa-flask" aria-hidden="true"></i><span>{{localize "MAIG.Drawer.Dry"}}</span></p>{{/if}}
   {{#if noKey}}<p class="maig-banner is-warn"><i class="fa-solid fa-key" aria-hidden="true"></i><span>{{localize "MAIG.Drawer.NoKey"}}</span><button type="button" class="maig-link" data-action="openSettings">{{localize "MAIG.Drawer.OpenSettings"}}</button></p>{{/if}}
+  {{#if badKey}}<p class="maig-banner is-warn"><i class="fa-solid fa-key" aria-hidden="true"></i><span>{{localize "AIIMG.Keys.NonAscii"}}</span><button type="button" class="maig-link" data-action="openSettings">{{localize "MAIG.Drawer.OpenSettings"}}</button></p>{{/if}}
   {{#if flash}}
   <div class="maig-banner is-{{flash.level}}" role="status">
     <i class="fa-solid {{flash.icon}}" aria-hidden="true"></i>

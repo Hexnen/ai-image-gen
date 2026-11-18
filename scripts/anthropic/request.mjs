@@ -11,6 +11,7 @@
 // The sheet snapshot is per-document data: it lives ONLY in user messages; a system block that looks like a sheet is refused.
 
 import { ANTHROPIC_URL, ANTHROPIC_VERSION, EFFORTS } from "../enhance/anthropic.mjs";
+import { requireUsableKey, isHeaderSafe, assertHeadersSafe } from "../key-check.mjs";
 
 export { ANTHROPIC_URL, ANTHROPIC_VERSION, EFFORTS };
 export const DEFAULT_MODEL = "claude-sonnet-5-5";
@@ -184,7 +185,10 @@ export function buildPrewarmRequest(opts = {}) {
 }
 
 function finishRequest(body, apiKey, betas) {
-  const key = String(apiKey ?? "").trim();
+  // W6-B: strip invisible characters of a pasted key; a visible non-ASCII one (e.g. "…") throws ApiKeyError (kind
+  // "bad-key", no key in the text) here, before any fetch. Betas are header values too: printable ASCII only.
+  const key = requireUsableKey(apiKey);
+  for (const b of betas) if (!isHeaderSafe(b) || b.includes(",")) throw new RequestBuildError("anthropic-beta values must be printable ASCII without commas");
   const headers = {
     "content-type": "application/json",
     "x-api-key": key,
@@ -193,6 +197,7 @@ function finishRequest(body, apiKey, betas) {
     "anthropic-dangerous-direct-browser-access": "true"
   };
   if (betas.length) headers["anthropic-beta"] = betas.join(",");
+  assertHeadersSafe(headers);
   const req = { url: ANTHROPIC_URL, body };
   Object.defineProperty(req, "headers", { value: headers, enumerable: false });
   Object.defineProperty(req, "redactedHeaders", { value: () => ({ ...headers, "x-api-key": key ? "[redacted]" : "" }), enumerable: false });

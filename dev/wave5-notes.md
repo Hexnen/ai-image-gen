@@ -457,3 +457,25 @@ Uwaga: sufit 7 500 jest prawie wyczerpany; następny przebieg tekstów musi coś
 ### Niezweryfikowane
 - Bez toru: szuflada po Undo (karta z `pendingProposal` harnessu, ponowny Apply) i okno dryfu z „zmienione przez późniejszy zapis kreatora AI” tylko w node.
 - Prawdziwy model z nowym zdaniem R1 (czy przy „reszty nie ruszaj” zgłasza część niezależną i pyta o rangę jednym zdaniem).
+
+## W6-B: klucz API ze znakiem spoza ISO-8859-1 („Failed to read the 'headers' property … non ISO-8859-1 code point”)
+
+### Przyczyna
+- Jedyny nagłówek z wartością spoza kodu modułu to klucz. `scripts/anthropic/request.mjs` `finishRequest` (było l. 187) robił tylko `String(apiKey).trim()` i wkładał wynik do `x-api-key`; `trim()` zdejmuje NBSP/BOM/`\n` tylko na brzegach, a NIE zdejmuje znaków zero-width (U+200B…) ani niczego w środku. Klucz wklejony z czatu / innej aplikacji z takim znakiem (albo z „…”, „—”, cudzysłowem drukarskim) trafiał do `fetch`, który rzuca TypeError.
+- `scripts/anthropic/transport.mjs` (l. 181-183) zamieniał ten TypeError na `network` (ponawiany 2x) — stąd „Zapytanie się nie udało (network): …” w szufladzie.
+- Pozostałe nagłówki (`content-type`, `anthropic-version`, `anthropic-dangerous-direct-browser-access`, `anthropic-beta`, OpenRouter `X-Title`, nagłówki uploadu Gemini) to stałe ASCII; model i tekst MG idą tylko w treści JSON. Ten sam problem z kluczem miały ścieżki obrazków (OpenAI/OpenRouter `Authorization`, Gemini `x-goog-api-key`) i różdżka opisu.
+- Który dokładnie znak był w kluczu właściciela: niewiadome (klucza nie czytamy). NBSP sam nie wywołałby tego błędu (U+00A0 mieści się w Latin-1), więc to był znak > U+00FF.
+
+### Poprawka
+- Nowy czysty moduł `scripts/key-check.mjs`: `normalizeApiKey` (usuwa wszystkie białe znaki, w tym NBSP/U+202F/U+2028, znaki sterujące C0/C1, miękki dywiz, zero-width/bidi/word-joiner, BOM), `checkApiKey` → `{ key, ok }` (ok = tylko widoczne ASCII), `requireUsableKey` / `ApiKeyError` (kind `bad-key`, komunikat PL „Klucz API zawiera znak spoza ASCII (np. wielokropek lub twarda spacja) — wklej go ponownie”, nigdy z kluczem), `assertHeadersSafe` (każdy nagłówek = drukowalne ASCII).
+- Zapis: okno kluczy (`keys-app.mjs`) normalizuje każde pole; klucz z widocznym znakiem spoza ASCII NIE jest zapisany, pole dostaje `aria-invalid`, okno zostaje otwarte z błędem PL (nazwa pola, bez wartości); zapisany wcześniej zły klucz jest oznaczony pod polem przy otwarciu.
+- Odczyt: `getKey` (settings.mjs) i `enhanceKey` normalizują przy każdym odczycie (stare klucze z niewidocznymi znakami działają bez ponownego zapisu).
+- Przed żądaniem: harness `send` → powód `bad-key` + komunikat błędu PL (`MAIG.Build.BadKey`), pre-warm → `skipped: "bad-key"`; `buildMessagesRequest` rzuca `ApiKeyError`, sprawdza `anthropic-beta` (ASCII, bez przecinków) i wszystkie nagłówki; `streamMessage` sprawdza nagłówki przed fetch → `TransportError("bad-key")`, nieponawiany; różdżka → `EnhanceError("bad-key")` z tekstem z lang; obrazki (`providers/index.generate`, batch submit) → `ApiKeyError`; poller batchy traktuje zły klucz jak brak. Szuflada pokazuje baner przy złym kluczu (`AIIMG.Keys.NonAscii`).
+
+### Testy
+- Nowy `dev/test-key-check.mjs` (8): czysty klucz bez zmian; NBSP / zero-width / BOM / `\n` / CRLF / word joiner → `sk-ant-TEST-0000` i wysłany; „…”, „—”, cudzysłów drukarski, „Ś” → odmowa z komunikatem PL, zero wywołań fetch (stub rzuca jak przeglądarka przy nie-Latin-1), klucz nigdy w tekście błędu; transport, różdżka i dostawcy obrazków; nagłówki zawsze ASCII przy polskim tekście MG.
+- `test-harness` 50 (+1 W6-B: brudny klucz wysłany znormalizowany; „…”/„—” → `bad-key`, poziom error, 0 fetch, pre-warm `bad-key`).
+- Wszystkie `dev/test-*.mjs` zielone: ops 55, snapshot 37, validate 56, catalog 25, drawer-model 16, dry-relay 13, dry-transport 12, enhance 22, harness 50, key-check 8, migrate-id 19, packs 24, prompt-texts 24, transport 30, vendor load 9, vendor-sync 22.
+
+### Niezweryfikowane
+- Prawdziwy fetch do API z prawdziwym kluczem (zakaz). Okno kluczy, baner szuflady i powiadomienie tylko w kodzie / node, bez Foundry.

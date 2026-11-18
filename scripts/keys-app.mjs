@@ -7,6 +7,7 @@
 // old id (migrate-id.mjs) keep working. localStorage itself is readable by anyone who uses this browser profile.
 
 import { MODULE_ID, PROVIDER_IDS } from "./constants.mjs";
+import { checkApiKey } from "./key-check.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
@@ -57,7 +58,9 @@ export class ApiKeysApp extends HandlebarsApplicationMixin(ApplicationV2) {
         id: `${this.id}-${key.replace(/\W/g, "-")}`,
         label: game.i18n.localize(cfg?.name ?? key),
         hint: cfg?.hint && cfg.hint !== "AIIMG.Settings.ApiKey.Hint" ? game.i18n.localize(cfg.hint) : "",
-        value: String(get(key) ?? "")
+        value: String(get(key) ?? ""),
+        // W6-B: a stored key that still has a visible non-ASCII character (saved before the check) is flagged
+        bad: !checkApiKey(get(key)).ok
       };
     });
     const prewarm = has(PREWARM) ? {
@@ -67,7 +70,7 @@ export class ApiKeysApp extends HandlebarsApplicationMixin(ApplicationV2) {
       hint: game.i18n.localize("MAIG.Settings.Build.Prewarm.Hint"),
       checked: get(PREWARM) !== false
     } : null;
-    return Object.assign(ctx, { keys, prewarm, show });
+    return Object.assign(ctx, { keys, prewarm, show, badText: game.i18n.localize("AIIMG.Keys.NonAscii") });
   }
 
   /** eye button: show / hide one key (the input stays a password input otherwise) */
@@ -84,15 +87,29 @@ export class ApiKeysApp extends HandlebarsApplicationMixin(ApplicationV2) {
   static async #onSubmit(event, form, formData) {
     if (!game.user?.isGM) return;
     const data = formData.object;
+    // W6-B: strip invisible characters of a pasted key (NBSP, zero-width, BOM, newline...); a key with a visible
+    // non-ASCII character (e.g. "…") is not saved and its field is marked. The other fields are saved as usual.
+    const refused = [];
     for (const key of KEY_SETTINGS) {
       if (!has(key) || !(key in data)) continue;
-      const v = String(data[key] ?? "").trim();
+      const { key: v, ok } = checkApiKey(data[key]);
+      const input = form?.querySelector?.(`input[name="${CSS.escape(key)}"]`);
+      if (!ok) {
+        refused.push(game.i18n.localize(game.settings.settings.get(`${MODULE_ID}.${key}`)?.name ?? key));
+        input?.setAttribute("aria-invalid", "true");
+        continue;
+      }
+      input?.removeAttribute("aria-invalid");
+      if (input && input.value !== v) input.value = v;
       if (v !== String(get(key) ?? "")) await game.settings.set(MODULE_ID, key, v);
     }
     if (has(PREWARM)) {
       const v = !!data[PREWARM];
       if (v !== (get(PREWARM) !== false)) await game.settings.set(MODULE_ID, PREWARM, v);
     }
+    // throwing keeps the window open (ApplicationV2 shows the error as a notification and skips closeOnSubmit);
+    // the text names the field only, never the value
+    if (refused.length) throw new Error(game.i18n.format("AIIMG.Keys.NonAsciiField", { keys: refused.join(", ") }));
     ui.notifications.info(game.i18n.localize("AIIMG.Keys.Saved"));
   }
 }

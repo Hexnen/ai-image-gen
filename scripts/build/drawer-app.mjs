@@ -11,6 +11,7 @@
 
 import { MODULE_ID } from "../constants.mjs";
 import * as M from "./drawer-model.mjs";
+import { checkApiKey } from "../key-check.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin, DialogV2 } = foundry.applications.api;
 const TEMPLATE = `modules/${MODULE_ID}/templates/builder-drawer.hbs`;
@@ -196,8 +197,11 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
     const usage = this.#usageVm();
     const sup = b?.registry?.supports?.(this.actor);
     const dry = b?.dry ?? null;
-    let hasKey = true;
-    if (!dry) { try { hasKey = !!String(api()?.getKey?.("anthropic") ?? "").trim(); } catch { hasKey = false; } }
+    let hasKey = true, keyOk = true;
+    if (!dry) {
+      try { const c = checkApiKey(api()?.getKey?.("anthropic")); hasKey = !!c.key; keyOk = c.ok; }
+      catch { hasKey = false; }
+    }
     let undo = null;
     try { undo = M.undoView(pack?.undoStatus?.(this.actor), L); } catch { undo = null; }
 
@@ -235,7 +239,7 @@ export class BuilderDrawer extends HandlebarsApplicationMixin(ApplicationV2) {
       profiles: M.profileOptions(opts.profile ?? "", L),
       profileHint: L(`MAIG.Drawer.Profile.hint.${eff.profile}`),
       rankIsDefault: !opts.rank, profileIsDefault: !opts.profile,
-      dry: !!dry, noKey: !dry && !hasKey,
+      dry: !!dry, noKey: !dry && !hasKey, badKey: !dry && hasKey && !keyOk,
       flash: this.#flash,
       rows, empty: !rows.length && !busy,
       live: this.#live ? {

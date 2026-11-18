@@ -2,6 +2,7 @@
 // wymaga dzierżawy w rekordzie (record.mjs), więc dwóch GM-ów nie dubluje plików ani kosztu.
 // Dawniej ingestował tylko „aktywny GM" — jeśli on nie miał klucza, nikt nie przetwarzał wyników.
 import { getKey } from "../settings.mjs";
+import { requireUsableKey } from "../key-check.mjs";
 import { listBatches, getBatch, patchBatch, isActive, pruneBatches } from "./record.mjs";
 import { checkOpenAI, cancelOpenAI } from "./openai.mjs";
 import { checkGemini, cancelGemini } from "./gemini.mjs";
@@ -18,7 +19,8 @@ const IMPL = {
   gemini: { check: checkGemini, cancel: cancelGemini },
 };
 
-const keyOf = (provider) => { try { return getKey(provider); } catch { return ""; } };
+// W6-B: a key with a visible non-ASCII character counts as missing here (no fetch that would throw on the header)
+const keyOf = (provider) => { try { return requireUsableKey(getKey(provider)); } catch { return ""; } };
 
 function warnNoKey(rec) {
   if (warnedNoKey.has(rec.provider)) return;

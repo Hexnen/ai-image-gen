@@ -3,6 +3,7 @@ import { SLOTS, slotKey } from "./batch/record.mjs";
 import { syncOptimizerProfile } from "./optimize.mjs";
 import { DEFAULT_MODEL as ENHANCE_DEFAULT_MODEL, DEFAULT_EFFORT as ENHANCE_DEFAULT_EFFORT, EFFORTS } from "./enhance/anthropic.mjs";
 import { registerBuildSettings } from "./build/build-settings.mjs";
+import { normalizeApiKey } from "./key-check.mjs";
 
 const { NumberField, StringField, ObjectField, BooleanField } = foundry.data.fields;
 
@@ -111,5 +112,8 @@ export function registerSettings() {
   }
 }
 
-export const getKey = (provider) => game.settings.get(MODULE_ID, `apiKey.${provider}`);
+// W6-B: invisible characters of a pasted key (NBSP, zero-width, BOM, newline...) are stripped on every read, so a key
+// saved before the keys window normalised it still works. A visible non-ASCII character stays: the request paths refuse
+// it with a clear message (key-check.mjs) instead of letting fetch() throw.
+export const getKey = (provider) => normalizeApiKey(game.settings.get(MODULE_ID, `apiKey.${provider}`));
 export const getLimit = (key) => game.settings.get(MODULE_ID, `limit.${key}`);

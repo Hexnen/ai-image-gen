@@ -294,6 +294,7 @@
   "AIIMG.Enhance.Done": "Opis ulepszony. Możesz go poprawić albo przywrócić poprzedni.",
   "AIIMG.Enhance.OpenSettings": "Otwórz klucze API",
   "AIIMG.Enhance.Err.no-key": "Brak klucza API Anthropic. Dodaj go w ustawieniach modułu.",
+  "AIIMG.Enhance.Err.bad-key": "Klucz API zawiera znak spoza ASCII (np. wielokropek lub twarda spacja) — wklej go ponownie",
   "AIIMG.Enhance.Err.empty-input": "Najpierw wpisz krótki opis, np. „młody superbohater”.",
   "AIIMG.Enhance.Err.too-long": "Opis jest za długi do ulepszenia (maks. {max} znaków).",
   "AIIMG.Enhance.Err.auth": "Anthropic odrzucił klucz API. Sprawdź go w ustawieniach.",
@@ -440,6 +441,8 @@
   "AIIMG.Keys.Show": "Pokaż lub ukryj klucz",
   "AIIMG.Keys.Save": "Zapisz",
   "AIIMG.Keys.Saved": "Klucze API zapisane w tej przeglądarce.",
+  "AIIMG.Keys.NonAscii": "Klucz API zawiera znak spoza ASCII (np. wielokropek lub twarda spacja) — wklej go ponownie",
+  "AIIMG.Keys.NonAsciiField": "Klucz API zawiera znak spoza ASCII (np. wielokropek lub twarda spacja) — wklej go ponownie: {keys}. Ten klucz nie został zapisany.",
   "MAIG.Drawer.MenuClose": "Zamknij kreator AI",
   "MAIG.Drawer.OpenFailed": "Nie udało się otworzyć kreatora AI: {error}"
 }
