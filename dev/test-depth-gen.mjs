@@ -54,14 +54,14 @@ await test("config: provider/model from cfg.depth.gen, source aspect kept inside
   assert.ok(Math.abs(c.width / c.height - 2 / 3) < 0.02, `${c.width}x${c.height}`);
   assert.ok(c.width * c.height >= 655360);
   assert.deepEqual([c.transparent, c.refs.length, c.refPurpose, c.defaultMode], [false, 0, GEN_REF_PURPOSE, "fast"]);
-  // unknown model -> provider's first; Gemini gets an aspect it supports and a valid size tier
-  assert.equal(genDepthConfig(normalizeDepth({ gen: { provider: "openai", model: "nope" } }), { width: 10, height: 10 }).model, "gpt-image-2.6-flare");
+  // unknown model -> the depth default (W6-M: Sunburst 2.6); Gemini gets an aspect it supports and a valid size tier
+  assert.equal(genDepthConfig(normalizeDepth({ gen: { provider: "openai", model: "nope" } }), { width: 10, height: 10 }).model, "gpt-image-2.6-sunburst");
   const g = genDepthConfig(normalizeDepth({ gen: { provider: "gemini", model: "gemini-3.1-flash-lite-image", imageSize: "4K" } }), { width: 1024, height: 1536 });
   assert.equal(g.provider, "gemini"); assert.equal(g.imageSize, "1K", "lite only has 1K");
   assert.equal(g.width * 3, g.height * 2, "2:3");
   assert.ok(genModelsFor("openrouter").length > 0);
   assert.equal(genPrompt(normalizeDepth({})), GEN_PROMPT_DEFAULT);
-  assert.ok(/white is nearest/.test(GEN_PROMPT_DEFAULT) && /same framing/.test(GEN_PROMPT_DEFAULT));
+  assert.ok(/Pure white: closest objects./.test(GEN_PROMPT_DEFAULT) && /Do not add, remove or modify objects.$/.test(GEN_PROMPT_DEFAULT));
 });
 
 await test("estimate: OpenAI output + reference tokens like W6-D, the module's estimate is the shown cost", () => {
@@ -123,10 +123,10 @@ await test("the confirmation sees the estimate before the call; one request, cou
   assert.equal(calls[0].url, "https://api.openai.com/v1/images/edits");
   const form = calls[0].init.body;
   assert.ok(form instanceof FormData);
-  assert.equal(form.get("model"), "gpt-image-2.6-flare");
+  assert.equal(form.get("model"), "gpt-image-2.6-sunburst");
   assert.equal(form.get("prompt"), "make depth");
   assert.equal(form.get("size"), `${a.cfg.width}x${a.cfg.height}`);
-  assert.equal(form.get("quality"), "medium");
+  assert.equal(form.get("quality"), "low");
   assert.equal(form.get("n"), null);
   assert.equal(form.get("background"), null);
   assert.equal(form.getAll("image[]").length, 1);

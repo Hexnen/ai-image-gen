@@ -6,15 +6,44 @@
 
 /** Schema version of `cfg.depth`; bump only with a migration in normalizeDepth.
  *  v2 (W6-I): engine "generative" + `gen` (provider, model, quality, imageSize, prompt). A v1 save normalises to v2 with the
- *  generative defaults and keeps every v1 value. */
-export const DEPTH_SCHEMA = 2;
+ *  generative defaults and keeps every v1 value.
+ *  v3 (W6-M, owner's depth tests): new default prompt, default model GPT Image 2.6 Sunburst at quality low, `gen.maxLong`
+ *  (longest output side) and `gen.styleRef` (optional style-example depth map). A v2 save whose prompt is still the OLD
+ *  default gets the new one; if its whole gen block was untouched (old prompt + Flare 2.6 + medium) it also gets the new
+ *  model and quality. Anything the GM edited stays as it is. */
+export const DEPTH_SCHEMA = 3;
 
 /** "generative" (W6-I, experimental) = an image model of the module's own providers draws the depth map (paid call). */
 export const ENGINES = Object.freeze(["browser", "comfyui", "generative"]);
 export const GEN_PROVIDERS = Object.freeze(["openai", "gemini", "openrouter"]);
-/** Default prompt of the generative engine. Kept short and literal: image models follow plain constraints best. */
-export const GEN_PROMPT_DEFAULT = "Convert this image into a depth map. Output only the depth map: a smooth grayscale image where white is nearest to the camera and black is farthest. Keep exactly the same framing, composition, proportions and outlines as the input image, pixel-aligned. No colour, no text, no labels, no borders, no lighting or shading changes, no added or removed objects, no stylisation.";
+/** Default prompt of the generative engine (W6-M): the owner's prompt, verbatim. Best in the owner's tests on GPT Image 2.6
+ *  Sunburst low (correlation with a ground-truth map 0.91-0.96, almost no light leaking in from the portrait). */
+export const GEN_PROMPT_DEFAULT = `Create a grayscale depth map from the input image.
+
+Preserve the original composition, geometry, proportions and object boundaries.
+
+Represent depth as luminance:
+- Pure white: closest objects.
+- Light gray: foreground.
+- Mid gray: middle distance.
+- Dark gray: background.
+- Pure black: farthest areas.
+
+Use smooth, continuous depth transitions.
+Objects closer to the camera must be brighter than objects farther away.
+Maintain clear depth separation between overlapping objects.
+Avoid shadows, lighting effects, textures, colors and artistic interpretation.
+
+Output a single-channel grayscale depth map.
+Do not add, remove or modify objects.`;
+/** The W6-I default (schema v2). Only used to recognise an untouched old default in the v2 -> v3 migration. */
+export const GEN_PROMPT_DEFAULT_V2 = "Convert this image into a depth map. Output only the depth map: a smooth grayscale image where white is nearest to the camera and black is farthest. Keep exactly the same framing, composition, proportions and outlines as the input image, pixel-aligned. No colour, no text, no labels, no borders, no lighting or shading changes, no added or removed objects, no stylisation.";
+/** The W6-I default model / quality (schema v2): an untouched v2 gen block moves to the v3 defaults. */
+export const GEN_V2_DEFAULTS = Object.freeze({ provider: "openai", model: "gpt-image-2.6-flare", quality: "medium" });
+/** Put before the prompt when a style example is sent as the second image (owner's wording). */
+export const GEN_STYLE_PREFIX = "Generate a depth map in the style of image 2 (the style example) for the picture in image 1 (the source). Image 2 only shows the desired look of the depth map; do not copy its content or shape.";
 export const GEN_PROMPT_MAX = 2000;
+export const GEN_STYLE_PATH_MAX = 1024;
 export const PRECISIONS = Object.freeze(["fp16", "q4f16", "fp32"]);
 /** Lossless only: 16-bit grayscale PNG, or 16 bit packed into R (high) + G (low) of an 8-bit PNG (mask in B). */
 export const OUTPUT_FORMATS = Object.freeze(["png16", "png-rg16"]);
@@ -83,7 +112,9 @@ export const RANGES = Object.freeze({
   smoothPx: [0, 8, 1],
   gamma: [0.7, 0.9, 0.01],
   strength: [0, 1, 0.05],
-  sway: [0, 1, 0.05]
+  sway: [0, 1, 0.05],
+  // W6-M: longest side of the generated depth image (px). Output area is ~1 MP with the source's shape, then capped here.
+  genMaxLong: [1024, 2048, 16]
 });
 
 export const modelByKey = (key) => DEPTH_MODELS.find((m) => m.key === key) ?? null;
@@ -112,7 +143,8 @@ export function depthDefaults({ webgpu = true } = {}) {
     mask: { enabled: true, model: "birefnet-lite" },
     post: { normalize: true, lowPct: 1, highPct: 99, flyingPixels: true, guided: true, edgeSnap: 1, dilatePx: 3, smoothPx: 3, gamma: 0.8 },
     output: { format: "png16", maskChannel: true },
-    gen: { provider: "openai", model: "gpt-image-2.6-flare", quality: "medium", imageSize: "1K", prompt: GEN_PROMPT_DEFAULT },
+    // W6-M: Sunburst 2.6 sync at low was the best in the owner's tests (medium/high gave no gain); others stay selectable
+    gen: { provider: "openai", model: "gpt-image-2.6-sunburst", quality: "low", imageSize: "1K", prompt: GEN_PROMPT_DEFAULT, maxLong: 1280, styleRef: "" },
     parallax: { strength: 0.5, sway: 0.3, light: true, rim: true, dust: false }
   };
 }
@@ -130,6 +162,17 @@ function num(v, [min, max, step], d) {
 export function cleanComfyUrl(v) {
   const s = String(v ?? "").trim().replace(/\/+$/, "");
   return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/i.test(s) ? s : COMFY_URL_DEFAULT;
+}
+
+/**
+ * W6-M: path of the optional style-example depth map. A Data-relative path or an http(s) URL; anything else
+ * (data:/blob:/javascript: URLs, control characters, over GEN_STYLE_PATH_MAX) is dropped to "" (= no style example).
+ */
+export function cleanStylePath(v) {
+  const s = typeof v === "string" ? v.trim() : "";
+  if (!s || s.length > GEN_STYLE_PATH_MAX || /[\u0000-\u001f\u007f]/.test(s)) return "";
+  if (/^[a-z][a-z0-9+.-]*:/i.test(s) && !/^https?:\/\//i.test(s)) return "";
+  return s;
 }
 
 /** Precisions a model offers, in PRECISIONS order. */
@@ -155,8 +198,16 @@ export function normalizeDepth(raw, env = {}) {
   const m = r.mask ?? {};
   const g = r.gen ?? {};
   const gid = (v, dflt) => (typeof v === "string" && /^[A-Za-z0-9._:/-]{1,120}$/.test(v.trim()) ? v.trim() : dflt);
-  const gprompt = typeof g.prompt === "string" && g.prompt.trim() ? g.prompt.trim().slice(0, GEN_PROMPT_MAX) : d.gen.prompt;
+  let gprompt = typeof g.prompt === "string" && g.prompt.trim() ? g.prompt.trim().slice(0, GEN_PROMPT_MAX) : d.gen.prompt;
   const gprovider = pick(g.provider, GEN_PROVIDERS, d.gen.provider);
+  // v2 -> v3 migration (W6-M): only an UNTOUCHED old default is replaced; a missing `v` counts as old
+  let gmodel = g.model, gquality = g.quality;
+  if (!(Number(r.v) >= 3) && gprompt === GEN_PROMPT_DEFAULT_V2) {
+    gprompt = d.gen.prompt;
+    if (gprovider === GEN_V2_DEFAULTS.provider && g.model === GEN_V2_DEFAULTS.model && g.quality === GEN_V2_DEFAULTS.quality) {
+      gmodel = d.gen.model; gquality = d.gen.quality;
+    }
+  }
   const post = {
     normalize: bool(p.normalize, d.post.normalize),
     lowPct: num(p.lowPct, RANGES.lowPct, d.post.lowPct),
@@ -184,10 +235,12 @@ export function normalizeDepth(raw, env = {}) {
     // this module stays free of the provider code. A model id from another provider falls back there.
     gen: {
       provider: gprovider,
-      model: gid(g.model, gprovider === d.gen.provider ? d.gen.model : ""),
-      quality: gid(g.quality, d.gen.quality),
+      model: gid(gmodel, gprovider === d.gen.provider ? d.gen.model : ""),
+      quality: gid(gquality, d.gen.quality),
       imageSize: gid(g.imageSize, d.gen.imageSize),
-      prompt: gprompt
+      prompt: gprompt,
+      maxLong: num(g.maxLong, RANGES.genMaxLong, d.gen.maxLong),
+      styleRef: cleanStylePath(g.styleRef)
     },
     parallax: {
       strength: num(x.strength, RANGES.strength, d.parallax.strength),

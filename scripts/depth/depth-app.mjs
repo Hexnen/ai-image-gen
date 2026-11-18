@@ -99,6 +99,7 @@ export class DepthApp extends HandlebarsApplicationMixin(ApplicationV2) {
       generative: this.engine === "generative",
       setLine: this.engine === "generative"
         ? F("AIIMG.DepthRun.SetGen", { provider: d.gen.provider, model: d.gen.model, quality: d.gen.quality })
+          + (d.gen.styleRef ? ` · ${F("AIIMG.DepthRun.SetGenStyle", { file: d.gen.styleRef.split("/").pop() })}` : "")
         : F("AIIMG.DepthRun.SetBrowser", { model: d.model, precision: d.precision, res: d.resolution, mask: d.mask.enabled ? d.mask.model : L("AIIMG.DepthRun.NoMask") }),
       typeKey: this.typeKey,
       result: r ? {
@@ -212,6 +213,7 @@ async function confirmPaid(est) {
   const lines = [
     F("AIIMG.DepthRun.PaidModel", { model: est.modelLabel, provider: est.provider, quality: est.provider === "gemini" ? est.imageSize : est.quality }),
     F("AIIMG.DepthRun.PaidSize", { w: est.size.width, h: est.size.height, rw: est.ref.width, rh: est.ref.height }),
+    est.styleRef ? F("AIIMG.DepthRun.PaidStyle", { w: est.styleRef.width, h: est.styleRef.height, file: String(est.stylePath ?? "").split("/").pop() }) : "",
     est.outTokens != null ? F("AIIMG.DepthRun.PaidTokens", { out: est.outTokens, ref: est.refTokens ?? "?", usd: usd(est.tokensUSD) }) : "",
     F("AIIMG.DepthRun.PaidCost", { usd: usd(est.usd), source: L(est.source === "learned" ? "AIIMG.DepthRun.SrcLearned" : "AIIMG.DepthRun.SrcTable") })
   ].filter(Boolean);

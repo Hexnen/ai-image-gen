@@ -84,10 +84,20 @@ export async function runDepth({ path, depth, typeKey = "", ui = {} }) {
     const G = await import("./generative.mjs");
     const F = await import("../generate-flow.mjs");
     const { estimateSettings } = await import("../ref-convert.mjs");
+    // W6-M: optional style-example depth map (path in the Depth settings), loaded before the estimate so its size is costed
+    let style = null;
+    const stylePath = depth.gen?.styleRef ?? "";
+    if (stylePath) {
+      try { style = { ...(await loadImage(stylePath)), path: stylePath }; }
+      catch (e) {
+        console.warn(`${MODULE_ID} | depth style example ${stylePath}`, e);
+        throw Object.assign(new Error(`Style example: ${e?.message ?? e}`), { code: "styleRef" });
+      }
+    }
     status("generate");
     const name = paths.base;
-    const r = await G.runGenerativeDepth({ depth, typeKey, name, img }, {
-      estimate: (cfg) => F.estimateInfo(cfg, 1, "sync"),
+    const r = await G.runGenerativeDepth({ depth, typeKey, name, img, style }, {
+      estimate: (cfg, refCount = 1) => F.estimateInfo(cfg, refCount, "sync"),
       execute: (args) => F.executeGeneration(args),
       confirm: (est) => ui.confirmPaid ? ui.confirmPaid(est) : Promise.resolve(false),
       decode: decodeBlob,
@@ -96,7 +106,7 @@ export async function runDepth({ path, depth, typeKey = "", ui = {} }) {
     D = r.D;
     modelSize = Math.min(r.returned.w, r.returned.h);
     t.generateMs = r.ms;
-    Object.assign(res, { model: `${r.estimate.modelLabel} (${r.estimate.provider})`, device: "api", dtype: r.estimate.quality, cost: r.cost, estimate: r.estimate, returned: r.returned });
+    Object.assign(res, { model: `${r.estimate.modelLabel} (${r.estimate.provider})`, device: "api", dtype: r.estimate.quality, cost: r.cost, estimate: r.estimate, returned: r.returned, styleRef: style ? stylePath : null });
   } else {
     status("depth");
     const r = await E.estimateDepth(plan, img, { onProgress: ui.progress, onStep: (s) => status("load", s), confirmStep: (s) => ui.confirmDownload ? ui.confirmDownload([s]) : Promise.resolve(false) });
@@ -137,6 +147,7 @@ export async function runDepth({ path, depth, typeKey = "", ui = {} }) {
     size: [img.w, img.h], near: "bright",
     encoding: fmt === "png-rg16" ? { format: "png-rg16", decode: "d = (r*255*256 + g*255) / 65535", mask: A && depth.output.maskChannel ? "B" : null } : { format: "png16", decode: "d = gray / 65535", mask: res.maskPath ?? null },
     engine, model: res.model, repo: res.repo, device: res.device, dtype: res.dtype, resolution: res.resolution,
+    ...(engine === "generative" ? { generated: res.returned ? [res.returned.w, res.returned.h] : null, styleRef: res.styleRef ?? null } : {}),
     maskModel: res.mask?.ok ? res.mask.repo : null, post: depth.post, timings: Object.fromEntries(Object.entries(t).map(([k, v]) => [k, Math.round(v ?? 0)]))
   };
   res.metaPath = await upload(paths.meta, new TextEncoder().encode(JSON.stringify(meta, null, 2)), "application/json");

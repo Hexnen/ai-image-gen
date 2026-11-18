@@ -370,9 +370,24 @@
             {{/if}}
             <div class="aiimg-field">
               <label class="aiimg-lbl" for="aiimg-dgprompt">{{localize "AIIMG.Depth.GenPrompt"}}</label>
-              <textarea id="aiimg-dgprompt" name="depth.gen.prompt" rows="5" maxlength="2000" {{#unless isGM}}disabled{{/unless}}>{{depth.gen.prompt}}</textarea>
+              <textarea id="aiimg-dgprompt" name="depth.gen.prompt" rows="10" maxlength="2000" {{#unless isGM}}disabled{{/unless}}>{{depth.gen.prompt}}</textarea>
+              {{#unless depth.gen.isDefaultPrompt}}{{#if isGM}}<button type="button" data-action="depthPromptDefault"><i class="fa-solid fa-rotate-left" aria-hidden="true"></i> {{localize "AIIMG.Depth.GenPromptDefault"}}</button>{{/if}}{{/unless}}
               {{#if depth.gen.estimate}}<p class="hint">{{depth.gen.estimate}}</p>{{/if}}
               <p class="hint">{{localize "AIIMG.Depth.GenConfirmHint"}}</p>
+            </div>
+            <div class="aiimg-field">
+              <label class="aiimg-lbl" for="aiimg-dgmaxlong">{{localize "AIIMG.Depth.GenMaxLong"}}</label>
+              <input id="aiimg-dgmaxlong" type="number" name="depth.gen.maxLong" value="{{depth.gen.maxLong}}" min="{{depth.gen.maxLongRange.[0]}}" max="{{depth.gen.maxLongRange.[1]}}" step="{{depth.gen.maxLongRange.[2]}}" aria-describedby="aiimg-dgmaxlong-hint" {{#unless isGM}}disabled{{/unless}}>
+              <p class="hint" id="aiimg-dgmaxlong-hint">{{localize "AIIMG.Depth.GenMaxLongHint"}}</p>
+            </div>
+            <div class="aiimg-field">
+              <label class="aiimg-lbl" for="aiimg-dgstyle">{{localize "AIIMG.Depth.GenStyleRef"}}</label>
+              <div class="aiimg-depth-style">
+                <input id="aiimg-dgstyle" type="text" name="depth.gen.styleRef" value="{{depth.gen.styleRef}}" spellcheck="false" placeholder="{{localize 'AIIMG.Depth.GenStyleRefNone'}}" aria-describedby="aiimg-dgstyle-hint" {{#unless isGM}}disabled{{/unless}}>
+                <button type="button" data-action="depthStyleRef" {{#unless isGM}}disabled{{/unless}}><i class="fa-solid fa-file-image" aria-hidden="true"></i> {{localize "AIIMG.Depth.GenStyleRefPick"}}</button>
+                {{#if depth.gen.styleRef}}<button type="button" data-action="depthStyleClear" {{#unless isGM}}disabled{{/unless}}><i class="fa-solid fa-xmark" aria-hidden="true"></i> {{localize "AIIMG.Depth.GenStyleRefClear"}}</button>{{/if}}
+              </div>
+              <p class="hint" id="aiimg-dgstyle-hint">{{localize "AIIMG.Depth.GenStyleRefHint"}}</p>
             </div>
             {{/if}}
 

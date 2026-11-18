@@ -5,7 +5,7 @@ import { detectImageTypes, virtualGroups } from "./image-types.mjs";
 import { getConfig, setConfig, resetConfig, isConfigured, sizePresetsFor, fitConfig, clampCount, depthEnv } from "./config-store.mjs";
 import {
   ENGINES, PRECISIONS, OUTPUT_FORMATS, MASK_MODELS, RANGES, modelByKey, maskByKey, modelsFor, defaultModelKey,
-  depthFromForm, fmtMB, sizeLine
+  depthFromForm, fmtMB, sizeLine, GEN_PROMPT_DEFAULT
 } from "./depth-settings.mjs";
 import * as providers from "./providers/index.mjs";
 import { getUsage } from "./limits.mjs";
@@ -57,7 +57,10 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       removeRef: ImageConfigApp.#onRemoveRef,
       save: ImageConfigApp.#onSave,
       reset: ImageConfigApp.#onReset,
-      depthTry: ImageConfigApp.#onDepthTry
+      depthTry: ImageConfigApp.#onDepthTry,
+      depthStyleRef: ImageConfigApp.#onDepthStyleRef,
+      depthStyleClear: ImageConfigApp.#onDepthStyleClear,
+      depthPromptDefault: ImageConfigApp.#onDepthPromptDefault
     }
   };
 
@@ -369,8 +372,10 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
     let cfg = null, est = null;
     try {
       cfg = genDepthConfig(dp, { width: 1024, height: 1536 });
-      const info = estimateInfo(cfg, 1, "sync");
-      est = genEstimate(cfg, { width: 1024, height: 1536 }, info.display, estimateSettings());
+      // W6-M: a style example is a second input image (its real size is only known at run time: costed like a square 1024)
+      const style = g.styleRef ? { width: 1024, height: 1024 } : null;
+      const info = estimateInfo(cfg, style ? 2 : 1, "sync");
+      est = genEstimate(cfg, { width: 1024, height: 1536 }, info.display, estimateSettings(), style);
     } catch (e) { console.warn(`${MODULE_ID} | depth estimate`, e); }
     const provider = cfg?.provider ?? g.provider;
     const model = providers.getModel(provider, cfg?.model ?? g.model);
@@ -380,6 +385,9 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
       qualities: provider === "openai" ? (model?.qualities ?? ALL_QUALITIES).map((q) => ({ id: q, selected: q === cfg?.quality, label: game.i18n.has(`AIIMG.Quality.${q}`) ? L(`AIIMG.Quality.${q}`) : q })) : null,
       sizes: provider === "gemini" ? (model?.sizes ?? ALL_IMAGE_SIZES).map((s) => ({ id: s, selected: s === cfg?.imageSize, label: s })) : null,
       prompt: g.prompt,
+      isDefaultPrompt: g.prompt === GEN_PROMPT_DEFAULT,
+      maxLong: g.maxLong, maxLongRange: RANGES.genMaxLong,
+      styleRef: g.styleRef,
       hasKey: !!getKey(provider),
       estimate: est ? F("AIIMG.Depth.GenEstimate", { usd: fmtUsd(est.usd), w: est.size.width, h: est.size.height, rw: est.ref.width, rh: est.ref.height }) : ""
     };
@@ -944,6 +952,34 @@ export class ImageConfigApp extends HandlebarsApplicationMixin(ApplicationV2) {
         this.render();
       }
     }).render({ force: true });
+  }
+
+  /** W6-M: pick the optional style-example depth map (path only; nothing is copied or bundled). */
+  static #onDepthStyleRef() {
+    if (!game.user.isGM) return;
+    this.#readForm();
+    new (filePicker())({
+      type: "image", current: this.draft.depth?.gen?.styleRef || "",
+      callback: (path) => {
+        this.draft.depth = depthFromForm({ "depth.gen.styleRef": path }, this.draft.depth, depthEnv());
+        this.render();
+      }
+    }).render({ force: true });
+  }
+
+  static #onDepthStyleClear() {
+    if (!game.user.isGM) return;
+    this.#readForm();
+    this.draft.depth = depthFromForm({ "depth.gen.styleRef": "" }, this.draft.depth, depthEnv());
+    this.render();
+  }
+
+  /** W6-M: put the default depth prompt back into the draft (saved only with Save, like every other field). */
+  static #onDepthPromptDefault() {
+    if (!game.user.isGM) return;
+    this.#readForm();
+    this.draft.depth = depthFromForm({ "depth.gen.prompt": GEN_PROMPT_DEFAULT }, this.draft.depth, depthEnv());
+    this.render();
   }
 
   static #onUploadRefs() {
