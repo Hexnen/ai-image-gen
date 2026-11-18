@@ -1292,4 +1292,35 @@ await test("W6-C: in-place edits keep the biography: no bio warning when it is n
   assert.ok(!conv.ops.some((o) => o.op === "updateActor" && o.set?.texts?.biography), JSON.stringify(conv.ops));
 });
 
+/* ---------------------------------------------------------------- W6-E: the GM asked for no biography */
+await test("W6-E: bio.missing says it can be ignored if the GM asked for none; texts.biography \"\" (GM asked) = same warning, no fix round", async () => {
+  // forgotten bio: the warning text (model and GM) carries the ignore clause and stays actionable (the fix round asks once)
+  const none = await VO(blankHero(), rep(fullBuild()), { rank: "global" });
+  const miss = none.warnings.find((w) => w.code === "bio.missing");
+  assert.match(miss.message, /If the GM asked for no biography, ignore this warning\./);
+  assert.match(miss.hint, /If the GM asked for none, do not resubmit for it/);
+  assert.equal(isActionableWarning(miss), true);
+  // GM-requested "no bio": replace with texts.biography "" -> accepted, the warning still shows for the GM, nothing actionable
+  const g = group(catOcc);
+  for (const bio of ["", "  "]) {
+    const sub = await g.runProposalTool("submit_proposal", withBio(bio), { doc: blankHero(), options: { rank: "global" } });
+    assert.equal(sub.ok, true, JSON.stringify(sub.errors));
+    const w = sub.warnings.find((x) => x.code === "bio.missing");
+    assert.ok(w && /left empty on purpose/.test(w.message) && /ignore this warning/.test(w.message), JSON.stringify(sub.warnings));
+    assert.equal(isActionableWarning(w), false);
+    assert.deepEqual(g.actionableWarnings("submit_proposal", sub), [], JSON.stringify(sub.warnings));
+    assert.ok(!sub.warnings.some((x) => x.code === "bio.paragraphs"), "an empty bio is not a paragraph-count problem");
+  }
+  // the GM preview (full result) shows the same warning text
+  const gm = await VO(blankHero(), withBio(""), { rank: "global" });
+  assert.match(gm.warnings.find((w) => w.code === "bio.missing").message, /If the GM asked for no biography, ignore this warning/);
+  // an ops build on an empty sheet: updateActor with texts.biography "" -> same, no fix round
+  const ob = await g.runProposalTool("submit_proposal", ops(
+    { op: "updateActor", opId: "a", set: { texts: { biography: "" } } },
+    { op: "addItem", opId: "s", ref: ref("powerSource", "Strange Meteor") },
+    { op: "addItem", opId: "p", ref: ref("power", "Glide Wings"), level: "basic", sourceOpId: "s" }), { doc: blankHero(), options: { rank: "global" } });
+  const ow = (ob.warnings ?? []).find((x) => x.code === "bio.missing");
+  assert.ok(ow && isActionableWarning(ow) === false, JSON.stringify([ob.errors, ob.warnings]));
+});
+
 console.log(`\n${passed} passed${process.exitCode ? " (with failures)" : ""}`);

@@ -1159,6 +1159,21 @@ await test("W5-B-1 fix round: setting off unchanged; request cap reached -> no f
   assert.equal(r.reason, "done"); assert.equal(r.fixRound, undefined);
 });
 
+await test("W6-E: a GM-requested 'no bio' build (texts.biography \"\") ends on the submit, no fix round; a forgotten bio still gets one", async () => {
+  const V = await import("../scripts/systems/invincible/validate.mjs");
+  const bioW = (params) => ({ code: "bio.missing", path: "proposal.texts.biography", ...V.MESSAGES["bio.missing"](params) });
+  const pa = { actionableWarnings: (n, res) => V.actionableWarnings(n, res) };   // the invincible pack's own rule
+  let fetchImpl = fakeModel([sub("e1"), reply({ text: "never" })]);
+  let { deps } = makeDeps({ pack: warnPack([[bioW({ declined: true })]], pa), fetchImpl });
+  let r = await (await createHarness(deps).openSession(ACTOR)).send("Zbuduj bohatera, bez biografii.");
+  assert.equal(r.reason, "submitted"); assert.equal(r.ok, true); assert.equal(r.requests, 1); assert.equal(fetchImpl.calls.length, 1); assert.equal(r.fixRound, undefined);
+  fetchImpl = fakeModel([sub("e2"), reply({ text: "The GM asked for no biography." })]);
+  ({ deps } = makeDeps({ pack: warnPack([[bioW({})]], pa), fetchImpl }));
+  r = await (await createHarness(deps).openSession(ACTOR2)).send("build");
+  assert.equal(r.requests, 2); assert.equal(r.fixRound, true);
+  assert.match(fetchImpl.calls[1].body.messages.at(-1).content[0].content, /If the GM asked for no biography, ignore this warning/);
+});
+
 // =========================================================================================== bughunt-1 fixes
 
 const rolesOf = (msgs) => msgs.map((m) => m.role + (Array.isArray(m.content) && !m.content.length ? "(EMPTY)" : "")).join(",");

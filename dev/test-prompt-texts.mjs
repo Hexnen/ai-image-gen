@@ -338,7 +338,8 @@ await test("W5-T system[0] + submit tool: the fix round (W5-B-1), never an empty
   // the tags that mark the text versions (the digest's goes into the pack fingerprint)
   const { HARNESS_RULES_VERSION } = await import("../scripts/build/harness-prompt.mjs");
   const { DIGEST_VERSION } = await import("../scripts/systems/invincible/rules-digest.mjs");
-  assert.equal(HARNESS_RULES_VERSION, 8);   // 8 = W6-C (setting default, biography) assert.equal(DIGEST_VERSION, 7);
+  assert.equal(HARNESS_RULES_VERSION, 9);   // 9 = W6-E (no biography when the GM asks for none)
+  assert.equal(DIGEST_VERSION, 7);
   assert.ok(!/invincible|talent/i.test(h), "system[0] stays system-agnostic");
 });
 
@@ -370,8 +371,8 @@ await test("W5-T digest + guide + hints: levels in every profile, slugfest damag
 await test("W6-C system[0]: built-in classic-USA default setting with 'unless the GM says otherwise', no question; two-paragraph bio", () => {
   const h = HARNESS_RULES;
   assert.match(h, /Setting: classic comic-book USA \(its cities, institutions, era\) for names, places, history and origins, unless the GM says otherwise; then follow the GM, never ask\./);
-  assert.match(h, /A character you build or create gets a biography: exactly two paragraphs in your own words \(no rule text\)/);
-  assert.match(h, /On an existing character change it only when asked or a change makes it false \(minimally; the rationale says so\)/);
+  assert.match(h, /A character you build or create gets a biography unless the GM asks for none \(then send ""\): exactly two paragraphs in your own words \(no rule text\)/);   // W6-E
+  assert.match(h, /On an existing character change it only if asked or a change makes it false \(minimally; the rationale says so\)/);
   assert.ok(!/invincible|talent/i.test(h), "system[0] stays system-agnostic");
   // the field the model fills: texts.biography in both updateActor and replace (schema) and named in the guide
   const sch = proposalToolDefs()[0].input_schema;

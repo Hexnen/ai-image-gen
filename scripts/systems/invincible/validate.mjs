@@ -140,7 +140,11 @@ export const MESSAGES = Object.freeze({
   // W4-A-1 (D-16): an empty team is a solo hero, not a defect: quiet info (validator; the vendored rules keep their warning)
   "team.empty": () => ({ message: "No team and no team base: a solo hero.", hint: "Nothing to fix (a solo hero keeps team and teamBase empty)." }),
   // W6-C: the biography (texts.biography -> system.biography, bio.mjs)
-  "bio.missing": () => ({ message: "No biography: a built or new character needs one.", hint: `Set texts.biography: exactly ${BIO_PARAGRAPHS} paragraphs (one per line) in your own words, in the GM's language.` }),
+  // W6-E (owner: «brak biografii to może być ostrzeżenie ... jeśli user poprosił o brak biografii można zignorować»): the message
+  // (model AND GM) says it can be ignored when the GM asked for none; texts.biography "" = the model says the GM asked (no fix round)
+  "bio.missing": (p) => (p.declined
+    ? { message: "No biography: left empty on purpose (texts.biography \"\"). If the GM asked for no biography, ignore this warning.", hint: "Nothing to fix if the GM asked for no biography." }
+    : { message: "No biography: a built or new character needs one. If the GM asked for no biography, ignore this warning.", hint: `Set texts.biography: exactly ${BIO_PARAGRAPHS} paragraphs (one per line) in your own words, in the GM's language. If the GM asked for none, do not resubmit for it; say so in one sentence.` }),
   "bio.paragraphs": (p) => ({ message: `The biography has ${p.count} paragraph(s); it needs exactly ${BIO_PARAGRAPHS}.`, hint: `Write texts.biography as exactly ${BIO_PARAGRAPHS} paragraphs, one per line.` }),
   "bio.copied": (p) => ({ message: `The biography repeats catalogue or rulebook text ("${p.run}").`, hint: "Write the biography in your own words; never copy rule or catalogue text." }),
   "bio.rewrite": () => ({ message: "Rewrites the existing biography.", hint: "Nothing to fix if the GM asked or the change made it false (then the rationale says so); otherwise leave texts.biography out." }),
@@ -634,7 +638,8 @@ async function validateActor(doc, P, dk, catalog, profile, opts, res, acc, finis
 /**
  * W6-C biography checks (both actor kinds). A build (a replace, or an ops build that fills a sheet without creation items under the
  * creation profile) needs a biography on the result: bio.missing, an ACTIONABLE warning (the harness's one fix round asks the
- * model for it, W5-B-1; the GM still gets the build if that fails: not an error, so a missing bio never blocks a whole build). A written
+ * model for it, W5-B-1; the GM still gets the build if that fails: not an error, so a missing bio never blocks a whole build).
+ * W6-E: texts.biography sent as "" (the GM asked for none) keeps bio.missing for the GM but makes it non-actionable. A written
  * biography needs exactly BIO_PARAGRAPHS paragraphs (warning bio.paragraphs) and no run of catalogue text (error bio.copied). An
  * ops edit that rewrites a non-empty biography gets bio.rewrite (a GM-visible warning, nothing for the model to fix).
  */
@@ -647,7 +652,10 @@ export function bioIssues(basePlain, proj, P, profile, catalog, acc) {
   const opsBuild = P.mode === "ops" && profile === "creation" && !(basePlain.items ?? []).some(creation) && (proj.actor?.items ?? []).some(creation);
   if ((P.mode === "replace" || opsBuild) && !bioFlat(getPath(proj.actor, "system.biography"))) {
     const actorOp = ops.find(([, x]) => x.kind === "actor")?.[0];
-    acc.warnings.push({ code: "bio.missing", path: P.mode === "replace" ? "proposal.texts.biography" : "texts.biography", ...(actorOp ? { opId: actorOp } : {}), params: {} });
+    // W6-E: an explicitly empty texts.biography ("" or blank) = the GM asked for none: the same warning for the GM, no fix round
+    const blank = (t) => typeof t === "string" && !t.trim();
+    const declined = P.mode === "replace" ? blank(P.proposal?.texts?.biography) : (P.ops ?? []).some((o) => o?.op === "updateActor" && blank(o.set?.texts?.biography));
+    acc.warnings.push({ code: "bio.missing", path: P.mode === "replace" ? "proposal.texts.biography" : "texts.biography", ...(actorOp ? { opId: actorOp } : {}), params: declined ? { declined: true } : {} });
   }
   if (!ch || typeof ch.to !== "string") return;
   const count = bioParagraphs(ch.to).length;
