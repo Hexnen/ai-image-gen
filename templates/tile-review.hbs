@@ -1,0 +1,25 @@
+<section class="aiimg-tile-rev">
+  <p class="aiimg-pick-hint">{{#if onScene}}{{localize "AIIMG.Tile.ReviewHint"}}{{else}}{{offScene}}{{/if}}</p>
+  <div class="aiimg-tile-rev-grid">
+    {{#each cands}}
+    <button type="button" class="aiimg-tile-rev-card {{#if active}}active{{/if}}" data-action="select" data-uid="{{uid}}" aria-pressed="{{#if active}}true{{else}}false{{/if}}">
+      <img src="{{src}}" alt="#{{n}}">
+      <span>#{{n}}{{#if cost}} · {{cost}}{{/if}}</span>
+    </button>
+    {{/each}}
+  </div>
+
+  {{#if error}}<p class="aiimg-error"><i class="fa-solid fa-circle-xmark"></i> {{error}}</p>{{/if}}
+
+  <footer class="aiimg-footer">
+    {{#if onScene}}
+    <button type="button" data-action="pan" data-tooltip="AIIMG.Tile.PanTip"><i class="fa-solid fa-location-crosshairs"></i></button>
+    <button type="button" data-action="toggle" aria-pressed="{{#if original}}true{{else}}false{{/if}}"><i class="fa-solid {{#if original}}fa-eye{{else}}fa-eye-slash{{/if}}"></i> {{#if original}}{{localize "AIIMG.Tile.ShowVariant"}}{{else}}{{localize "AIIMG.Tile.ShowOriginal"}}{{/if}}</button>
+    {{/if}}
+    <button type="button" data-action="discard" {{#if busy}}disabled{{/if}}><i class="fa-solid fa-trash"></i> {{localize "AIIMG.Tile.Discard"}}</button>
+    {{#if canRetry}}
+    <button type="button" data-action="retry" {{#if busy}}disabled{{/if}}><i class="fa-solid {{#if busy}}fa-spinner fa-spin{{else}}fa-rotate{{/if}}"></i> {{localize "AIIMG.Tile.Retry"}}</button>
+    {{/if}}
+    <button type="button" class="primary" data-action="accept" {{#if busy}}disabled{{/if}} {{#unless hasActive}}disabled{{/unless}}><i class="fa-solid fa-check"></i> {{localize "AIIMG.Tile.Accept"}}</button>
+  </footer>
+</section>

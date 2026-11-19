@@ -20,6 +20,7 @@ import { migrateFromAiImageGen } from "./migrate-id.mjs";
 import { initVault, listenVault } from "./key-vault.mjs";
 import { syncOptimizerProfile } from "./optimize.mjs";
 import { generateImage, estimateGeneration } from "./api.mjs";
+import { TILE_TYPE_KEY, DEFAULT_TILE_PROMPT } from "./tile/tile-core.mjs";
 
 /**
  * The old module (id "ai-image-gen") is enabled at the same time: this one stays dormant (no API, no poller, no buttons,
@@ -92,6 +93,22 @@ Hooks.once("ready", async () => {
   if (game.user.isGM) await migrateFromAiImageGen();
   // W6-H: API keys from the GM-only world store into memory + one-time copy of this browser's client keys (never cleared)
   if (game.user.isGM) { listenVault(); await initVault(); }
+  // W7-A AI Tile: its own image type (provider, model, size limit, prompt template, output) in the config window
+  try {
+    imageTypes.registerImageType({
+      key: TILE_TYPE_KEY, label: "AIIMG.Tile.TypeLabel", group: "AIIMG.Tile.Group", owner: MODULE_ID,
+      defaults: { promptTemplate: DEFAULT_TILE_PROMPT, width: 2048, height: 2048, quality: "medium",
+        refPurpose: "max", refMaxEdge: 512, // image 2 (context) goes through the usual reference shrinking; image 1 never does
+        output: { maxEdge: 4096, format: "webp", quality: 0.9 } }
+    });
+  } catch (e) { console.error(`${MODULE_ID} | AI Tile type`, e); }
+  if (game.user.isGM) {
+    api.tile = {
+      start: (o) => import("./tile/tile-app.mjs").then((m) => m.startAiTile(o)),
+      prepare: (o) => import("./tile/tile-flow.mjs").then((m) => m.prepareJob(o)),
+      typeKey: TILE_TYPE_KEY
+    };
+  }
   game.modules.get(MODULE_ID).api = api;
   // AI builder pack registry (spec 3.3): GM only, loaded dynamically; it imports a system pack only for the matching system, and a failure never touches image generation.
   if (game.user.isGM) import("./build/registry.mjs").then((m) => m.startBuildRegistry(api)).catch((e) => console.error(`${MODULE_ID} | AI builder registry failed to load`, e));
@@ -147,4 +164,6 @@ Hooks.on("getSceneControlButtons", (controls) => {
   add("config", "AIIMG.Controls.Open", "fa-solid fa-wand-magic-sparkles", () => ImageConfigApp.open());
   add("batches", "AIIMG.Controls.Batches", "fa-solid fa-layer-group", () => BatchesApp.open());
   add("log", "AIIMG.Controls.Log", "fa-solid fa-clipboard-list", () => LogApp.open());
+  // W7-A: draw a shape on the map, the model changes it, the result is pasted as a Tile
+  add("tile", "AIIMG.Controls.Tile", "fa-solid fa-vector-square", () => import("./tile/tile-app.mjs").then((m) => m.startAiTile()).catch((e) => console.error(`${MODULE_ID} | AI Tile`, e)));
 });

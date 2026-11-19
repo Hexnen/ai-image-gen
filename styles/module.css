@@ -344,3 +344,34 @@ button.link:focus-visible { outline: 2px solid var(--color-warm-2, #c9593f); out
 .aiimg-depth .aiimg-depth-style { display: flex; gap: 0.4rem; align-items: center; }
 .aiimg-depth .aiimg-depth-style input { flex: 1 1 auto; min-width: 0; }
 .aiimg-depth .aiimg-depth-style button { flex: 0 0 auto; width: auto; }
+/* W7-A AI Tile: drawing HUD over the canvas, prompt window, versions window */
+.aiimg-tile-hud { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 100; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; background: rgba(12, 12, 14, .88); color: #eee; border: 1px solid rgba(255, 138, 0, .7); box-shadow: 0 4px 16px rgba(0, 0, 0, .5); font-size: var(--font-size-13, 13px); max-width: min(92vw, 860px); }
+.aiimg-tile-hud button { width: auto; flex: 0 0 auto; line-height: 1.6; padding: 0 10px; white-space: nowrap; }
+.aiimg-tile-hud button.primary { border-color: #ff8a00; }
+.aiimg-tile-hud-title { font-weight: 600; white-space: nowrap; color: #ffb35c; }
+.aiimg-tile-hud-hint { flex: 1 1 auto; opacity: .85; font-size: var(--font-size-12, 12px); }
+.aiimg-tile-dialog .window-content, .aiimg-tile-review .window-content { padding: 10px 14px; overflow: auto; }
+.aiimg-tile textarea { width: 100%; resize: vertical; }
+.aiimg-tile-previews { display: flex; gap: 8px; align-items: flex-start; }
+.aiimg-tile-previews figure { margin: 0; flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.aiimg-tile-previews figure.aiimg-tile-mask { flex: 0 0 22%; }
+.aiimg-tile-previews img, .aiimg-tile-wait { width: 100%; max-height: 220px; object-fit: contain; border: 1px solid var(--color-border-dark-4, #333); border-radius: 4px; background: conic-gradient(#5a5a5a 25%, #3c3c3c 0 50%, #5a5a5a 0 75%, #3c3c3c 0) 0 0 / 16px 16px; }
+.aiimg-tile-wait { aspect-ratio: 3 / 2; display: grid; place-items: center; font-size: 1.6em; opacity: .7; }
+.aiimg-tile-previews figcaption { font-size: var(--font-size-11, 11px); opacity: .8; }
+.aiimg-tile-facts { margin: 4px 0; font-size: var(--font-size-11, 11px); }
+.aiimg-tile-grid { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin: 6px 0; }
+.aiimg-tile-grid label { display: flex; align-items: center; gap: 6px; }
+.aiimg-tile-grid input[type="number"] { width: 4.5em; }
+.aiimg-tile-mode { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; margin: 6px 0; }
+.aiimg-tile-mode label { display: flex; align-items: center; gap: 4px; }
+.aiimg-tile-model { display: flex; gap: 8px; align-items: center; margin: 4px 0; font-size: var(--font-size-12, 12px); }
+.aiimg-tile-model button.link { width: auto; flex: 0 0 auto; background: none; border: 0; text-decoration: underline; padding: 0; }
+.aiimg-tile-estimate { margin: 4px 0; font-weight: 600; }
+.aiimg-tile-prompt p { font-size: var(--font-size-11, 11px); white-space: pre-wrap; opacity: .85; }
+.aiimg-tile .aiimg-footer, .aiimg-tile-rev .aiimg-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.aiimg-tile .aiimg-footer button, .aiimg-tile-rev .aiimg-footer button { width: auto; flex: 0 0 auto; }
+.aiimg-tile-rev-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+.aiimg-tile-rev-card { display: flex; flex-direction: column; gap: 4px; height: auto; padding: 4px; border: 2px solid transparent; border-radius: 6px; background: rgba(0, 0, 0, .25); }
+.aiimg-tile-rev-card.active { border-color: #ff8a00; }
+.aiimg-tile-rev-card img { width: 100%; aspect-ratio: 1; object-fit: contain; border: 0; background: conic-gradient(#5a5a5a 25%, #3c3c3c 0 50%, #5a5a5a 0 75%, #3c3c3c 0) 0 0 / 16px 16px; }
+.aiimg-tile-rev-card span { font-size: var(--font-size-11, 11px); }

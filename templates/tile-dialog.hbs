@@ -1,0 +1,69 @@
+<section class="aiimg-tile">
+  {{#unless hasKey}}
+  <p class="aiimg-warn"><i class="fa-solid fa-triangle-exclamation"></i> {{localize "AIIMG.Gen.NoKey"}} ({{ready.providerLabel}})</p>
+  {{/unless}}
+
+  <div class="aiimg-tile-previews">
+    <figure>
+      {{#if crop}}<img src="{{crop}}" alt="{{localize 'AIIMG.Tile.CropLabel'}}">{{else}}<div class="aiimg-tile-wait"><i class="fa-solid {{#if preparing}}fa-spinner fa-spin{{else}}fa-image{{/if}}"></i></div>{{/if}}
+      <figcaption>{{localize "AIIMG.Tile.CropLabel"}}</figcaption>
+    </figure>
+    <figure>
+      {{#if context}}<img src="{{context}}" alt="{{localize 'AIIMG.Tile.ContextLabel'}}">{{else}}<div class="aiimg-tile-wait"><i class="fa-solid {{#if preparing}}fa-spinner fa-spin{{else}}fa-image{{/if}}"></i></div>{{/if}}
+      <figcaption>{{localize "AIIMG.Tile.ContextLabel"}}</figcaption>
+    </figure>
+    {{#if maskUrl}}
+    <figure class="aiimg-tile-mask">
+      <img src="{{maskUrl}}" alt="{{localize 'AIIMG.Tile.MaskLabel'}}">
+      <figcaption>{{localize "AIIMG.Tile.MaskLabel"}}</figcaption>
+    </figure>
+    {{/if}}
+  </div>
+  {{#if facts}}<p class="notes aiimg-tile-facts">{{facts}}{{#if clipped}} {{localize "AIIMG.Tile.Clipped"}}{{/if}}</p>{{/if}}
+  {{#if inputs}}<p class="notes aiimg-tile-facts">{{inputs}}</p>{{/if}}
+
+  <div class="form-group stacked">
+    <label for="{{id}}-desc">{{localize "AIIMG.Tile.Prompt"}}</label>
+    <textarea id="{{id}}-desc" name="description" rows="4" placeholder="{{localize 'AIIMG.Tile.PromptPlaceholder'}}" {{#if busy}}disabled{{/if}}>{{description}}</textarea>
+  </div>
+
+  <div class="aiimg-tile-grid">
+    <label><span>{{localize "AIIMG.Gen.Versions"}}</span>
+      <input type="number" name="count" min="1" max="{{maxVersions}}" step="1" value="{{count}}" {{#if busy}}disabled{{/if}}></label>
+    <label data-tooltip="AIIMG.Tile.FeatherHint"><span>{{localize "AIIMG.Tile.Feather"}}</span>
+      <input type="number" name="feather" min="0" max="256" step="1" value="{{feather}}" {{#if busy}}disabled{{/if}}></label>
+    <label class="aiimg-tile-check"><input type="checkbox" name="tokens" {{#if tokens}}checked{{/if}} {{#if busy}}disabled{{/if}}> {{localize "AIIMG.Tile.Tokens"}}</label>
+    {{#if isOpenAI}}
+    <label class="aiimg-tile-check" data-tooltip="AIIMG.Tile.MaskHint"><input type="checkbox" name="mask" {{#if mask}}checked{{/if}} {{#if busy}}disabled{{/if}}> {{localize "AIIMG.Tile.Mask"}}</label>
+    {{/if}}
+  </div>
+
+  <fieldset class="aiimg-tile-mode">
+    <legend>{{localize "AIIMG.Tile.Mode"}}</legend>
+    <label><input type="radio" name="mode" value="fast" {{#if (eq mode "fast")}}checked{{/if}} {{#if busy}}disabled{{/if}}> {{localize "AIIMG.Tile.ModeFast"}}</label>
+    <label {{#if noBatch}}data-tooltip-text="{{noBatch}}"{{/if}}><input type="radio" name="mode" value="batch" {{#if (eq mode "batch")}}checked{{/if}} {{#unless canBatch}}disabled{{/unless}} {{#if busy}}disabled{{/if}}> {{localize "AIIMG.Tile.ModeBatch"}}</label>
+    {{#if noBatch}}<small class="notes">{{noBatch}}</small>{{/if}}
+  </fieldset>
+
+  <p class="aiimg-tile-model">
+    {{#if ready}}{{ready.providerLabel}} · {{ready.modelLabel}}{{/if}}
+    <button type="button" class="link" data-action="openConfig">{{localize "AIIMG.Tile.TypeSettings"}}</button>
+  </p>
+  {{#if estimate}}<p class="aiimg-tile-estimate"><i class="fa-solid fa-coins"></i> {{estimate}}</p>{{/if}}
+
+  <details class="aiimg-tile-prompt">
+    <summary>{{localize "AIIMG.Tile.PromptSent"}}</summary>
+    <p data-role="prompt">{{prompt}}</p>
+  </details>
+
+  {{#if error}}<p class="aiimg-error"><i class="fa-solid fa-circle-xmark"></i> {{error}}</p>{{/if}}
+
+  <footer class="aiimg-footer">
+    <button type="button" data-action="redraw" {{#if busy}}disabled{{/if}}><i class="fa-solid fa-draw-polygon"></i> {{localize "AIIMG.Tile.Redraw"}}</button>
+    {{#if busy}}
+    <button type="button" data-action="cancelRun"><i class="fa-solid fa-spinner fa-spin"></i> {{localize "AIIMG.Tile.Cancel"}}</button>
+    {{else}}
+    <button type="submit" class="primary" {{#unless crop}}disabled{{/unless}}><i class="fa-solid fa-wand-magic-sparkles"></i> {{#if (eq mode "batch")}}{{localize "AIIMG.Tile.SendBatch"}}{{else}}{{localize "AIIMG.Tile.Generate"}}{{/if}}</button>
+    {{/if}}
+  </footer>
+</section>
