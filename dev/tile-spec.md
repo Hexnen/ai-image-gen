@@ -50,7 +50,8 @@ Zakres:
 - Wynik: kadr środka przy różnicy proporcji > 1 % (`resultCrop`), skala s = px wyniku / px sceny regionu, plik
   kafelka = prostokąt × s (≤ maxEdge wyjścia typu, domyślnie 4096). Alfa: miękka krawędź DO ŚRODKA (`alphaRect`:
   prostokąt zwężony o pół krawędzi, rozmycie σ = krawędź/4), więc Tile nigdy nie wychodzi poza zaznaczenie.
-- Tile: `x,y,width,height` = prostokąt, `rotation 0`, `elevation 0`, `sort` = max(sort kafelków elewacji 0) + 1.
+- Tile: `width,height` = prostokąt, `x,y` = ŚRODEK prostokąta z jawną kotwicą `texture.anchorX/Y = 0.5` (v14: x/y
+  Tile to punkt kotwicy kształtu, nie lewy górny róg; sprawdzone na żywo), `rotation 0`, `elevation 0`, `sort` = max(sort kafelków elewacji 0) + 1.
 - Siatka w prompcie: `grid.size × (szer. obrazu 1 / szer. regionu)` px na pole, `grid.distance grid.units`.
 
 ## 3. Jak zaznaczenie jest pokazane w obrazie 2 (decyzja)

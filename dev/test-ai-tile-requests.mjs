@@ -110,4 +110,13 @@ await test("batch apply routes tile items to the tile branch; picker routes tile
   assert.match(p, /first\?\.meta\?\.tile[\s\S]*openTileBatchPick\(rec\)/);
 });
 
+await test("capture renders canvas.primary children one by one (v14 cached group draws nothing), weather skipped; compose uses the v14 anchor", () => {
+  const s = fs.readFileSync(new URL("../scripts/tile/tile-image.mjs", import.meta.url), "utf8");
+  assert.match(s, /for \(const c of canvas\.primary\.children\)/);
+  assert.match(s, /renderer\.render\(c, \{ renderTexture: rt, transform: m, clear: false \}\)/);
+  assert.match(s, /WeatherEffects/);
+  assert.ok(!/renderer\.render\(canvas\.primary,/.test(s), "never render the cached group itself");
+  assert.match(s, /t\.x \+ \(0\.5 - ax\) \* t\.width/);
+});
+
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);

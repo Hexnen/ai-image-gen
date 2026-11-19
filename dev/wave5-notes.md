@@ -1187,3 +1187,48 @@ c) Pkt 4, A/B wł./wył. (nowy kod, klatki pompowane ręcznie, walka 30 uczestni
 - Porównanie GPU stary vs nowy w jednej sesji na prawdziwych klatkach (okno aplikacji niewidoczne po pierwszej serii: rAF 1-3/s, czekane ok. 15 min); liczby GPU „przed” z W6-W (inna sesja, szum GPU do 2×). Pkt 4 A/B na klatkach pompowanych ręcznie (porównanie wł./wył., nie bezwzględne ms prawdziwej strony).
 - Wygląd i płynność na oko (nic nie nagrane): narastanie przechyłu tokenu wchodzącego na ekran w camera (ok. 1 s) to zmiana zachowania przy krawędzi ekranu także dla ≤ 12 tokenów (wcześniej wchodził od razu przechylony: to był ten skok); wymiana zbioru przy przesuwaniu (wygaszanie ponad 12) nie oglądana.
 - Gracz, DPR 2, słabszy GPU, prawdziwe mapy modułu, Electron/serwer właściciela, prawdziwa mysz.
+
+## W7-A: AI Tile: zaznaczasz prostokąt na mapie, model go zmienia, wynik wklejany jako Tile
+
+Zlecenie właściciela: „nowy button w ai gen, który pozwala na tworzenie tilei. rysujemy kształt na mapie i wysyłamy to do
+modelu z promptem co ma zmienić, a potem wklejamy tile”. Zmiana w trakcie: tylko prostokąt; do modelu dwa obrazy
+(1 = zaznaczenie + maska u OpenAI, 2 = kontekst 2× wokół tego samego środka). Specyfikacja: `dev/tile-spec.md`, pytania
+z zachowaniem tymczasowym: `dev/tile-questions.md` (10). Wersja modułu bez zmian, nic nie wypchnięte.
+
+**Pliki.** `scripts/tile/tile-core.mjs` (czysta geometria, prompt, Tile), `tile-image.mjs` (render wycinka, maska,
+obraz 2 z czerwoną ramką, przetworzenie wyniku), `tile-flow.mjs` (zadanie, Fast/Batch, zapis, Tile), `tile-draw.mjs`
+(rysowanie prostokąta), `tile-app.mjs` + `templates/tile-dialog.hbs`, `tile-review.hbs` (okno, wersje, podgląd na mapie).
+Zmiany wspólne: `executeGeneration` przyjmuje `editImage` (pierwszy, bez zmniejszania) i `mask` (tylko OpenAI);
+`providers/openai.mjs` wysyła `mask`; gałęzie tile w `batch/apply.mjs` i `pick-app.mjs`; ustawienie `tileOptions`;
+typ wirtualny `moinens-ai-gen.tile`; 56 kluczy lang pl/en; CSS; README. Testy: `dev/test-ai-tile-core.mjs` (20),
+`dev/test-ai-tile-requests.mjs` (8). Wszystkie 36 `dev/test-*.mjs` przechodzą.
+
+**Sprawdzone na żywo (lane 8, MG, scena The Warehouse, siatka 350 px = 1 m, dostawca ZAMOCKOWANY przez
+`tileTestHooks.execute`, zero prawdziwych wywołań, kluczy brak):**
+- przycisk AI Tile w kategorii Moinens AI Gen; prostokąt rysowany prawdziwym przeciągnięciem myszy = dokładnie
+  1400,1750 → 2450,2450 (1050×700 px sceny); przeciąganie narożnika i całego prostokąta działa;
+- okno: obraz 1, obraz 2 (2100×1400 px sceny wokół tego samego środka, ramka 25–75 %), maska; żądanie 1056×704;
+  „2 obrazy wejściowe, ok. 1398 tokenów (obraz 1: 726, obraz 2: 672 przy 512×336)”; koszt $0.069 za wersję (Flare medium);
+- do „dostawcy” poszło: caller `ai-tile`, 2 wersje, obraz 1 1056×704, maska (17 KB), jeden dodatkowy obraz (kontekst),
+  prompt z położeniem i zdaniem o masce;
+- okno wersji: podgląd na mapie dokładnie w miejscu prostokąta, przełączanie wersji (wersja 2 1024×1024 przycięta
+  środkiem do proporcji);
+- Akceptuj: plik `ai-image-gen/tiles/the-warehouse/…webp` 1056×704, Tile z granicami 1400,1750,1050×700, rotacja 0,
+  elewacja 0, flaga `aiTile.key`; zrzuty przed / okno / podgląd / po: scratchpad `aitile-shots/`;
+- ścieżka batcha (`applyTileBatchItem` z fałszywym rekordem, bez wywołania): plik zapisany, Tile 2800,2800,700×350,
+  powtórzenie nie robi duplikatu.
+
+**Znalezione i naprawione na żywo.**
+- v14: `canvas.primary` to grupa z cache, sama się nie rysuje (render dawał pusty obraz, a plan B ze złożenia plików
+  pokazywał INNY wycinek mapy, bo tło sceny w pliku różni się od tego, co rysują inne moduły). Teraz render dzieci
+  grupy po kolei, bez pogody; zgodny z widokiem.
+- v14: `x`/`y` Tile to punkt KOTWICY kształtu (domyślnie środek), nie lewy górny róg. Pierwsze wklejenie wyszło
+  przesunięte o pół rozmiaru. Teraz x/y = środek prostokąta z jawną kotwicą 0.5; złożenie z plików też liczy kotwicę.
+
+**Uwagi.** Na obrazach są znaczniki stref plus-ultra (rysowane w `canvas.primary`), deszcz nie. Pierwsze przeciągnięcie
+zaraz po kliknięciu przycisku (w automacie, < 1 s) nie rysuje, bo okno ładuje się dynamicznym importem; człowiek tego
+nie zauważy. Log wywołań: `estTokens` nie liczy obrazu 1 osobno (refsCount tak).
+
+**NIESPRAWDZONE.** Prawdziwe odpowiedzi modeli (czy trzymają kadr, czy rozumieją ramkę i dwa obrazy), maska OpenAI
+z prawdziwym kluczem, maska w batchu (nie wysyłana), Gemini/OpenRouter z prawdziwym kluczem, okno wyboru wersji z
+prawdziwego batcha, gracze (funkcja tylko dla MG).

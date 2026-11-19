@@ -294,6 +294,8 @@ export function pointsIn(points, rect, scale = 1, scaleY = scale) {
 
 /**
  * Dane Tile: bbox kształtu w px sceny, rotacja 0, elewacja `elevation` (domyślnie 0), sort nad kafelkami tej elewacji.
+ * v14: x/y Tile to punkt KOTWICY kształtu (`texture.anchorX/Y`, domyślnie 0.5 = środek), nie lewy górny róg
+ * (sprawdzone na żywo, lane 8: x/y = róg dało kafelek przesunięty o pół rozmiaru). Kotwica 0.5 podana jawnie.
  * @param {{x,y,width,height}} bbox
  * @param {{elevation?:number, sort?:number}[]} existing  kafelki sceny
  */
@@ -301,8 +303,9 @@ export function tileData({ bbox, src, existing = [], elevation = 0, flags }) {
   const same = existing.filter((t) => num(t.elevation, 0) === elevation).map((t) => num(t.sort, 0));
   const sort = same.length ? Math.max(...same) + 1 : 0;
   return {
-    x: bbox.x, y: bbox.y, width: bbox.width, height: bbox.height, rotation: 0, elevation, sort,
-    texture: { src },
+    x: bbox.x + bbox.width / 2, y: bbox.y + bbox.height / 2, width: bbox.width, height: bbox.height,
+    rotation: 0, elevation, sort,
+    texture: { src, anchorX: 0.5, anchorY: 0.5 },
     ...(flags ? { flags } : {})
   };
 }

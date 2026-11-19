@@ -46,10 +46,20 @@ export function renderRegion(region, w, h, { tokens = false } = {}) {
   try {
     if (!tokens) for (const t of canvas.tokens?.placeables ?? []) hide(t.mesh);
     const fg = canvas.scene?.foregroundElevation ?? Infinity;
-    for (const t of canvas.tiles?.placeables ?? []) if ((t.document.elevation ?? 0) >= fg) hide(t.mesh);
+    for (const t of canvas.tiles?.placeables ?? []) if ((t.document.elevation ?? 0) >= fg || t.document.hidden) hide(t.mesh);
     const sx = w / region.width, sy = h / region.height;
     const m = new PIXI.Matrix(sx, 0, 0, sy, -region.x * sx, -region.y * sy);
-    renderer.render(canvas.primary, { renderTexture: rt, transform: m, clear: true });
+    // v14: canvas.primary is a cached group that is not displayed itself (the environment group composites its texture),
+    // so rendering the group draws nothing: render its children one by one, in its own sorted order (live check, lane 8).
+    // Weather is skipped (rain streaks are not part of the map).
+    const WE = foundry.canvas?.layers?.WeatherEffects ?? globalThis.WeatherEffects;
+    renderer.renderTexture.bind(rt);
+    renderer.renderTexture.clear([0, 0, 0, 0]);
+    for (const c of canvas.primary.children) {
+      if (!c.visible || !c.renderable || c.worldAlpha === 0) continue;
+      if (c === canvas.weather || (WE && c instanceof WE) || c.constructor?.name === "WeatherEffects") continue;
+      renderer.render(c, { renderTexture: rt, transform: m, clear: false });
+    }
     const out = newCanvas(w, h);
     const src = renderer.extract.canvas(rt);
     out.getContext("2d").drawImage(src, 0, 0);
@@ -96,7 +106,9 @@ export async function composeRegion(region, w, h) {
       const img = await loadImg(t.texture.src);
       ctx.save();
       ctx.globalAlpha = t.alpha ?? 1;
-      ctx.translate(t.x + t.width / 2, t.y + t.height / 2);
+      // v14: x/y = punkt kotwicy (texture.anchorX/Y), środek = x + (0.5 - kotwica) * rozmiar
+      const ax = t.texture.anchorX ?? 0.5, ay = t.texture.anchorY ?? 0.5;
+      ctx.translate(t.x + (0.5 - ax) * t.width, t.y + (0.5 - ay) * t.height);
       ctx.rotate(((t.rotation ?? 0) * Math.PI) / 180);
       ctx.scale(Math.sign(t.texture.scaleX ?? 1) || 1, Math.sign(t.texture.scaleY ?? 1) || 1);
       ctx.drawImage(img, -t.width / 2, -t.height / 2, t.width, t.height);

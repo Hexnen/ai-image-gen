@@ -16,6 +16,11 @@ import {
 import { captureRegion, openaiMask, contextImage, processResult, canvasToBlob } from "./tile-image.mjs";
 
 export const TILE_FLAG = "aiTile";
+/**
+ * Test seam (dev/live checks only): `execute` replaces executeGeneration with the same arguments and result shape, so a
+ * live run can check what would be sent and feed a test image without any API key or paid call. null in normal use.
+ */
+export const tileTestHooks = { execute: null };
 /** Plik kafelka: domyślnie do 4096 px dłuższego boku (typ może ustawić inaczej w sekcji Wyjście). */
 export const TILE_OUT_EDGE = 4096;
 
@@ -135,7 +140,7 @@ const metaFor = (job) => ({
  */
 export async function generateTileVariants(job, { count = 1, signal } = {}) {
   const doc = { name: `AI Tile: ${job.sceneName}`, uuid: job.sceneUuid, documentName: "Scene", type: "tile" };
-  const res = await executeGeneration({
+  const res = await (tileTestHooks.execute ?? executeGeneration)({
     doc, description: job.description ?? "", key: TILE_TYPE_KEY, cfg: job.cfg, prompt: job.prompt, meta: metaFor(job),
     count, extraRefs: [job.contextBlob], signal, runKind: "fast", caller: "ai-tile",
     editImage: job.cropBlob, mask: job.maskBlob ?? undefined

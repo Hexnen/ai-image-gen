@@ -166,10 +166,13 @@ test("pointsIn maps scene points into a scaled rectangle", () => {
   assert.deepEqual(pointsIn([{ x: 110, y: 220 }], { x: 100, y: 200 }, 2, 3), [{ x: 20, y: 60 }]);
 });
 
-test("tileData: selection placement, rotation 0, sort above tiles of the same elevation", () => {
+test("tileData: v14 x/y = centre (anchor 0.5), rotation 0, sort above tiles of the same elevation", () => {
   const d = tileData({ bbox: { x: 1, y: 2, width: 3, height: 4 }, src: "a.webp", existing: [{ elevation: 0, sort: 5 }, { elevation: 20, sort: 99 }, { sort: 7 }] });
-  assert.deepEqual({ x: d.x, y: d.y, width: d.width, height: d.height, rotation: d.rotation, elevation: d.elevation, sort: d.sort }, { x: 1, y: 2, width: 3, height: 4, rotation: 0, elevation: 0, sort: 8 });
+  assert.deepEqual({ x: d.x, y: d.y, width: d.width, height: d.height, rotation: d.rotation, elevation: d.elevation, sort: d.sort }, { x: 2.5, y: 4, width: 3, height: 4, rotation: 0, elevation: 0, sort: 8 });
   assert.equal(d.texture.src, "a.webp");
+  assert.deepEqual([d.texture.anchorX, d.texture.anchorY], [0.5, 0.5]);
+  const e = tileData({ bbox: { x: 1400, y: 1750, width: 1050, height: 700 }, src: "c" });
+  assert.deepEqual([e.x - e.width * e.texture.anchorX, e.y - e.height * e.texture.anchorY], [1400, 1750], "top-left back at the selection");
   assert.equal(tileData({ bbox: { x: 0, y: 0, width: 1, height: 1 }, src: "b" }).sort, 0);
 });
 
