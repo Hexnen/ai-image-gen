@@ -1,6 +1,7 @@
-// W7-A AI Tile: what the providers really send for a tile edit (mocked fetch, fake keys, no network):
-// OpenAI images/edits = image[] (1 = selection, 2 = context) + mask; Gemini / OpenRouter = 2 images, no mask; the mask
-// never leaks to providers without one. Also: executeGeneration passes `editImage` first and unshrunk (source check).
+// W7-A/W7-B AI Tile: what the providers really send for a tile edit (mocked fetch, fake keys, no network).
+// W7-B: ONE picture (the surroundings with the red outline), no mask, no second image: OpenAI images/edits = image[]
+// with one file and no mask field; Gemini / OpenRouter = one image, then the prompt. Also source contracts: the tile
+// flow passes the picture as `editImage` (first and unshrunk), no extra refs, no mask; batch sends the same one picture.
 // Run from the module folder: node dev/test-ai-tile-requests.mjs
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -20,11 +21,9 @@ const test = async (name, fn) => {
   catch (e) { console.error(`FAIL ${name}\n`, e); process.exitCode = 1; }
 };
 
-// 1x1 PNG / a different-looking "PNG" for the context
+// 1x1 PNG standing in for the sent picture (surroundings + red outline)
 const PNG = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"));
-const crop = new Blob([PNG, new Uint8Array([1])], { type: "image/png" });
-const context = new Blob([PNG, new Uint8Array([2, 2])], { type: "image/png" });
-const mask = new Blob([PNG, new Uint8Array([3, 3, 3])], { type: "image/png" });
+const picture = new Blob([PNG, new Uint8Array([1])], { type: "image/png" });
 const B64 = Buffer.from(PNG).toString("base64");
 
 function mockFetch(respond) {
@@ -36,21 +35,17 @@ function mockFetch(respond) {
   return calls;
 }
 
-await test("OpenAI: images/edits multipart, image 1 = selection, image 2 = context, mask set, size from the plan", async () => {
+await test("OpenAI: images/edits multipart with ONE image[] (the picture), no mask field, size from the plan", async () => {
   const calls = mockFetch(() => ({ data: [{ b64_json: B64 }], usage: { input_tokens: 10, output_tokens: 20, input_tokens_details: { image_tokens: 8, text_tokens: 2 } } }));
-  const r = await openai.generate({ apiKey: "sk-test-0000", model: "gpt-image-2.6-flare", prompt: "p", refs: [crop, context], mask, width: 1536, height: 1024, quality: "medium" });
+  const r = await openai.generate({ apiKey: "sk-test-0000", model: "gpt-image-2.6-flare", prompt: "p", refs: [picture], width: 1536, height: 1024, quality: "medium" });
   assert.equal(calls.length, 1);
   assert.match(calls[0].url, /\/images\/edits$/);
   const form = calls[0].init.body;
   assert.ok(form instanceof FormData);
   const imgs = form.getAll("image[]");
-  assert.equal(imgs.length, 2);
-  assert.equal(imgs[0].size, crop.size, "first image is the selection");
-  assert.equal(imgs[1].size, context.size, "second image is the context");
-  const m = form.get("mask");
-  assert.ok(m, "mask sent");
-  assert.equal(m.size, mask.size);
-  assert.equal(m.type, "image/png");
+  assert.equal(imgs.length, 1);
+  assert.equal(imgs[0].size, picture.size);
+  assert.equal(form.get("mask"), null, "no mask");
   assert.equal(form.get("size"), "1536x1024");
   assert.equal(form.get("background"), null, "never transparent for tiles");
   assert.ok(r.blob instanceof Blob);
@@ -59,48 +54,54 @@ await test("OpenAI: images/edits multipart, image 1 = selection, image 2 = conte
 
 await test("OpenAI without refs never sends a mask (generations JSON)", async () => {
   const calls = mockFetch(() => ({ data: [{ b64_json: B64 }] }));
-  await openai.generate({ apiKey: "sk-test-0000", model: "gpt-image-2.6-flare", prompt: "p", refs: [], mask, width: 1024, height: 1024 });
+  await openai.generate({ apiKey: "sk-test-0000", model: "gpt-image-2.6-flare", prompt: "p", refs: [], width: 1024, height: 1024 });
   assert.match(calls[0].url, /\/images\/generations$/);
   assert.ok(!/mask/.test(calls[0].init.body));
 });
 
-await test("Gemini: both images inline in order, then the prompt; no mask field anywhere", async () => {
+await test("Gemini: the one picture inline, then the prompt; no mask field anywhere", async () => {
   const calls = mockFetch(() => ({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: B64 } }] } }] }));
-  await gemini.generate({ apiKey: "g-test", model: "gemini-3.1-flash-image", prompt: "tile prompt", refs: [crop, context], mask, aspectRatio: "16:9", imageSize: "1K" });
+  await gemini.generate({ apiKey: "g-test", model: "gemini-3.1-flash-image", prompt: "tile prompt", refs: [picture], aspectRatio: "16:9", imageSize: "1K" });
   const body = JSON.parse(calls[0].init.body);
   const parts = body.contents[0].parts;
-  assert.equal(parts.length, 3);
-  assert.equal(parts[0].inline_data.data, Buffer.from(await crop.arrayBuffer()).toString("base64"));
-  assert.equal(parts[1].inline_data.data, Buffer.from(await context.arrayBuffer()).toString("base64"));
-  assert.equal(parts[2].text, "tile prompt");
+  assert.equal(parts.length, 2);
+  assert.equal(parts[0].inline_data.data, Buffer.from(await picture.arrayBuffer()).toString("base64"));
+  assert.equal(parts[1].text, "tile prompt");
   assert.equal(body.generationConfig.image_config.aspect_ratio, "16:9");
   assert.ok(!JSON.stringify(body).includes("mask"));
 });
 
-await test("OpenRouter: two input_references in order, no mask", async () => {
+await test("OpenRouter: one input_reference, no mask", async () => {
   const calls = mockFetch(() => ({ data: [{ b64_json: B64 }], usage: { cost: 0.01 } }));
-  await openrouter.generate({ apiKey: "or-test", model: "google/gemini-3.1-flash-image", prompt: "p", refs: [crop, context], mask, width: 1024, height: 576 });
+  await openrouter.generate({ apiKey: "or-test", model: "google/gemini-3.1-flash-image", prompt: "p", refs: [picture], width: 1024, height: 576 });
   const body = JSON.parse(calls[0].init.body);
-  assert.equal(body.input_references.length, 2);
-  assert.ok(body.input_references[0].image_url.url.endsWith(Buffer.from(await crop.arrayBuffer()).toString("base64")));
+  assert.equal(body.input_references.length, 1);
+  assert.ok(body.input_references[0].image_url.url.endsWith(Buffer.from(await picture.arrayBuffer()).toString("base64")));
   assert.ok(!JSON.stringify(body).includes("mask"));
   assert.equal(body.aspect_ratio, "16:9");
 });
 
-await test("executeGeneration: editImage goes first and unshrunk, the mask only to OpenAI (source contract)", () => {
+await test("executeGeneration: editImage goes first and unshrunk (source contract)", () => {
   const src = fs.readFileSync(new URL("../scripts/generate-flow.mjs", import.meta.url), "utf8");
   assert.match(src, /if \(editImage\) refs = \[editImage, \.\.\.refs\];/);
-  assert.match(src, /\.\.\.\(mask && cfg\.provider === "openai" \? \{ mask \} : \{\}\)/);
   // the edit image is added AFTER sendableRefs (which would shrink it)
   assert.ok(src.indexOf("sendableRefs(cfg, await loadRefs") < src.indexOf("if (editImage) refs = [editImage"));
 });
 
-await test("tile flow sends [selection] as editImage + [context] as the only extra ref; batch sends both as refs", () => {
+await test("tile flow: Now sends the one picture as editImage, no extra refs, no mask; batch sends the same one picture", () => {
   const src = fs.readFileSync(new URL("../scripts/tile/tile-flow.mjs", import.meta.url), "utf8");
-  assert.match(src, /extraRefs: \[job\.contextBlob\]/);
-  assert.match(src, /editImage: job\.cropBlob, mask: job\.maskBlob \?\? undefined/);
-  assert.match(src, /const refs = \[job\.cropBlob, ctx\];/);
+  assert.match(src, /extraRefs: \[\], signal, runKind: "fast", caller: "ai-tile",\s*editImage: job\.sendBlob\s*\}/);
+  assert.match(src, /const refs = \[job\.sendBlob\];/);
+  assert.ok(!/mask/i.test(src.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "")), "no mask anywhere in the tile flow code");
+  assert.ok(!/contextBlob|cropBlob|prepareRefs/.test(src), "no second image, no reference shrinking");
+  assert.match(src, /outlinedImage\(cap\.canvas, plan\.sel/);
   assert.match(src, /target: \{ uuid: job\.sceneUuid, field: "tile" \}/);
+  const img = fs.readFileSync(new URL("../scripts/tile/tile-image.mjs", import.meta.url), "utf8");
+  assert.ok(!/openaiMask|contextImage/.test(img));
+  assert.match(img, /outlineBands\(sel, w, h\)\.bands/);
+  const tpl = fs.readFileSync(new URL("../templates/tile-dialog.hbs", import.meta.url), "utf8");
+  assert.ok(!/mask/i.test(tpl), "no mask option in the window");
+  assert.match(tpl, /name="context"/);
 });
 
 await test("batch apply routes tile items to the tile branch; picker routes tile batches to the tile window", () => {

@@ -39,22 +39,32 @@ GM only. Left toolbar → **Moinens AI Gen** → **AI Tile** (square icon).
 
 1. Drag a rectangle on the map (right-drag pans, the wheel zooms). Drag a corner or the whole rectangle to adjust,
    Esc cancels, Enter or **Next** opens the window.
-2. The window shows what is sent: **image 1** = the marked rectangle (the image that is edited), **image 2** = the map
-   around it, twice as wide and twice as high around the same centre (cut at the canvas edge), with the marked area
-   framed in red; with OpenAI also a **mask** over image 1. Write what should change, pick the number of versions,
-   Now or Batch, the soft edge (px, fades the tile's border inwards) and whether tokens appear in the pictures.
-   The window shows the input images, the estimated input tokens (OpenAI) and the estimated cost.
-3. **Now**: the versions appear in a window and the selected one is previewed on the map in place of the rectangle;
-   **Accept and paste** saves it to `ai-image-gen/tiles/<scene>/` and creates a Tile exactly over the rectangle
-   (rotation 0, elevation 0, above the other tiles of that elevation, below tokens). **Again** asks for more versions
-   with the same pictures, **Discard** drops them (nothing saved). **Batch**: the tile is pasted on the same scene when
-   the result arrives (several versions: the usual "ready to pick" notification opens the versions window).
+2. The window shows the ONE picture that is sent: the map around the rectangle (by default twice as wide and twice as
+   high around the same centre, **Surroundings** 1.5× / 2× / 3×; cut at the canvas edge, so there the rectangle is not
+   in the middle), fitted to a size the model returns, with a red frame drawn just outside the rectangle. No mask and
+   no second picture are sent. Write what should change, pick the number of versions, Now or Batch, the soft edge (px,
+   fades the tile's border inwards) and whether tokens appear in the picture. The window shows the sent size, the
+   estimated input tokens (OpenAI) and the estimated cost.
+3. The model is asked to edit only inside the red frame, keep everything else and the framing, and remove the frame.
+   From the whole returned picture exactly the rectangle is cut out (its position in the picture is known), scaled to
+   the tile and given the soft edge. **Now**: the versions appear in a window and the selected one is previewed on the
+   map in place of the rectangle; **Accept and paste** saves it to `ai-image-gen/tiles/<scene>/` and creates a Tile
+   exactly over the rectangle (rotation 0, elevation 0, above the other tiles of that elevation, below tokens).
+   **Again** asks for more versions with the same picture, **Discard** drops them (nothing saved). **Batch** sends the
+   same single picture; the tile is pasted on the same scene when the result arrives (several versions: the usual
+   "ready to pick" notification opens the versions window).
 
-Model, quality, size limit (the longer side of the request), the prompt template (fields `{description}`, `{pos}`,
-`{guide}`, `{grid}`, `{distance}`, `{units}`, `{scene}`), reference size (applies to image 2) and output are set in the
-settings window under the type **AI Tile**. Lighting, fog and overhead tiles never go into the pictures. Only
-rectangles for now. Real model responses for this feature have not been checked yet.
+Known limit: an object lying across the red frame may be changed only partly (the part inside the rectangle), and the
+pasted tile then cuts it at the rectangle's edge; draw the rectangle around whole objects. The size limit of the type
+caps the sent picture: with the default 2048 px and 2× surroundings, a rectangle wider than about 1000 scene px is sent
+slightly below its native resolution (raise the limit in the type for more pixels, at a higher cost).
 
+Model, quality, size limit (the longer side of the request), the prompt template (fields `{description}`, `{grid}`,
+`{distance}`, `{units}`, `{scene}`, `{pos}`) and output are set in the settings window under the type **AI Tile**. A
+saved template equal to the earlier default (two pictures) is replaced by the new default on load; edited templates
+are kept. Lighting, fog, weather and overhead tiles never go into the picture. Only rectangles for now. The
+single-picture method was checked by the owner with gpt-image-2.6-flare (medium): framing and scale kept, edit only
+inside the frame, frame removed; Gemini / OpenRouter and Batch have not been checked with real calls.
 ## Privacy & limits
 
 These are properties of Foundry itself, not something the module can work around:

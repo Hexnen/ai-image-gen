@@ -1,6 +1,6 @@
-// W7-A AI Tile: obrazy w przeglądarce (wycinek sceny, maska OpenAI, przewodnik, przetworzenie wyniku do pliku kafelka).
+// W7-A/W7-B AI Tile: obrazy w przeglądarce (wycinek otoczenia, obrys zaznaczenia, wynik -> plik kafelka).
 // Geometria w tile-core.mjs (czysta); tu tylko canvas 2D i PIXI.
-import { pointsIn, tileRaster, alphaRect } from "./tile-core.mjs";
+import { tileRaster, alphaRect, outlineBands, OUTLINE_COLOR } from "./tile-core.mjs";
 
 export function newCanvas(w, h) {
   return Object.assign(document.createElement("canvas"), { width: Math.max(1, Math.round(w)), height: Math.max(1, Math.round(h)) });
@@ -8,12 +8,6 @@ export function newCanvas(w, h) {
 
 export function canvasToBlob(c, type = "image/png", quality) {
   return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error("toBlob failed"))), type, quality));
-}
-
-function pathOf(ctx, pts) {
-  ctx.beginPath();
-  pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
-  ctx.closePath();
 }
 
 /** Ułamek pikseli z alfą > 0 i odchylenie jasności (czy obraz nie jest pusty / jednolity). */
@@ -137,38 +131,24 @@ export async function captureRegion(region, w, h, { tokens = false, method = "au
   return { canvas: await composeRegion(region, w, h), method: "compose" };
 }
 
-// ---------- maska i przewodnik ----------
+// ---------- obrys zaznaczenia ----------
 
 /**
- * Maska OpenAI (PNG w×h): nieprzezroczysta wszędzie, PRZEZROCZYSTA w kształcie poszerzonym o `grow` px obrazu
- * (tam model może zmieniać).
+ * Wysyłany obraz: wycinek otoczenia spłaszczony na kolor tła sceny (bez przezroczystości: przezroczyste piksele
+ * u OpenAI działałyby jak maska) z czerwonym obrysem tuż POZA zaznaczeniem (`sel` w ułamkach 0..1, pasy z
+ * tile-core `outlineBands`: żaden czerwony piksel w zaznaczeniu). Zwraca NOWĄ kanwę.
  */
-export function openaiMask(points, region, w, h, grow = 0) {
+export function outlinedImage(src, sel, background = "#000000") {
+  const w = src.width, h = src.height;
   const c = newCanvas(w, h);
   const ctx = c.getContext("2d");
-  ctx.fillStyle = "#000";
+  ctx.fillStyle = background;
   ctx.fillRect(0, 0, w, h);
-  ctx.globalCompositeOperation = "destination-out";
-  pathOf(ctx, pointsIn(points, region, w / region.width, h / region.height));
-  ctx.fill();
-  if (grow > 0) { ctx.lineJoin = "round"; ctx.lineWidth = grow * 2; ctx.stroke(); }
+  ctx.drawImage(src, 0, 0);
+  ctx.fillStyle = OUTLINE_COLOR;
+  for (const b of outlineBands(sel, w, h).bands) ctx.fillRect(b.x, b.y, b.width, b.height);
   return c;
 }
-
-/**
- * Obraz 2 (kontekst): wycinek większego obszaru z czerwonym obrysem zaznaczenia (`sel` w ułamkach 0..1).
- * Obrys rysowany na zewnątrz zaznaczenia, żeby nie zasłaniał jego brzegów.
- */
-export function contextImage(c, sel) {
-  const w = c.width, h = c.height;
-  const ctx = c.getContext("2d");
-  const lw = Math.max(2, Math.round(Math.max(w, h) / 300));
-  ctx.strokeStyle = "#ff2020";
-  ctx.lineWidth = lw;
-  ctx.strokeRect(sel.x0 * w - lw / 2, sel.y0 * h - lw / 2, (sel.x1 - sel.x0) * w + lw, (sel.y1 - sel.y0) * h + lw);
-  return c;
-}
-
 // ---------- wynik -> plik kafelka ----------
 
 /**

@@ -147,6 +147,21 @@ export function cleanRefs(list) {
 // ObjectField into nested objects, so store them with a dot-free key.
 const sk = (key) => String(key).replaceAll(".", "|");
 
+/**
+ * W7-B: change a saved type configuration in place (GM only). `fn(saved)` returns the fields to replace, or null to
+ * leave it. Types with nothing saved are skipped (they already take their registered defaults). @returns {Promise<boolean>}
+ */
+export async function patchSavedConfig(key, fn) {
+  if (!game.user?.isGM) return false;
+  const store = all();
+  const saved = store[sk(key)];
+  if (!saved || typeof saved !== "object") return false;
+  const patch = fn(saved);
+  if (!patch) return false;
+  await game.settings.set(MODULE_ID, "imageTypes", { ...store, [sk(key)]: { ...saved, ...patch } });
+  return true;
+}
+
 /** Has the user saved anything for this type? */
 export const isConfigured = (key) => sk(key) in all();
 

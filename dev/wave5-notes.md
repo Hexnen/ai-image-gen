@@ -1232,3 +1232,57 @@ nie zauważy. Log wywołań: `estTokens` nie liczy obrazu 1 osobno (refsCount ta
 **NIESPRAWDZONE.** Prawdziwe odpowiedzi modeli (czy trzymają kadr, czy rozumieją ramkę i dwa obrazy), maska OpenAI
 z prawdziwym kluczem, maska w batchu (nie wysyłana), Gemini/OpenRouter z prawdziwym kluczem, okno wyboru wersji z
 prawdziwego batcha, gracze (funkcja tylko dla MG).
+
+## W7-B: AI Tile: jeden obraz z czerwonym obrysem, bez maski (po teście na żywo właściciela)
+
+Zlecenie: najpierw „domyślnie bez maski + nowy szablon promptu” (wynik testu: maska całego prostokąta = model rysuje
+kadr od nowa), w trakcie zmiana projektu właściciela: zamiast obrazu 1 + obrazu 2 wysyłamy JEDEN obraz = otoczenie
+zaznaczenia (domyślnie 2×, przycięte do płótna) z czerwonym obrysem, bez maski; z wyniku wycinamy dokładnie prostokąt.
+Wersja modułu bez zmian, nic nie wypchnięte. Szczegóły: `dev/tile-spec.md` (0, 2-6), `dev/tile-questions.md` (wynik
+testu, pytania 5, 6, 9, 11, 12).
+
+**Zmiany.**
+- `tile-core.mjs`: `contextRect` (otoczenie 1,5/2/3×, przycięte), `planRegion` liczy region z otoczenia (proporcje
+  modelu, rozmiar = px sceny w limicie typu), `sel` w regionie, `outlineBands` (obrys tuż POZA zaznaczeniem, 0,4 %
+  dłuższego boku, min. 4 px, #ff0000), `tileRaster` wycina z wyniku dokładnie prostokąt zaznaczenia, `inputEstimate`
+  dla jednego obrazu (`INPUT_IMAGES = 1`), nowy `DEFAULT_TILE_PROMPT` (wg promptu właściciela + siatka + „No grid
+  lines, text or labels”), `LEGACY_TILE_PROMPTS` / `isLegacyTilePrompt` / `tilePromptTemplate`, `normalizeTileOptions`
+  (opcja `context`, dawny klucz `mask` pomijany). Usunięte: `contextPlan`, `CONTEXT_EDGE`, `GUIDE_MASK/NONE`.
+- `tile-image.mjs`: `outlinedImage` (spłaszczenie na kolor tła sceny + obrys); usunięte `openaiMask`, `contextImage`.
+- `tile-flow.mjs`: jeden obraz `sendBlob` jako `editImage`, `extraRefs: []`, bez maski; batch wysyła ten sam obraz
+  (bez `prepareRefs`); opcje przez `normalizeTileOptions`.
+- `tile-app.mjs` + `tile-dialog.hbs`: jeden podgląd (wysyłany obraz z obrysem), wybór „Otoczenie” 1,5×/2×/3×,
+  bez maski; fakty i tokeny dla jednego obrazu. CSS: podgląd do 320 px, bez reguły maski.
+- `config-store.mjs`: `patchSavedConfig(key, fn)`; `module.mjs`: przy starcie (MG) zapisany szablon AI Tile równy
+  dawnemu domyślnemu -> nowy domyślny.
+- lang pl/en: usunięte `CropLabel`, `ContextLabel`, `MaskLabel`, `Mask`, `MaskHint`; nowe `SendLabel`, `Context`,
+  `ContextHint`; zmienione `Facts`, `Clipped`, `Inputs`, `InputsTokens`, `Tokens`. README: sekcja AI Tile + znane
+  ograniczenie (obiekty na granicy obrysu).
+- Testy: `dev/test-ai-tile-core.mjs` 23 (otoczenie 1,5/2/3×, przycięcie przy krawędzi i pozycja, plan OpenAI/Gemini/
+  OpenRouter, obrys bez czerwieni w zaznaczeniu, koszt jednego obrazu, wycięcie wyniku, prompt, migracja szablonu,
+  opcje), `dev/test-ai-tile-requests.mjs` 8 (jeden obraz u każdego dostawcy, bez maski, kontrakty źródeł). Wszystkie
+  36 `dev/test-*.mjs` przechodzą.
+
+**Zweryfikowane na żywo (lane 8, MG „claude”, scena The Warehouse, dostawca ZAMOCKOWANY przez
+`tileTestHooks.execute`, zero prawdziwych wywołań, kluczy brak).** W kopii świata lane 8 moduł `moinens-ai-gen` był
+wyłączony (w `core.moduleConfiguration` został tylko stary id `ai-image-gen`); włączyłem go tam (tylko lane 8).
+- prostokąt 1400,1750 → 2450,2450 (1050×700): otoczenie 875,1400 2100×1400, region 2109×1401, żądanie i obraz
+  2048×1360, `sel` ≈ 25–75 %; obrys 8 px: piksel tuż poza zaznaczeniem czerwony, żaden piksel na brzegu zaznaczenia
+  czerwony, obraz bez przezroczystości; „1 obraz (2048×1360), ok. 1536 tokenów”, koszt $0.059 (Flare medium);
+- okno: jeden podgląd z obrysem, wybór Otoczenie (2× zaznaczone), brak opcji maski (zrzut obejrzany);
+- do „dostawcy”: `editImage` = wysyłany obraz, `extraRefs` 0, maska brak, caller `ai-tile`;
+- fałszywa odpowiedź 1536×1024 (inny rozmiar niż wysłany; zaznaczenie zamalowane na niebiesko, obrys na zielono):
+  kafelek 765×510, w środku 100 % niebieskiego, zero zieleni (także na brzegu), alfa 0 → 255 od brzegu;
+- okno wersji: podgląd na mapie 1400,1750 1050×700; Akceptuj: plik WebP, Tile lewy górny róg 1400,1750, 1050×700,
+  kotwica 0,5, rotacja 0, elewacja 0, flaga `aiTile` (potem usunięty; plik testowy został w
+  `ai-image-gen/tiles/the-warehouse/`);
+- krawędź płótna: prostokąt w rogu, otoczenie 3× przycięte do 1620×1030 (`clipped`, zaznaczenie przy lewym górnym
+  rogu obrazu), 1,5× → 1020×655 / żądanie 1024×656;
+- migracja szablonu: zapisany dawny domyślny (ze zmienionymi białymi znakami) zastąpiony nowym; własny szablon nie;
+  zapis typu przywrócony do stanu sprzed testu.
+
+**NIESPRAWDZONE.** Prawdziwy model z NOWYM kodem (właściciel sprawdził metodę ręcznie, nie ten kod): czy usuwa obrys
+8 px przy 2048×1360 i czy prompt z siatką działa tak samo; Gemini / OpenRouter z kluczem; Batch (OpenAI JSON
+`images/edits` z jednym obrazem) z prawdziwym batchem; wybór Otoczenie w oknie klikany myszą (sprawdzone
+programowo przez `prepareJob`); okno w języku polskim (użytkownik testowy ma EN); migracja przy prawdziwym starcie
+modułu (sprawdzona wywołaniem tej samej funkcji).

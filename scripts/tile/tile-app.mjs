@@ -8,7 +8,7 @@ import {
   prepareJob, tileOptions, saveTileOptions, estimateJob, readinessFor, generateTileVariants, acceptVariant,
   submitTileBatch, createTile, geomFromMeta, buildJobPrompt
 } from "./tile-flow.mjs";
-import { TILE_TYPE_KEY } from "./tile-core.mjs";
+import { TILE_TYPE_KEY, CONTEXT_FACTORS, normalizeTileOptions } from "./tile-core.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin, DialogV2 } = foundry.applications.api;
 const L = (k) => game.i18n.localize(k);
@@ -88,25 +88,23 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       id: this.id,
       busy: this.busy, error: this.error, preparing: !job && !this.error,
       description: this.description, count, maxVersions: 8, mode: this.mode,
-      feather: this.opts.feather, tokens: this.opts.tokens, mask: this.opts.mask,
-      isOpenAI: job?.cfg.provider === "openai",
+      feather: this.opts.feather, tokens: this.opts.tokens,
+      contextOptions: CONTEXT_FACTORS.map((f) => ({ value: f, label: `${String(f).replace(".", game.i18n.lang === "pl" ? "," : ".")}×`, selected: f === this.opts.context })),
       ready,
       hasKey: ready?.hasKey ?? true,
       canBatch: ready?.canBatch ?? false,
       noBatch: ready && !ready.canBatch ? L(ready.noBatchReason === "model" ? "AIIMG.Tile.NoBatchModel" : "AIIMG.Tile.NoBatchProvider") : "",
-      crop: job ? this.#url(job.cropBlob) : "",
-      context: job ? this.#url(job.contextBlob) : "",
-      maskUrl: job?.maskBlob ? this.#url(job.maskBlob) : "",
+      send: job ? this.#url(job.sendBlob) : "",
       facts: job ? F("AIIMG.Tile.Facts", {
         bw: job.plan.bbox.width, bh: job.plan.bbox.height,
         req: job.plan.request.aspect ? `${job.plan.request.aspect}${job.plan.request.imageSize ? ` ${job.plan.request.imageSize}` : ""}` : `${job.plan.request.width}×${job.plan.request.height}`,
-        cw: job.ctxPlan.rect.width, ch: job.ctxPlan.rect.height,
+        cw: job.plan.region.width, ch: job.plan.region.height,
         method: L(`AIIMG.Tile.Method.${job.captureMethod}`)
       }) : "",
-      clipped: !!job?.ctxPlan.clipped,
-      inputs: job ? (job.input.total != null
-        ? F("AIIMG.Tile.InputsTokens", { n: job.input.images, e: job.input.edit, c: job.input.context, t: job.input.total, cw: job.input.contextSent.width, ch: job.input.contextSent.height })
-        : F("AIIMG.Tile.Inputs", { n: job.input.images, cw: job.input.contextSent.width, ch: job.input.contextSent.height })) : "",
+      clipped: !!job?.plan.clipped,
+      inputs: job ? (job.input.tokens != null
+        ? F("AIIMG.Tile.InputsTokens", { w: job.input.sent.width, h: job.input.sent.height, t: job.input.tokens })
+        : F("AIIMG.Tile.Inputs", { w: job.input.sent.width, h: job.input.sent.height })) : "",
       estimate: job ? F("AIIMG.Tile.Estimate", { cost: money(estimateJob(job, count, this.mode)), n: count }) : "",
       prompt: job ? buildJobPrompt(job, this.description || "…") : ""
     };
@@ -122,7 +120,7 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       const n = ev.target?.name;
       if (!n) return;
       this.#readForm();
-      if (["tokens", "feather", "mask", "mode"].includes(n)) {
+      if (["tokens", "feather", "context", "mode"].includes(n)) {
         clearTimeout(t);
         t = setTimeout(() => { this.job = null; this.render(); this.prepared = this.#prepare(); saveTileOptions(this.opts); }, 150);
       } else if (n === "count") { saveTileOptions(this.opts); this.render(); }
@@ -137,13 +135,13 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
   #readForm() {
     const fd = new foundry.applications.ux.FormDataExtended(this.element).object;
     this.description = String(fd.description ?? this.description);
-    this.opts = {
+    this.opts = normalizeTileOptions({
       ...this.opts,
-      count: Math.min(8, Math.max(1, Math.floor(Number(fd.count)) || 1)),
-      feather: Math.min(256, Math.max(0, Math.round(Number(fd.feather) || 0))),
+      count: fd.count,
+      feather: Number(fd.feather) || 0,
       tokens: !!fd.tokens,
-      mask: fd.mask === undefined ? this.opts.mask : !!fd.mask
-    };
+      context: fd.context === undefined ? this.opts.context : Number(fd.context)
+    });
     this.mode = fd.mode === "batch" ? "batch" : "fast";
   }
 

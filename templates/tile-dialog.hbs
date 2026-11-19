@@ -5,19 +5,9 @@
 
   <div class="aiimg-tile-previews">
     <figure>
-      {{#if crop}}<img src="{{crop}}" alt="{{localize 'AIIMG.Tile.CropLabel'}}">{{else}}<div class="aiimg-tile-wait"><i class="fa-solid {{#if preparing}}fa-spinner fa-spin{{else}}fa-image{{/if}}"></i></div>{{/if}}
-      <figcaption>{{localize "AIIMG.Tile.CropLabel"}}</figcaption>
+      {{#if send}}<img src="{{send}}" alt="{{localize 'AIIMG.Tile.SendLabel'}}">{{else}}<div class="aiimg-tile-wait"><i class="fa-solid {{#if preparing}}fa-spinner fa-spin{{else}}fa-image{{/if}}"></i></div>{{/if}}
+      <figcaption>{{localize "AIIMG.Tile.SendLabel"}}</figcaption>
     </figure>
-    <figure>
-      {{#if context}}<img src="{{context}}" alt="{{localize 'AIIMG.Tile.ContextLabel'}}">{{else}}<div class="aiimg-tile-wait"><i class="fa-solid {{#if preparing}}fa-spinner fa-spin{{else}}fa-image{{/if}}"></i></div>{{/if}}
-      <figcaption>{{localize "AIIMG.Tile.ContextLabel"}}</figcaption>
-    </figure>
-    {{#if maskUrl}}
-    <figure class="aiimg-tile-mask">
-      <img src="{{maskUrl}}" alt="{{localize 'AIIMG.Tile.MaskLabel'}}">
-      <figcaption>{{localize "AIIMG.Tile.MaskLabel"}}</figcaption>
-    </figure>
-    {{/if}}
   </div>
   {{#if facts}}<p class="notes aiimg-tile-facts">{{facts}}{{#if clipped}} {{localize "AIIMG.Tile.Clipped"}}{{/if}}</p>{{/if}}
   {{#if inputs}}<p class="notes aiimg-tile-facts">{{inputs}}</p>{{/if}}
@@ -33,9 +23,8 @@
     <label data-tooltip="AIIMG.Tile.FeatherHint"><span>{{localize "AIIMG.Tile.Feather"}}</span>
       <input type="number" name="feather" min="0" max="256" step="1" value="{{feather}}" {{#if busy}}disabled{{/if}}></label>
     <label class="aiimg-tile-check"><input type="checkbox" name="tokens" {{#if tokens}}checked{{/if}} {{#if busy}}disabled{{/if}}> {{localize "AIIMG.Tile.Tokens"}}</label>
-    {{#if isOpenAI}}
-    <label class="aiimg-tile-check" data-tooltip="AIIMG.Tile.MaskHint"><input type="checkbox" name="mask" {{#if mask}}checked{{/if}} {{#if busy}}disabled{{/if}}> {{localize "AIIMG.Tile.Mask"}}</label>
-    {{/if}}
+    <label data-tooltip="AIIMG.Tile.ContextHint"><span>{{localize "AIIMG.Tile.Context"}}</span>
+      <select name="context" {{#if busy}}disabled{{/if}}>{{#each contextOptions}}<option value="{{value}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}</select></label>
   </div>
 
   <fieldset class="aiimg-tile-mode">
@@ -63,7 +52,7 @@
     {{#if busy}}
     <button type="button" data-action="cancelRun"><i class="fa-solid fa-spinner fa-spin"></i> {{localize "AIIMG.Tile.Cancel"}}</button>
     {{else}}
-    <button type="submit" class="primary" {{#unless crop}}disabled{{/unless}}><i class="fa-solid fa-wand-magic-sparkles"></i> {{#if (eq mode "batch")}}{{localize "AIIMG.Tile.SendBatch"}}{{else}}{{localize "AIIMG.Tile.Generate"}}{{/if}}</button>
+    <button type="submit" class="primary" {{#unless send}}disabled{{/unless}}><i class="fa-solid fa-wand-magic-sparkles"></i> {{#if (eq mode "batch")}}{{localize "AIIMG.Tile.SendBatch"}}{{else}}{{localize "AIIMG.Tile.Generate"}}{{/if}}</button>
     {{/if}}
   </footer>
 </section>

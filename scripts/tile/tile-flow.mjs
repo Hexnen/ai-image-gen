@@ -1,5 +1,6 @@
-// W7-A AI Tile: przygotowanie zadania (wycinek, maska, prompt), Fast / Batch, zapis pliku i wklejenie Tile.
+// W7-A/W7-B AI Tile: przygotowanie zadania (otoczenie z obrysem, prompt), Fast / Batch, zapis pliku i wklejenie Tile.
 // UI w tile-app.mjs, rysowanie w tile-draw.mjs, czysta geometria w tile-core.mjs.
+// W7-B: do modelu idzie JEDEN obraz (otoczenie zaznaczenia z czerwonym obrysem), bez maski i bez drugiego obrazu.
 import { MODULE_ID, DATA_ROOT } from "../constants.mjs";
 import { getKey } from "../settings.mjs";
 import { getConfig, fitConfig } from "../config-store.mjs";
@@ -10,10 +11,10 @@ import { saveImageBlobEx, slug } from "../save-image.mjs";
 import { outputOptsFromConfig, statsPatch } from "../optimize.mjs";
 import { updateCall } from "../call-log.mjs";
 import {
-  TILE_TYPE_KEY, DEFAULT_TILE_OPTS, DEFAULT_TILE_PROMPT, GUIDE_MASK, GUIDE_NONE, planRegion, contextPlan, positionText,
-  inputEstimate, tileData, renderTilePrompt, gridInEdit, packGeometry, unpackGeometry, validShape
+  TILE_TYPE_KEY, INPUT_IMAGES, planRegion, positionText, inputEstimate, tileData, renderTilePrompt, tilePromptTemplate,
+  gridInEdit, packGeometry, unpackGeometry, validShape, normalizeTileOptions
 } from "./tile-core.mjs";
-import { captureRegion, openaiMask, contextImage, processResult, canvasToBlob } from "./tile-image.mjs";
+import { captureRegion, outlinedImage, processResult, canvasToBlob } from "./tile-image.mjs";
 
 export const TILE_FLAG = "aiTile";
 /**
@@ -26,20 +27,15 @@ export const TILE_OUT_EDGE = 4096;
 
 export const tileDir = (scene) => `${DATA_ROOT}/tiles/${slug(scene?.name ?? "scene", "scene")}`;
 
-/** Opcje okna (zapamiętane w ustawieniu świata `tileOptions`), uzupełnione domyślnymi. */
+/** Opcje okna (zapamiętane w ustawieniu świata `tileOptions`), uzupełnione domyślnymi; dawny klucz `mask` pomijany. */
 export function tileOptions() {
   let saved = {};
   try { saved = game.settings.get(MODULE_ID, "tileOptions") ?? {}; } catch { /* przed rejestracją */ }
-  return { ...DEFAULT_TILE_OPTS, ...saved };
+  return normalizeTileOptions(saved);
 }
 
 export async function saveTileOptions(o) {
-  const clean = {
-    feather: Math.min(256, Math.max(0, Math.round(Number(o.feather) || 0))),
-    tokens: !!o.tokens,
-    mask: o.mask !== false,
-    count: Math.min(8, Math.max(1, Math.floor(Number(o.count)) || 1))
-  };
+  const clean = normalizeTileOptions(o);
   try { await game.settings.set(MODULE_ID, "tileOptions", clean); } catch (e) { console.warn(`${MODULE_ID} | tile options not saved`, e); }
   return clean;
 }
@@ -52,16 +48,13 @@ export function requestConfig(plan, base = getConfig(TILE_TYPE_KEY)) {
   });
 }
 
-/** Czy maska idzie do dostawcy (tylko OpenAI images/edits, tylko Fast). */
-export const usesMask = (cfg, opts, mode = "fast") => cfg.provider === "openai" && opts.mask !== false && mode !== "batch";
-
 /**
- * Przygotuj zadanie: obraz 1 (zaznaczenie, + maska OpenAI), obraz 2 (kontekst 2× z obrysem), prompt. Bez sieci
- * (oprócz wczytania plików przy złożeniu z plików).
+ * Przygotuj zadanie: wysyłany obraz = otoczenie zaznaczenia (współczynnik `opts.context`, dopasowane do proporcji
+ * modelu) z czerwonym obrysem tuż poza zaznaczeniem; prompt. Bez sieci (oprócz wczytania plików przy złożeniu z plików).
  * @param {object} p
  * @param {Scene} p.scene
  * @param {{x,y}[]} p.points  prostokąt w px sceny (4 punkty)
- * @param {object} [p.opts]   opcje okna (feather, tokens, mask)
+ * @param {object} [p.opts]   opcje okna (feather, tokens, context, count)
  * @param {string} [p.description]
  * @param {"fast"|"batch"} [p.mode]
  */
@@ -69,49 +62,42 @@ export async function prepareJob({ scene = canvas.scene, points, opts = tileOpti
   const v = validShape(points);
   if (!v.ok) throw new Error(game.i18n.localize(v.reason === "small" ? "AIIMG.Tile.ErrSmall" : "AIIMG.Tile.ErrShape"));
   if (!canvas.ready || canvas.scene?.id !== scene.id) throw new Error(game.i18n.localize("AIIMG.Tile.ErrScene"));
+  const o = normalizeTileOptions(opts);
   const base = getConfig(TILE_TYPE_KEY);
   const bounds = canvas.dimensions.rect;
-  const plan = planRegion({ points, bounds, cfg: base });
+  const plan = planRegion({ points, bounds, cfg: base, factor: o.context });
   const cfg = requestConfig(plan, base);
   const tileRect = plan.bbox;
-  const ctxPlan = contextPlan(plan.bbox, bounds);
-  const cap = await captureRegion(plan.region, plan.edit.width, plan.edit.height, { tokens: !!opts.tokens, method });
-  const crop = cap.canvas;
-  const ctxCap = await captureRegion(ctxPlan.rect, ctxPlan.size.width, ctxPlan.size.height, { tokens: !!opts.tokens, method: cap.method });
-  const context = contextImage(ctxCap.canvas, ctxPlan.sel);
-  const maskOn = usesMask(cfg, opts, mode);
-  const maskCanvas = maskOn ? openaiMask(points, plan.region, plan.edit.width, plan.edit.height, 0) : null;
+  const cap = await captureRegion(plan.region, plan.edit.width, plan.edit.height, { tokens: o.tokens, method });
+  const sendCanvas = outlinedImage(cap.canvas, plan.sel, scene.backgroundColor ?? "#000000");
   const job = {
     id: foundry.utils.randomID(),
     sceneId: scene.id, sceneUuid: scene.uuid, sceneName: scene.name,
     points: points.map((p) => ({ x: p.x, y: p.y })),
-    opts: { ...opts }, mode, plan, cfg, tileRect, ctxPlan,
-    geom: { points, region: plan.region, tileRect, ratio: plan.ratio, feather: Number(opts.feather) || 0 },
-    crop, cropBlob: await canvasToBlob(crop, "image/png"), captureMethod: cap.method,
-    context, contextBlob: await canvasToBlob(context, "image/png"),
-    mask: maskCanvas, maskBlob: maskCanvas ? await canvasToBlob(maskCanvas, "image/png") : null,
-    input: inputEstimate(cfg, plan.edit, ctxPlan.size),
+    opts: o, mode, plan, cfg, tileRect,
+    geom: { points, region: plan.region, tileRect, ratio: plan.ratio, feather: o.feather },
+    send: sendCanvas, sendBlob: await canvasToBlob(sendCanvas, "image/png"), captureMethod: cap.method,
+    input: inputEstimate(cfg, plan.edit),
     description
   };
   job.prompt = buildJobPrompt(job, description);
   return job;
 }
 
-export function buildJobPrompt(job, description, { mask = !!job.maskBlob } = {}) {
+export function buildJobPrompt(job, description) {
   const scene = game.scenes.get(job.sceneId);
   const base = getConfig(TILE_TYPE_KEY);
-  return renderTilePrompt(base.promptTemplate || DEFAULT_TILE_PROMPT, {
+  return renderTilePrompt(tilePromptTemplate(base.promptTemplate), {
     description,
     grid: gridInEdit(scene?.grid?.size ?? 100, job.plan.edit, job.plan.region),
     distance: scene?.grid?.distance ?? "", units: scene?.grid?.units ?? "",
     scene: job.sceneName,
-    pos: positionText(job.ctxPlan.sel),
-    guide: mask ? GUIDE_MASK : GUIDE_NONE
+    pos: positionText(job.plan.sel),
+    guide: ""
   });
 }
 
-/** Obrazy wejściowe (do kosztu): zawsze 2 (zaznaczenie + kontekst); maska nie jest obrazem referencyjnym. */
-export const INPUT_IMAGES = 2;
+export { INPUT_IMAGES };
 
 /** Szacunek kosztu (USD) dla UI. */
 export function estimateJob(job, count = 1, mode = "fast") {
@@ -142,8 +128,8 @@ export async function generateTileVariants(job, { count = 1, signal } = {}) {
   const doc = { name: `AI Tile: ${job.sceneName}`, uuid: job.sceneUuid, documentName: "Scene", type: "tile" };
   const res = await (tileTestHooks.execute ?? executeGeneration)({
     doc, description: job.description ?? "", key: TILE_TYPE_KEY, cfg: job.cfg, prompt: job.prompt, meta: metaFor(job),
-    count, extraRefs: [job.contextBlob], signal, runKind: "fast", caller: "ai-tile",
-    editImage: job.cropBlob, mask: job.maskBlob ?? undefined
+    count, extraRefs: [], signal, runKind: "fast", caller: "ai-tile",
+    editImage: job.sendBlob
   });
   const out = [];
   const failed = [...res.failed];
@@ -200,15 +186,12 @@ export async function acceptVariant(job, cand) {
 
 // ---------- Batch ----------
 
-/** Wyślij zadanie jako batch (jak Batch w oknie generacji). Bez maski: obraz 1 + obraz 2 (kontekst). */
+/** Wyślij zadanie jako batch (jak Batch w oknie generacji): ten sam jeden obraz z obrysem, bez maski, bez zmniejszania. */
 export async function submitTileBatch(job, { count = 1 } = {}) {
   if (!providers.supportsBatchFor(job.cfg.provider, job.cfg.model)) throw new Error(game.i18n.localize("AIIMG.Tile.ErrNoBatch"));
-  const prompt = buildJobPrompt(job, job.description, { mask: false });
+  const prompt = buildJobPrompt(job, job.description);
   const geometry = packGeometry({ sceneId: job.sceneId, bbox: job.tileRect, region: job.plan.region, ratio: job.plan.ratio, points: job.points, feather: job.geom.feather });
-  // batch does not shrink references: send the context as the Fast path would (type's reference size rules)
-  const { prepareRefs } = await import("../ref-convert.mjs");
-  const ctx = (await prepareRefs([job.contextBlob], job.cfg, [""])).blobs[0] ?? job.contextBlob;
-  const refs = [job.cropBlob, ctx];
+  const refs = [job.sendBlob];
   const meta = metaFor(job);
   const items = Array.from({ length: count }, (_, i) => ({
     id: foundry.utils.randomID(),

@@ -1,12 +1,14 @@
-// W7-A AI Tile: pure geometry (rectangle only), image-1 region/request planning, image-2 context (2x, clipped),
-// input-cost estimate, raster mapping, alpha edge, Tile data, prompt (scripts/tile/tile-core.mjs).
+// W7-A/W7-B AI Tile: pure geometry (rectangle only), ONE sent picture = the surroundings (1.5/2/3x, clipped) with a red
+// outline just outside the selection, request planning, input-cost estimate (one image), cutting the selection out of the
+// whole result, alpha edge, Tile data, prompt + migration of the old default, window options (scripts/tile/tile-core.mjs).
 // Run from the module folder: node dev/test-ai-tile-core.mjs
 import assert from "node:assert/strict";
 import {
   bboxOf, polygonArea, pointInPolygon, validShape, rectPoints, rectOf, intersect, nearestAspect, aspectsFor, expandToAspect,
-  geminiSizeFor, planRegion, contextPlan, positionText, inputEstimate, resultCrop, tileRaster, alphaRect, pointsIn,
-  tileData, renderTilePrompt, gridInEdit, packGeometry, unpackGeometry, DEFAULT_TILE_PROMPT, TILE_TYPE_KEY, SHAPES,
-  CONTEXT_EDGE, GUIDE_MASK
+  geminiSizeFor, planRegion, contextRect, selIn, outlineBands, positionText, inputEstimate, resultCrop, tileRaster, alphaRect,
+  pointsIn, tileData, renderTilePrompt, gridInEdit, packGeometry, unpackGeometry, DEFAULT_TILE_PROMPT, TILE_TYPE_KEY, SHAPES,
+  CONTEXT_FACTOR, CONTEXT_FACTORS, INPUT_IMAGES, OUTLINE_COLOR, OUTLINE_FRAC, OUTLINE_MIN, DEFAULT_TILE_OPTS,
+  normalizeTileOptions, LEGACY_TILE_PROMPTS, isLegacyTilePrompt, tilePromptTemplate
 } from "../scripts/tile/tile-core.mjs";
 import { normalizeOpenAISize } from "../scripts/providers/models.mjs";
 import { openaiInputTokens } from "../scripts/image-cost.mjs";
@@ -74,64 +76,113 @@ test("gemini imageSize: smallest >= long edge, capped by the type's size", () =>
   assert.equal(geminiSizeFor("gemini-nano-banana-2.1", 300, "2K"), "1K", "2.1 has no 0.5K");
 });
 
-test("OpenAI image 1: request = selection px within API rules, edit = request (mask match), region ~= selection", () => {
-  const p = planRegion({ points: rectPoints({ x: 2000, y: 1000 }, { x: 2600, y: 1300 }), bounds: SCENE, cfg: OAI });
-  assert.deepEqual(p.bbox, { x: 2000, y: 1000, width: 600, height: 300 });
-  assert.deepEqual({ width: p.request.width, height: p.request.height }, normalizeOpenAISize(600, 300));
-  assert.deepEqual(p.edit, { width: p.request.width, height: p.request.height });
-  near(p.region.width / p.region.height, p.ratio, 0.004, "region ratio");
-  assert.ok(contains(p.region, p.bbox));
-  assert.ok(p.region.width <= 602 && p.region.height <= 302, `only rounding growth: ${JSON.stringify(p.region)}`);
-});
-
-test("OpenAI image 1: huge selection capped by the type's long edge; thin one widened below 2.9:1", () => {
-  const big = planRegion({ points: rectPoints({ x: 0, y: 0 }, { x: 5000, y: 3000 }), bounds: SCENE, cfg: OAI });
-  assert.ok(Math.max(big.request.width, big.request.height) <= 2048);
-  const thin = planRegion({ points: rectPoints({ x: 100, y: 1000 }, { x: 4100, y: 1100 }), bounds: SCENE, cfg: OAI });
-  assert.ok(thin.ratio < 2.9 + 1e-9);
-  assert.ok(thin.region.height >= 4000 / 2.9 - 2 && contains(thin.region, thin.bbox));
-});
-
-test("Gemini image 1: aspect from the model list, region grown to it, edit image <= 1536 and <= 2 x region", () => {
-  const p = planRegion({ points: rectPoints({ x: 1000, y: 1000 }, { x: 1800, y: 1450 }), bounds: SCENE, cfg: { provider: "gemini", model: "gemini-3.1-flash-image", imageSize: "2K" } });
-  assert.equal(p.request.aspect, "16:9");
-  near(p.region.width / p.region.height, 16 / 9, 0.004);
-  assert.ok(contains(p.region, p.bbox));
-  assert.ok(Math.max(p.edit.width, p.edit.height) <= 1536);
-  const small = planRegion({ points: rectPoints({ x: 1000, y: 1000 }, { x: 1100, y: 1100 }), bounds: SCENE, cfg: { provider: "openrouter", model: "google/gemini-3.1-flash-image" } });
-  assert.ok(Math.max(small.edit.width, small.edit.height) <= Math.max(512, 2 * small.region.width));
-});
-
-test("image 2 context: 2x wide and 2x high around the same centre, selection exactly in the middle", () => {
+test("context rect: factor x wide and high around the same centre, selection in the middle; 1.5x and 3x", () => {
   const bbox = { x: 2000, y: 1000, width: 600, height: 300 };
-  const c = contextPlan(bbox, SCENE);
+  const c = contextRect(bbox, SCENE);
   assert.deepEqual(c.rect, { x: 1700, y: 850, width: 1200, height: 600 });
-  assert.deepEqual(c.sel, { x0: 0.25, y0: 0.25, x1: 0.75, y1: 0.75 });
   assert.equal(c.clipped, false);
-  assert.deepEqual(c.size, { width: CONTEXT_EDGE, height: 512 });
-  assert.equal(positionText(c.sel), "from 25% to 75% of its width and from 25% to 75% of its height");
+  assert.deepEqual(selIn(bbox, c.rect), { x0: 0.25, y0: 0.25, x1: 0.75, y1: 0.75 });
+  assert.equal(positionText(selIn(bbox, c.rect)), "from 25% to 75% of its width and from 25% to 75% of its height");
+  assert.deepEqual(contextRect(bbox, SCENE, 3).rect, { x: 1400, y: 700, width: 1800, height: 900 });
+  assert.deepEqual(contextRect(bbox, SCENE, 1.5).rect, { x: 1850, y: 925, width: 900, height: 450 });
+  assert.deepEqual([...CONTEXT_FACTORS], [1.5, 2, 3]);
+  assert.equal(CONTEXT_FACTOR, 2);
 });
 
-test("image 2 context at the scene edge is clipped (not shifted) and the selection position follows", () => {
+test("context rect at the canvas edge is clipped (not shifted); the selection is off-centre and its position follows", () => {
   const bbox = { x: 50, y: 3800, width: 400, height: 200 };
-  const c = contextPlan(bbox, SCENE);
+  const c = contextRect(bbox, SCENE);
   assert.deepEqual(c.rect, { x: 0, y: 3700, width: 650, height: 300 });
   assert.equal(c.clipped, true);
-  near(c.sel.x0, 50 / 650); near(c.sel.x1, 450 / 650); near(c.sel.y0, 100 / 300); near(c.sel.y1, 1);
-  // small context is never upscaled
-  assert.deepEqual(contextPlan({ x: 1000, y: 1000, width: 100, height: 50 }, SCENE).size, { width: 200, height: 100 });
+  const s = selIn(bbox, c.rect);
+  near(s.x0, 50 / 650); near(s.x1, 450 / 650); near(s.y0, 100 / 300); near(s.y1, 1);
+  // a selection sticking out of the bounds is still fully inside the context
+  const out = contextRect({ x: -20, y: 10, width: 100, height: 100 }, SCENE);
+  assert.ok(contains(out.rect, { x: -20, y: 10, width: 100, height: 100 }));
 });
 
-test("input estimate: two images; OpenAI tokens = image 1 as sent + image 2 after the reference ladder", () => {
-  const e = inputEstimate(OAI, { width: 1024, height: 1024 }, { width: 1024, height: 512 });
-  assert.equal(e.images, 2);
-  assert.equal(e.edit, openaiInputTokens(1024, 1024).tokens);
-  assert.deepEqual(e.contextSent, { width: 512, height: 256 });
-  assert.equal(e.context, openaiInputTokens(512, 256).tokens);
-  assert.equal(e.total, e.edit + e.context);
-  const g = inputEstimate({ provider: "gemini", model: "gemini-3.1-flash-image" }, { width: 1024, height: 576 }, { width: 1024, height: 576 });
-  assert.equal(g.images, 2);
-  assert.equal(g.total, null);
+test("OpenAI plan: ONE image = the 2x surroundings at scene px (capped by the type), region fits the request ratio", () => {
+  // the owner's live test: selection 1050x700 in the middle, context 2100x1400
+  const pts = rectPoints({ x: 1400, y: 1750 }, { x: 2450, y: 2450 });
+  const p = planRegion({ points: pts, bounds: SCENE, cfg: OAI });
+  assert.deepEqual(p.bbox, { x: 1400, y: 1750, width: 1050, height: 700 });
+  assert.deepEqual(p.context, { x: 875, y: 1400, width: 2100, height: 1400 });
+  assert.equal(p.factor, 2);
+  assert.equal(p.clipped, false);
+  const k = 2048 / 2100;
+  assert.deepEqual({ width: p.request.width, height: p.request.height }, normalizeOpenAISize(2100 * k, 1400 * k));
+  assert.deepEqual(p.edit, { width: p.request.width, height: p.request.height }, "sent image = request size");
+  near(p.region.width / p.region.height, p.ratio, 0.004, "region ratio");
+  assert.ok(contains(p.region, p.context) && contains(p.region, p.bbox));
+  assert.ok(p.region.width <= 2100 + 16 && p.region.height <= 1400 + 16, `only rounding growth: ${JSON.stringify(p.region)}`);
+  near(p.sel.x0, 0.25, 0.005); near(p.sel.x1, 0.75, 0.005); near(p.sel.y0, 0.25, 0.005); near(p.sel.y1, 0.75, 0.005);
+  // a type limit of 3840 keeps native scene px (no upscaling): the selection gets its full resolution
+  const big = planRegion({ points: pts, bounds: SCENE, cfg: { ...OAI, width: 3840, height: 3840 } });
+  assert.deepEqual({ width: big.request.width, height: big.request.height }, normalizeOpenAISize(2100, 1400));
+  assert.ok((big.sel.x1 - big.sel.x0) * big.edit.width >= 1050 - 16, "selection at about native resolution");
+  // 3x surroundings
+  const p3 = planRegion({ points: pts, bounds: SCENE, cfg: OAI, factor: 3 });
+  assert.deepEqual(p3.context, { x: 350, y: 1050, width: 3150, height: 2100 });
+  assert.ok(Math.max(p3.request.width, p3.request.height) <= 2048);
+});
+
+test("OpenAI plan: small selection is never below the API minimum; thin one widened below 2.9:1; edge selection off-centre", () => {
+  const small = planRegion({ points: rectPoints({ x: 1000, y: 1000 }, { x: 1100, y: 1050 }), bounds: SCENE, cfg: OAI });
+  assert.ok(small.request.width * small.request.height >= 655_360);
+  assert.ok(contains(small.region, small.bbox));
+  const thin = planRegion({ points: rectPoints({ x: 100, y: 1000 }, { x: 2100, y: 1100 }), bounds: SCENE, cfg: OAI });
+  assert.ok(thin.ratio < 2.9 + 1e-9);
+  assert.ok(contains(thin.region, thin.bbox) && contains(SCENE, thin.region));
+  const edge = planRegion({ points: rectPoints({ x: 50, y: 3800 }, { x: 450, y: 4000 }), bounds: SCENE, cfg: OAI });
+  assert.equal(edge.clipped, true);
+  assert.ok(contains(SCENE, edge.region) && contains(edge.region, edge.bbox));
+  near(edge.sel.y1, 1, 1e-9, "selection on the bottom edge of the picture");
+  assert.ok(edge.sel.x0 < 0.2, "selection near the left edge, not in the middle");
+});
+
+test("Gemini / OpenRouter plan: aspect from the model list, region grown to it, sent image <= 1536 and <= region px (min 512)", () => {
+  const p = planRegion({ points: rectPoints({ x: 1000, y: 1000 }, { x: 1800, y: 1450 }), bounds: SCENE, cfg: { provider: "gemini", model: "gemini-3.1-flash-image", imageSize: "2K" } });
+  assert.equal(p.request.aspect, "16:9");
+  assert.equal(p.request.imageSize, "2K");
+  near(p.region.width / p.region.height, 16 / 9, 0.004);
+  assert.ok(contains(p.region, p.context));
+  assert.ok(Math.max(p.edit.width, p.edit.height) <= 1536);
+  const small = planRegion({ points: rectPoints({ x: 1000, y: 1000 }, { x: 1100, y: 1100 }), bounds: SCENE, cfg: { provider: "openrouter", model: "google/gemini-3.1-flash-image" } });
+  assert.ok(Math.max(small.edit.width, small.edit.height) <= Math.max(512, small.region.width, small.region.height));
+});
+
+test("outline: bands sit just OUTSIDE the selection (no red pixel inside), thickness ~0.4% of the long side, min 4 px", () => {
+  const w = 1536, h = 1024;
+  const sel = { x0: 0.2504, y0: 0.2497, x1: 0.7499, y1: 0.7502 };
+  const o = outlineBands(sel, w, h);
+  assert.equal(o.lw, Math.max(OUTLINE_MIN, Math.round(OUTLINE_FRAC * 1536)));
+  assert.equal(o.lw, 6);
+  assert.equal(OUTLINE_COLOR, "#ff0000");
+  // inner bounds round OUTWARDS: every pixel touching the selection is outside all bands
+  assert.ok(o.inner.x0 <= sel.x0 * w && o.inner.x1 >= sel.x1 * w && o.inner.y0 <= sel.y0 * h && o.inner.y1 >= sel.y1 * h);
+  const inside = (px, py) => o.bands.some((b) => px >= b.x && px < b.x + b.width && py >= b.y && py < b.y + b.height);
+  for (let x = o.inner.x0; x < o.inner.x1; x += 7) for (let y = o.inner.y0; y < o.inner.y1; y += 7) assert.ok(!inside(x, y), `red at ${x},${y}`);
+  for (const [x, y] of [[o.inner.x0, o.inner.y0], [o.inner.x1 - 1, o.inner.y1 - 1], [o.inner.x0, o.inner.y1 - 1], [o.inner.x1 - 1, o.inner.y0]]) assert.ok(!inside(x, y));
+  // the frame closes around the selection: pixels just outside each side are red
+  assert.ok(inside(o.inner.x0 - 1, h / 2) && inside(o.inner.x1, h / 2) && inside(w / 2, o.inner.y0 - 1) && inside(w / 2, o.inner.y1));
+  assert.ok(inside(o.inner.x0 - o.lw, o.inner.y0 - o.lw) && !inside(o.inner.x0 - o.lw - 1, h / 2));
+  // small image: minimum thickness; selection on the picture edge: that band is cut away
+  assert.equal(outlineBands({ x0: 0.25, y0: 0.25, x1: 0.75, y1: 0.75 }, 400, 300).lw, 4);
+  const e = outlineBands({ x0: 0, y0: 0.5, x1: 0.5, y1: 1 }, 1000, 1000);
+  assert.ok(e.bands.every((b) => b.x >= 0 && b.y >= 0 && b.x + b.width <= 1000 && b.y + b.height <= 1000));
+  assert.equal(e.bands.length, 2, "left and bottom bands fall outside the picture");
+});
+
+test("input estimate: ONE image; OpenAI tokens = the sent image as is (no shrinking); others: no token count", () => {
+  assert.equal(INPUT_IMAGES, 1);
+  const e = inputEstimate(OAI, { width: 1536, height: 1024 });
+  assert.equal(e.images, 1);
+  assert.equal(e.tokens, openaiInputTokens(1536, 1024).tokens);
+  assert.deepEqual(e.sent, { width: 1536, height: 1024 });
+  const o = inputEstimate({ provider: "openrouter", model: "openai/gpt-image-2.6" }, { width: 1024, height: 1024 });
+  assert.equal(o.tokens, openaiInputTokens(1024, 1024).tokens, "OpenAI models via OpenRouter use the OpenAI rules");
+  const g = inputEstimate({ provider: "gemini", model: "gemini-3.1-flash-image" }, { width: 1024, height: 576 });
+  assert.deepEqual([g.images, g.tokens], [1, null]);
 });
 
 test("resultCrop: same ratio = whole image; wider/taller result = centre crop", () => {
@@ -140,18 +191,30 @@ test("resultCrop: same ratio = whole image; wider/taller result = centre crop", 
   assert.deepEqual(resultCrop(2000, 1000, 1.5), { sx: 250, sy: 0, sw: 1500, sh: 1000 });
 });
 
-test("tileRaster maps the region to the result and the selection to the file (scene px exact)", () => {
-  const bbox = { x: 2000, y: 1000, width: 600, height: 300 };
-  const region = { x: 1850, y: 850, width: 900, height: 600 };
+test("tileRaster cuts exactly the selection out of the whole returned picture and scales it to the tile file", () => {
+  // the owner's live test geometry: context 2100x1400 sent as 1536x1024, selection 1050x700 in the middle
+  const bbox = { x: 1400, y: 1750, width: 1050, height: 700 };
+  const region = { x: 875, y: 1400, width: 2100, height: 1400 };
   const r = tileRaster({ bbox, region, resultW: 1536, resultH: 1024, ratio: 1.5 });
-  near(r.scale, 1536 / 900);
-  assert.deepEqual(r.out, { width: Math.round(600 * r.scale), height: Math.round(300 * r.scale) });
-  near(r.draw.dx, -150 * r.scale);
-  near(r.draw.dw, 1536);
-  const scenePt = { x: 2300, y: 1150 };
-  near((scenePt.x - bbox.x) * r.scale, r.draw.dx + ((scenePt.x - region.x) / region.width) * r.draw.dw, 1e-9);
+  near(r.scale, 1536 / 2100);
+  assert.deepEqual(r.out, { width: Math.round(1050 * r.scale), height: Math.round(700 * r.scale) });
+  near(r.draw.sx, 384); near(r.draw.sy, 256); near(r.draw.sw, 768); near(r.draw.sh, 512);
+  assert.deepEqual([r.draw.dx, r.draw.dy, r.draw.dw, r.draw.dh], [0, 0, r.out.width, r.out.height]);
+  // any scene point inside the selection maps to the same place through the result and through the file
+  const pt = { x: 2000, y: 2000 };
+  const inResult = { x: ((pt.x - region.x) / region.width) * 1536, y: ((pt.y - region.y) / region.height) * 1024 };
+  const inFile = { x: (pt.x - bbox.x) * r.scale, y: (pt.y - bbox.y) * r.scale };
+  near(r.draw.sx + (inFile.x / r.draw.dw) * r.draw.sw, inResult.x, 1e-9);
+  near(r.draw.sy + (inFile.y / r.draw.dh) * r.draw.sh, inResult.y, 1e-9);
+  // a result in another ratio: centre crop first, then the selection inside it
+  const sq = tileRaster({ bbox, region, resultW: 1024, resultH: 1024, ratio: 1.5 });
+  near(sq.draw.sx, 256); near(sq.draw.sy, 171 + 683 / 4, 1e-9); near(sq.draw.sw, 512);
+  // off-centre selection (canvas edge): position from the region, not the middle
+  const edge = tileRaster({ bbox: { x: 0, y: 3700, width: 400, height: 300 }, region: { x: 0, y: 3400, width: 900, height: 600 }, resultW: 1536, resultH: 1024, ratio: 1.5 });
+  near(edge.draw.sx, 0); near(edge.draw.sy, 512); near(edge.draw.sh, 512);
   const capped = tileRaster({ bbox, region, resultW: 1536, resultH: 1024, ratio: 1.5, maxEdge: 512 });
   assert.equal(Math.max(capped.out.width, capped.out.height), 512);
+  near(capped.draw.sw, 768, 1e-9, "source stays the whole selection when the file is capped");
 });
 
 test("alphaRect: soft edge inside the file, 0 = whole file, never more than half the short side", () => {
@@ -176,21 +239,52 @@ test("tileData: v14 x/y = centre (anchor 0.5), rotation 0, sort above tiles of t
   assert.equal(tileData({ bbox: { x: 0, y: 0, width: 1, height: 1 }, src: "b" }).sort, 0);
 });
 
-test("prompt: says which image is which, position of the selection, mask sentence only with a mask", () => {
+test("prompt: one picture, edit only inside the red rectangle, keep framing, remove the outline; no mask, no second image", () => {
   const base = { description: "a collapsed wall with rubble. ", grid: 141.7, distance: 5, units: "ft", pos: positionText({ x0: 0.25, y0: 0.25, x1: 0.75, y1: 0.75 }) };
-  const p = renderTilePrompt(DEFAULT_TILE_PROMPT, { ...base, guide: GUIDE_MASK });
-  assert.match(p, /Image 1 is the exact area to edit/);
-  assert.match(p, /Image 2 is a wider view/);
-  assert.match(p, /red rectangle in image 2 \(from 25% to 75% of its width/);
-  assert.match(p, /transparent area of the mask/);
-  assert.match(p, /a collapsed wall with rubble\./);
+  const p = renderTilePrompt(DEFAULT_TILE_PROMPT, base);
+  assert.match(p, /^This is a top-down battle map\./);
+  assert.match(p, /Edit ONLY the area inside the red rectangle: a collapsed wall with rubble\./);
+  assert.match(p, /Everything outside the red rectangle must stay exactly the same, pixel for pixel\./);
+  assert.match(p, /Do not zoom out, do not crop, do not add or remove objects unless asked\./);
+  assert.match(p, /Return the whole image with the same framing and remove the red rectangle outline\./);
   assert.match(p, /142 px/);
   assert.match(p, /5 ft/);
-  assert.ok(!p.includes("{"), p);
-  const noMask = renderTilePrompt(DEFAULT_TILE_PROMPT, { ...base, guide: "" });
-  assert.ok(!/mask/.test(noMask) && !/\s{2}/.test(noMask), noMask);
+  assert.ok(!p.includes("{") && !/\s{2}/.test(p), p);
+  assert.ok(!/mask|image 2|two images/i.test(p), p);
   assert.equal(renderTilePrompt("{description} on {scene}", { description: "x", scene: "Warehouse" }), "x on Warehouse");
-  near(gridInEdit(100, { width: 1536 }, { width: 900 }), 170.6666, 0.001);
+  // old custom templates with {guide} / {pos} still render (guide is empty now)
+  assert.equal(renderTilePrompt("A {guide} B ({pos})", { pos: "here" }), "A B (here)");
+  near(gridInEdit(100, { width: 1536 }, { width: 2100 }), 73.1428, 0.001);
+});
+
+test("prompt migration: the earlier default (W7-A, two images) becomes the new default; own templates stay", () => {
+  assert.equal(LEGACY_TILE_PROMPTS.length >= 1, true);
+  const old = LEGACY_TILE_PROMPTS[0];
+  assert.match(old, /You get two images/);
+  assert.ok(isLegacyTilePrompt(old));
+  assert.ok(isLegacyTilePrompt(old.replace(/ /g, "\r\n  ")), "whitespace differences from the text area do not matter");
+  assert.equal(tilePromptTemplate(old), DEFAULT_TILE_PROMPT);
+  assert.equal(tilePromptTemplate(""), DEFAULT_TILE_PROMPT);
+  assert.equal(tilePromptTemplate(undefined), DEFAULT_TILE_PROMPT);
+  assert.ok(!isLegacyTilePrompt(DEFAULT_TILE_PROMPT));
+  const own = old.replace("battle map", "dungeon map");
+  assert.equal(tilePromptTemplate(own), own, "an edited template is the user's own");
+});
+
+test("window options: defaults, context factor choices, old `mask` key ignored, clamping", () => {
+  assert.deepEqual({ ...DEFAULT_TILE_OPTS }, { feather: 8, tokens: false, context: 2, count: 1 });
+  assert.ok(!("mask" in DEFAULT_TILE_OPTS) && !("sendMask" in DEFAULT_TILE_OPTS));
+  assert.deepEqual(normalizeTileOptions({ feather: 8, tokens: false, mask: true, count: 1 }), { feather: 8, tokens: false, context: 2, count: 1 }, "W7-A save");
+  assert.deepEqual(normalizeTileOptions(), { feather: 8, tokens: false, context: 2, count: 1 });
+  assert.deepEqual(normalizeTileOptions(null), { feather: 8, tokens: false, context: 2, count: 1 });
+  assert.equal(normalizeTileOptions({ context: 1.5 }).context, 1.5);
+  assert.equal(normalizeTileOptions({ context: "3" }).context, 3);
+  assert.equal(normalizeTileOptions({ context: 5 }).context, 2);
+  assert.equal(normalizeTileOptions({ feather: 0 }).feather, 0);
+  assert.equal(normalizeTileOptions({ feather: 999 }).feather, 256);
+  assert.equal(normalizeTileOptions({ count: 20 }).count, 8);
+  assert.equal(normalizeTileOptions({ count: "x" }).count, 1);
+  assert.equal(normalizeTileOptions({ tokens: true }).tokens, true);
 });
 
 test("geometry pack/unpack round trip (batch record)", () => {

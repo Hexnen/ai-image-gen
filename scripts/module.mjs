@@ -20,7 +20,7 @@ import { migrateFromAiImageGen } from "./migrate-id.mjs";
 import { initVault, listenVault } from "./key-vault.mjs";
 import { syncOptimizerProfile } from "./optimize.mjs";
 import { generateImage, estimateGeneration } from "./api.mjs";
-import { TILE_TYPE_KEY, DEFAULT_TILE_PROMPT } from "./tile/tile-core.mjs";
+import { TILE_TYPE_KEY, DEFAULT_TILE_PROMPT, isLegacyTilePrompt } from "./tile/tile-core.mjs";
 
 /**
  * The old module (id "ai-image-gen") is enabled at the same time: this one stays dormant (no API, no poller, no buttons,
@@ -98,10 +98,16 @@ Hooks.once("ready", async () => {
     imageTypes.registerImageType({
       key: TILE_TYPE_KEY, label: "AIIMG.Tile.TypeLabel", group: "AIIMG.Tile.Group", owner: MODULE_ID,
       defaults: { promptTemplate: DEFAULT_TILE_PROMPT, width: 2048, height: 2048, quality: "medium",
-        refPurpose: "max", refMaxEdge: 512, // image 2 (context) goes through the usual reference shrinking; image 1 never does
+        refPurpose: "max", refMaxEdge: 512, // only the type's own references; the sent map picture is never shrunk
         output: { maxEdge: 4096, format: "webp", quality: 0.9 } }
     });
   } catch (e) { console.error(`${MODULE_ID} | AI Tile type`, e); }
+  // W7-B: a saved AI Tile prompt equal to an earlier default (two images) becomes the current default; own templates stay
+  if (game.user.isGM) {
+    configStore.patchSavedConfig(TILE_TYPE_KEY, (s) => (isLegacyTilePrompt(s.promptTemplate) ? { promptTemplate: DEFAULT_TILE_PROMPT } : null))
+      .then((done) => done && console.info(`${MODULE_ID} | AI Tile: old default prompt template replaced by the new default`))
+      .catch((e) => console.warn(`${MODULE_ID} | AI Tile prompt migration`, e));
+  }
   if (game.user.isGM) {
     api.tile = {
       start: (o) => import("./tile/tile-app.mjs").then((m) => m.startAiTile(o)),
