@@ -280,7 +280,7 @@ await test("wiring: void pass without our filter, transition padding, pan re-rea
   assert.match(src, /Hooks\.on\("canvasPan", \(\) => onPan\(\)\);/);
   assert.match(src, /fxTimeMs = now;/, "continuous breathing / dust clock");
   assert.doesNotMatch(src, /IDLE_FRAME_MS|lastIdleT/, "no 30 fps steps");
-  assert.match(src, /this\.filter\.enabled = this\.drive === "camera" \? this\.onScreen/, "camera: only on screen");
+  assert.match(src, /this\.filter\.enabled = this\.drive === "camera"\s+\? this\.onScreen && /, "camera: only on screen (W6-X: and in the capped set / fading)");
   assert.match(src, /: !\(this\.settled && lookIsRest\(this\.look\)\) \|\| this\.ampD > 0\.001;/, "pointer: off only once settled at rest");
   assert.doesNotMatch(src, /easeToward/, "springs, not the per-frame ease");
   assert.match(src, /if \(a !== v\.animated\) \{ v\.animated = a; v\.settled = false; \}/, "cap re-pick: no hard switch of the breath");

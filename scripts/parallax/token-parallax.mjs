@@ -30,6 +30,10 @@
 //   in a Worker. Depth textures are released by the entry a view acquired (not by path). The frame guard switches off
 //   only when the module's OWN cost is large (invisible A/B probe: our passes doubled), not on unrelated slow frames.
 //   A token's "on" beats an off scene only when a GM confirmed it (scene flag list, GM-only).
+// - W6-X: camera drive is capped like the pointer drive: at most MAX_CAMERA_TOKENS on-screen tokens (nearest the screen
+//   centre, with hysteresis) carry the tilt, breathing and dust; joining / leaving fades a camera amount (spring), a
+//   token entering the screen starts flat and fades in. A disabled filter is switched on one frame EARLY, still showing
+//   the rest state (no frame jumps from "no filter" to a shifted picture). Counts in status() come from the live views.
 // - GM: a token HUD button opens the "Generate depth" window on the token image (its own estimate + confirmation before
 //   every paid call; nothing runs in bulk).
 import { MODULE_ID } from "../constants.mjs";
@@ -44,7 +48,8 @@ import {
 import {
   tokenWanted, unsupportedReason, pointerLook, cameraLook, uvOffset, cleanStrength, lookIsRest, gmOnList, gmOnListAfter,
   stepLook, stepAmp, scaleLook, needsStep, tokenOnScreen, depthKey, guardVerdict, probeFrame, createDepthCache,
-  prepareDepthTexture, TOKEN_CONDITION, TOKEN_MODES, DRIVES, STRENGTH_RANGE, STRENGTH_DEFAULT, TOKEN_VS, TOKEN_FS
+  prepareDepthTexture, TOKEN_CONDITION, TOKEN_MODES, DRIVES, STRENGTH_RANGE, STRENGTH_DEFAULT, TOKEN_VS, TOKEN_FS,
+  pickCamera, cameraEffLook, shouldArm, MAX_CAMERA_TOKENS, CAMERA_OMEGA, AMP_ON
 } from "./token-core.mjs";
 
 export const SETTING = "tokenParallax";
@@ -76,9 +81,29 @@ let fxTimeMs = 0;               // W6-P: clock of breathing / dust (W6-U: contin
 let lastPickT = 0;
 let panStale = false;           // W6-U: a pan / zoom happened; re-read the pointer and camera boxes in the next tick
 let pointerClient = null;       // W6-P: pointer in client px while it is on the board (cap selection; W6-U: re-read on pan)
-let animatedCount = 0;
+let pickDue = false;            // W6-X: camera drive: the set must be re-picked (pan, resize, a token moved)
 let lastBreathS = 0, lastDustS = 0;   // W6-U: strengths kept while an extra fades out after being switched off
-const counters = { attached: 0, detached: 0, depthLoads: 0, depthDestroyed: 0, frames: 0, stepped: 0, applies: 0, voidSkips: 0, workerMaps: 0, inlineMaps: 0 };
+const counters = { attached: 0, detached: 0, depthLoads: 0, depthDestroyed: 0, frames: 0, stepped: 0, applies: 0, voidSkips: 0, workerMaps: 0, inlineMaps: 0, armed: 0, offScreenDrops: 0 };
+
+/** W6-X: counts read from the live views (the old `animatedCount` variable survived a detachAll: stale 12 at 0 views). */
+function countViews(pred) { let n = 0; for (const v of views.values()) if (pred(v)) n++; return n; }
+const animatedNow = () => countViews((v) => v.animated);
+const cameraNow = () => countViews((v) => v.camSel);
+
+/**
+ * W6-X: client px of a canvas point for the NEXT render: the stage's local transform rebuilt from its current pivot /
+ * scale (canvas.pan sets them before the canvasPan hook; `worldTransform` is only refreshed by the render). The stage
+ * has no parent (rendered under PIXI's identity temp parent), so local = world.
+ */
+function stageClient(pt) {
+  try {
+    const t = canvas.stage.transform;
+    t.updateLocalTransform();
+    return t.localTransform.apply({ x: pt.x, y: pt.y });
+  } catch {
+    try { return canvas.clientCoordinatesFromCanvas(pt); } catch { return null; }
+  }
+}
 // W6-U guard: own CPU per frame inside our applies, the A/B probe, the last verdict
 let frameCpu = 0;
 const cpuHist = [];
@@ -274,8 +299,7 @@ function filterClass() {
         const m = filterManager.calculateSpriteMatrix(this._m, mesh);
         u.otherMatrix = m;
         u.uTokToIn = this._inv.copyFrom(m).invert();
-        let look = v.drive === "camera" ? v.cameraLook() : v.look;
-        if (v.drive === "camera" && (v.breath.x || v.breath.y)) look = withBreath(look, v.breath);
+        const look = v.effLook();
         const o = mesh._texture.orig, wt = mesh.worldTransform;
         off = uvOffset(look, v.strength, wt, o.width, o.height);
         // W6-P extras (W6-U: light / dust amounts eased by the view's fades)
@@ -343,6 +367,8 @@ class TokenView {
     this.ampB = 0; this.ampBV = 0; this.ampD = 0; this.ampDV = 0;
     this.ampL = tokenFx().light ? 1 : 0; this.ampLV = 0;
     this.onScreen = true;           // W6-U: camera drive, filter only on tokens on screen
+    // W6-X: camera drive cap: in the set of MAX_CAMERA_TOKENS (nearest the screen centre), tilt amount eased 0..1
+    this.camSel = false; this.ampC = 0; this.ampCV = 0;
     this.phase = phaseOf(token.document?.id ?? token.id);
     this._voidWrap = null; this._voidBase = null; this._voidOwn = false;
   }
@@ -438,33 +464,61 @@ class TokenView {
     } catch { return { x: 0, y: 0 }; }
   }
 
-  /** W6-U (perf c): camera drive, is the token on screen (with a margin)? */
+  /** W6-U (perf c): camera drive, is the token on screen (with a margin)? W6-X: for the NEXT render (fresh stage
+   *  transform); a token that left the screen drops its camera / breathing / dust amounts at once (it is not drawn:
+   *  invisible), so it can only come back from zero (fade in, no pop at the edge). */
   cameraRefresh() {
     if (this.drive !== "camera") { this.onScreen = true; return; }
     const t = this.token;
     try {
-      const c = canvas.clientCoordinatesFromCanvas(t.center);
+      const c = stageClient(t.center);
       const r = (Math.max(t.w || 0, t.h || 0) / 2) * (canvas.stage?.scale?.x || 1);
       this.onScreen = tokenOnScreen(c, r, globalThis.innerWidth || 1, globalThis.innerHeight || 1);
     } catch { this.onScreen = true; }
+    if (!this.onScreen && (this.camSel || this.ampC || this.ampB || this.ampD || this.animated)) {
+      this.camSel = false; this.animated = false;
+      this.ampC = this.ampCV = this.ampB = this.ampBV = this.ampD = this.ampDV = 0;
+      this.breath = ZERO;
+      counters.offScreenDrops++;
+      pickDue = true;
+    }
   }
 
-  /** Enabled only when it changes the picture (W6-U: and only once settled at rest; camera: only on screen). */
+  /** W6-X: the look the filter shows (pointer: the eased look; camera: screen place × camera amount + breathing). */
+  effLook() {
+    return this.drive === "camera" ? cameraEffLook(this.cameraLook(), this.ampC, this.breath, withBreath) : this.look;
+  }
+
+  /** Enabled only when it changes the picture (W6-U: and only once settled at rest; camera: only on screen;
+   *  W6-X camera: and only while its eased camera / breathing / dust amount is above zero, i.e. in the capped set or
+   *  fading out of it). */
   sync() {
     if (!this.filter) return;
-    this.filter.enabled = this.drive === "camera" ? this.onScreen
+    this.filter.enabled = this.drive === "camera"
+      ? this.onScreen && (this.ampC > AMP_ON || this.ampB > AMP_ON || this.ampD > AMP_ON)
       : !(this.settled && lookIsRest(this.look)) || this.ampD > 0.001;
   }
 
-  /** W6-U: ease the extras' amounts; @returns {boolean} all settled */
+  /** W6-U: ease the extras' amounts (W6-X: and the camera amount); @returns {boolean} all settled */
   stepAmps(dt, fx) {
     const b = stepAmp(this.ampB, this.ampBV, this.animated && fx.breath ? 1 : 0, dt);
     const d = stepAmp(this.ampD, this.ampDV, this.animated && fx.dust ? 1 : 0, dt);
     const l = stepAmp(this.ampL, this.ampLV, fx.light ? 1 : 0, dt);
+    const c = stepAmp(this.ampC, this.ampCV, this.drive === "camera" && this.camSel ? 1 : 0, dt, CAMERA_OMEGA);
     this.ampB = b.a; this.ampBV = b.v; this.ampD = d.a; this.ampDV = d.v; this.ampL = l.a; this.ampLV = l.v;
+    this.ampC = c.a; this.ampCV = c.v;
     const bs = fx.breath ? fx.breathStrength : lastBreathS;
     this.breath = this.ampB > 0 && bs > 0 ? scaleLook(breathLook(fxTimeMs, bs, this.phase), this.ampB) : ZERO;
-    return b.settled && d.settled && l.settled;
+    return b.settled && d.settled && l.settled && c.settled;
+  }
+
+  /** W6-X: the eased state (to keep it for one frame when the filter is switched on: see shouldArm). */
+  motionState() {
+    return [this.look, this.vel, this.ampB, this.ampBV, this.ampD, this.ampDV, this.ampL, this.ampLV, this.ampC, this.ampCV, this.breath];
+  }
+
+  setMotionState(s) {
+    [this.look, this.vel, this.ampB, this.ampBV, this.ampD, this.ampDV, this.ampL, this.ampLV, this.ampC, this.ampCV, this.breath] = s;
   }
 
   /** One eased step. @returns {boolean} still moving (look, or an extra's amount) */
@@ -473,15 +527,26 @@ class TokenView {
     const t = this.token;
     if (!t || t.destroyed) return false;
     counters.stepped++;
+    const wasOn = !!this.filter?.enabled;
+    const before = wasOn ? null : this.motionState();
     const ampsSettled = this.stepAmps(dt, fx);
-    if (this.drive !== "pointer") { this.settled = ampsSettled; this.sync(); return !ampsSettled; }
-    let target = pointer ? pointerLook(pointer, t.center, Math.max(t.w || 0, t.h || 0)) : { x: 0, y: 0 };
-    if (this.breath !== ZERO) target = withBreath(target, this.breath);
-    this.target = target;
-    const r = stepLook(this.look, this.vel, target, dt);
-    this.look = r.look; this.vel = r.vel;
-    this.settled = r.settled && ampsSettled;
+    if (this.drive !== "pointer") {
+      this.settled = ampsSettled;
+    } else {
+      let target = pointer ? pointerLook(pointer, t.center, Math.max(t.w || 0, t.h || 0)) : { x: 0, y: 0 };
+      if (this.breath !== ZERO) target = withBreath(target, this.breath);
+      this.target = target;
+      const r = stepLook(this.look, this.vel, target, dt);
+      this.look = r.look; this.vel = r.vel;
+      this.settled = r.settled && ampsSettled;
+    }
     this.sync();
+    // W6-X: a disabled filter turns on one frame early, still showing the rest state; the motion starts next frame
+    if (before && shouldArm(wasOn, this.filter?.enabled)) {
+      this.setMotionState(before);
+      this.settled = false;
+      counters.armed++;
+    }
     return !this.settled;
   }
 
@@ -510,8 +575,8 @@ class TokenView {
   report() {
     return {
       token: this.token?.document?.uuid, image: this.src, depth: this.info.depth, rev: this.info.rev ?? null, status: this.status, error: this.error,
-      enabled: !!this.filter?.enabled, onMesh: !!this.mesh?.filters?.includes?.(this.filter), look: { ...this.look }, animated: this.animated,
-      amp: { breath: this.ampB, dust: this.ampD, light: this.ampL }, settled: this.settled, onScreen: this.onScreen,
+      enabled: !!this.filter?.enabled, onMesh: !!this.mesh?.filters?.includes?.(this.filter), look: { ...this.effLook() }, animated: this.animated,
+      amp: { breath: this.ampB, dust: this.ampD, light: this.ampL, camera: this.ampC }, camSel: this.camSel, settled: this.settled, onScreen: this.onScreen,
       depthOk: !!this.filter?.uniforms?.uDepth?.baseTexture && !this.entry?.dead,
       drive: this.drive, strength: this.strength, applied: this.applied
     };
@@ -530,6 +595,7 @@ function detach(token) {
 
 function detachAll({ dropDepth = false } = {}) {
   for (const t of [...views.keys()]) detach(t);
+  pickDue = false;
   stopLoop();
   if (dropDepth) destroyAllDepth();
 }
@@ -628,25 +694,33 @@ function guardFrame(gap, now) {
  */
 function repick() {
   const fx = tokenFx();
+  const camera = drive() === "camera";
+  pickDue = false;
   const W = globalThis.innerWidth || 1, H = globalThis.innerHeight || 1;
   const items = [];
-  if (fx.animates && canvas?.ready) {
+  if ((fx.animates || camera) && canvas?.ready) {
     const zoom = canvas.stage?.scale?.x || 1;
     for (const v of views.values()) {
       const t = v.token;
       if (v.status !== "ready" || !t || t.destroyed) continue;
-      let c = null;
-      try { c = canvas.clientCoordinatesFromCanvas(t.center); } catch { /* torn down */ }
+      // W6-X: the stage transform of the next render (a pan since the last render already counts)
+      const c = stageClient(t.center);
       if (!c) continue;
       const r = (Math.max(t.w || 0, t.h || 0) / 2) * zoom;
-      items.push({ key: v, x: c.x, y: c.y, r, inView: t.visible !== false && inView(c.x, c.y, r, W, H) });
+      const shown = t.visible !== false;
+      items.push({ key: v, x: c.x, y: c.y, r, inView: shown && inView(c.x, c.y, r, W, H), onScreen: shown && v.onScreen, selected: v.camSel });
     }
   }
-  const pick = pickAnimated(items, { pointer: pointerClient, center: { x: W / 2, y: H / 2 }, cap: MAX_ANIMATED_TOKENS });
-  animatedCount = pick.size;
+  const center = { x: W / 2, y: H / 2 };
+  // W6-X: camera drive: at most MAX_CAMERA_TOKENS carry the tilt (nearest the centre, hysteresis); the same set
+  // breathes / gathers dust, so a camera scene never has more than the cap of filters on. Pointer drive as before.
+  const camSet = camera ? pickCamera(items, { center, cap: MAX_CAMERA_TOKENS }) : new Set();
+  const pick = camera ? (fx.animates ? camSet : new Set())
+    : pickAnimated(items, { pointer: pointerClient, center, cap: MAX_ANIMATED_TOKENS });
   for (const v of views.values()) {
-    const a = pick.has(v);
+    const a = pick.has(v), c = camSet.has(v);
     if (a !== v.animated) { v.animated = a; v.settled = false; }
+    if (c !== v.camSel) { v.camSel = c; v.settled = false; }
     v.sync();
   }
 }
@@ -668,20 +742,22 @@ function tick() {
     panStale = false;
     rereadAfterPan();
   }
-  if (fx.animates && now - lastPickT >= PICK_MS) { lastPickT = now; repick(); }
+  const camera = drive() === "camera";
+  if ((fx.animates || (camera && pickDue)) && now - lastPickT >= PICK_MS) { lastPickT = now; repick(); }
   let moving = false, enabled = 0, extras = false;
   for (const v of views.values()) {
-    const go = v.drive === "pointer" ? v.wantsStep(fx) : (fx.animates || !v.settled);
+    const go = v.drive === "pointer" ? v.wantsStep(fx) : (!v.settled || (fx.animates && (v.animated || v.ampB > 0 || v.ampD > 0)));
     if (go) moving = v.step(dt, fx) || moving;
     if (v.filter?.enabled) enabled++;
     if (v.ampB > 0 || v.ampD > 0) extras = true;
   }
   const panning = now < panUntil;
-  const animating = (fx.animates && animatedCount > 0) || extras;
+  const animating = (fx.animates && animatedNow() > 0) || extras;
   // the guard only listens while the effect moves on screen (frames of a still scene say nothing about us)
   if ((moving || panning || animating) && enabled > 0 && guardFrame(gap, now)) return;
   frameCpu = 0;
-  if (!moving && !panning && !animating) stopLoop();
+  // W6-X: camera drive keeps the loop until a pending re-pick ran (pan / resize / a token moved)
+  if (!moving && !panning && !animating && !(camera && pickDue)) stopLoop();
 }
 
 /** W6-U: after a pan / zoom (fresh worldTransform): the pointer under the unmoved mouse, camera on-screen boxes. */
@@ -689,7 +765,7 @@ function rereadAfterPan() {
   if (pointerClient) {
     try { pointer = canvas.canvasCoordinatesFromClient(pointerClient); } catch { /* torn down */ }
   }
-  for (const v of views.values()) if (v.drive === "camera") { v.cameraRefresh(); v.sync(); }
+  for (const v of views.values()) if (v.drive === "camera") { v.cameraRefresh(); v.sync(); pickDue = true; }
 }
 
 /** W6-U: the view moved without a pointer event (wheel zoom, keys, animatePan, pings): re-read the pointer, camera boxes. */
@@ -697,6 +773,9 @@ function onPan() {
   if (!views.size) return;
   // the stage's worldTransform is only updated by the next render: re-read in the tick (it runs after the render)
   panStale = true;
+  // W6-X: camera boxes at once from the fresh stage transform (a token leaving the screen drops its amounts before
+  // the render that no longer shows it; one coming in starts from zero)
+  for (const v of views.values()) if (v.drive === "camera") { v.cameraRefresh(); v.sync(); pickDue = true; }
   if (tokenFx().animates) lastPickT = 0;   // W6-P: tokens panned into view may start animating
   if ([...views.values()].some((v) => v.drive === "camera" && v.filter?.enabled)) panUntil = performance.now() + 500;
   kick();
@@ -852,7 +931,7 @@ export function registerTokenParallax() {
     if (!v) return;
     if (token.document?.texture?.src !== v.src || token.mesh !== v.mesh || whyNot(token)) { attach(token).catch(() => {}); return; }
     if (v.filter && !v.mesh?.filters?.includes(v.filter)) v.bindMesh();
-    if (v.drive === "camera") { v.cameraRefresh(); v.sync(); }   // W6-U: moved into / out of the screen
+    if (v.drive === "camera") { v.cameraRefresh(); v.sync(); pickDue = true; kick(); }   // W6-U: moved into / out of the screen (W6-X: re-pick the capped set)
     if (v.drive === "pointer" && pointer) kick();
   });
   Hooks.on("updateToken", (doc, changes, _options, userId) => {
@@ -886,7 +965,12 @@ export function registerTokenParallax() {
 export function registerTokenSettings() {
   const onChange = () => {
     if (worldOn() && disabled === "slow") { disabled = ""; guard = null; }
-    for (const v of views.values()) { v.drive = drive(); v.strength = strength(); v.settled = false; v.cameraRefresh(); v.sync(); }
+    for (const v of views.values()) {
+      v.drive = drive(); v.strength = strength(); v.settled = false;
+      if (v.drive !== "camera") { v.camSel = false; v.ampC = v.ampCV = 0; }
+      v.cameraRefresh(); v.sync();
+    }
+    pickDue = true; lastPickT = 0;   // W6-X: camera set picked again
     refreshTokens();
   };
   game.settings.register(MODULE_ID, SETTING, {
@@ -919,8 +1003,9 @@ export function registerTokenSettings() {
     fxCache = null;
     lastPickT = 0;
     // W6-U: no hard switch: the views' amounts fade to the new settings in the loop
-    if (!tokenFx().animates) { animatedCount = 0; for (const v of views.values()) v.animated = false; }
+    if (!tokenFx().animates) for (const v of views.values()) v.animated = false;
     for (const v of views.values()) { v.settled = false; v.sync(); }
+    pickDue = true;
     kick();
   });
 }
@@ -930,7 +1015,8 @@ export const tokenApi = {
   status: () => ({
     active: tokenParallaxActive(), setting: worldOn(), scene: sceneOn(), drive: drive(), strength: strength(), disabled,
     reducedMotion: reducedMotion(), loop: loopOn, pointer: pointer ? { ...pointer } : null, guard: guard?.state() ?? null,
-    fx: { ...tokenFx() }, animated: animatedCount, maxAnimated: MAX_ANIMATED_TOKENS,
+    fx: { ...tokenFx() }, animated: animatedNow(), maxAnimated: MAX_ANIMATED_TOKENS,
+    cameraSelected: cameraNow(), maxCamera: MAX_CAMERA_TOKENS, enabled: countViews((v) => !!v.filter?.enabled),
     depthTextures: depthCache.entries().map((e) => ({ key: e.key, refs: e.refs, ready: !!e.value, alive: !!e.value?.tex?.baseTexture, releasing: !!e.timer })),
     guardProbe: probe ? { i: probe.i, a: probe.a.length, b: probe.b.length } : null, lastVerdict, probeUntil, ownCpuMs: meanCpu(),
     worker: workerBroken ? "broken" : worker ? "on" : "idle",
@@ -949,13 +1035,13 @@ export const tokenApi = {
     for (let i = 0; i < n; i++) {
       moving = false;
       fxTimeMs += dt * 1000;
-      if (fx.animates) repick();
-      for (const v of views.values()) if (v.drive === "pointer" ? v.wantsStep(fx) : (fx.animates || !v.settled)) moving = v.step(dt, fx) || moving;
+      if (fx.animates || drive() === "camera") repick();
+      for (const v of views.values()) if (v.drive === "pointer" ? v.wantsStep(fx) : (!v.settled || (fx.animates && (v.animated || v.ampB > 0 || v.ampD > 0)))) moving = v.step(dt, fx) || moving;
     }
-    return { moving, enabled: [...views.values()].filter((v) => v.filter?.enabled).length, animated: animatedCount };
+    return { moving, enabled: countViews((v) => !!v.filter?.enabled), animated: animatedNow(), camera: cameraNow() };
   },
   /** W6-P checks: re-pick the tokens allowed to animate at rest now; optional pointer in client px. */
-  pick: (client) => { if (client !== undefined) pointerClient = client ? { x: Number(client.x) || 0, y: Number(client.y) || 0 } : null; repick(); return animatedCount; },
+  pick: (client) => { if (client !== undefined) pointerClient = client ? { x: Number(client.x) || 0, y: Number(client.y) || 0 } : null; repick(); return animatedNow(); },
   /** Why a token does / does not carry the filter ("" = it may). */
   whyNot: (token) => whyNot(token),
   /** W6-U checks: simulated GPU cost per filter pass in ms (guard test), delay of every depth load in ms (F2 repro). */

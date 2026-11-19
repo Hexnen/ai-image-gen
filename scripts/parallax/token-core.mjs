@@ -77,6 +77,14 @@ export function stepLook(look, vel, target, dt, omega = LOOK_OMEGA) {
     : { look: { x: sx.x, y: sy.x }, vel: { x: sx.v, y: sy.v }, settled };
 }
 
+/**
+ * W6-X: the filter is switched on ONE FRAME EARLY: when a step would turn a disabled filter on, the view keeps its
+ * previous (rest) state for that frame (the picture is identical to no filter: zero offset, no light, no dust) and the
+ * motion starts in the next frame. So no frame ever jumps from "no filter" straight to a visibly shifted picture.
+ * @returns {boolean} arm this frame (keep the old state, enable the filter)
+ */
+export const shouldArm = (wasEnabled, nowEnabled) => !wasEnabled && !!nowEnabled;
+
 /** Scalar amplitude spring 0..1 (clamped), settled snaps onto the target. */
 export function stepAmp(a, v, target, dt, omega = AMP_OMEGA) {
   const s = springStep(a, v, target, dt, omega);
@@ -99,6 +107,46 @@ export function needsStep({ settled = true, atRest = true, animated = false, amp
 
 /** W6-U (perf c): camera drive: is the token's screen box (client px, centre + half size) on screen, with a margin? */
 export const tokenOnScreen = (c, r, w, h, margin = 32) => !!c && c.x + r > -margin && c.y + r > -margin && c.x - r < w + margin && c.y - r < h + margin;
+
+// ------------------------------------------------------------------ W6-X: camera drive cap
+
+/** W6-X: tokens that carry the camera tilt at once (like the pointer drive's cap of animated tokens). */
+export const MAX_CAMERA_TOKENS = 12;
+/** W6-X: camera tilt amount (0..1) fade when a token joins / leaves the camera set: ~1 s, no pop. */
+export const CAMERA_OMEGA = 6;
+/** W6-X: an eased amount above this switches the filter on (the first step of a fade from 0 is far below 0.01 look). */
+export const AMP_ON = 1e-3;
+
+/**
+ * W6-X: which tokens carry the camera tilt (and, in camera drive, breathing / dust). `items` = [{key, x, y, r, onScreen,
+ * selected}] in screen px (r = half the token's size on screen). Only tokens on screen qualify; the nearest to the
+ * screen centre `center` win, measured to the token's EDGE (so a big token near the middle beats a small one), at most
+ * `cap`. Hysteresis: a token already in the set counts its distance × `keep` minus `keepPx` (no churn at the border
+ * while panning). Ties keep the input order. @returns {Set} of keys.
+ */
+export function pickCamera(items, { center = { x: 0, y: 0 }, cap = MAX_CAMERA_TOKENS, keep = 0.8, keepPx = 24 } = {}) {
+  const n = Math.max(0, Math.floor(Number(cap) || 0));
+  if (!n || !Array.isArray(items)) return new Set();
+  const list = [];
+  items.forEach((it, i) => {
+    if (!it || !it.onScreen) return;
+    let d = Math.max(0, Math.hypot((it.x ?? 0) - center.x, (it.y ?? 0) - center.y) - Math.max(0, it.r || 0));
+    if (it.selected) d = d * keep - keepPx;
+    list.push({ it, i, d });
+  });
+  list.sort((a, b) => a.d - b.d || a.i - b.i);
+  return new Set(list.slice(0, n).map((e) => e.it.key));
+}
+
+/**
+ * W6-X: the look a token shows in camera drive: its screen-place look scaled by its camera amount, then the breathing.
+ * (camera look + breath as before W6-X once the amount has settled at 1.)
+ */
+export function cameraEffLook(camLook, ampC, breath, combine) {
+  let l = ampC > 0 && camLook ? { x: camLook.x * ampC, y: camLook.y * ampC } : { x: 0, y: 0 };
+  if (breath && (breath.x || breath.y)) l = combine(l, breath);
+  return l;
+}
 
 // ------------------------------------------------------------------ W6-U: depth texture identity (W6-R `rev`)
 

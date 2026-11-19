@@ -299,7 +299,8 @@ await test("wiring: W6-Q world settings (GM) + one device opt-out next to the pa
   assert.match(portrait, /if \(drew\) host\.prev = \{ cpu, gpu: host\.gl\.timerSupported \? host\.gpuMs : null \};/, "guard also during idle runs");
   assert.match(token, /\(moving \|\| panning \|\| animating\) && enabled > 0 && guardFrame\(gap, now\)/, "token guard also while animating at rest");
   // all switches off: nothing new runs (no extra loop, filter enabled exactly as before)
-  assert.match(token, /this\.filter\.enabled = this\.drive === "camera" \? this\.onScreen\s+: !\(this\.settled && lookIsRest\(this\.look\)\) \|\| this\.ampD > 0\.001;/);
+  // (W6-X: camera drive also needs an eased amount above zero: the capped set or fading out of it)
+  assert.match(token, /this\.filter\.enabled = this\.drive === "camera"\s+\? this\.onScreen && \(this\.ampC > AMP_ON \|\| this\.ampB > AMP_ON \|\| this\.ampD > AMP_ON\)\s+: !\(this\.settled && lookIsRest\(this\.look\)\) \|\| this\.ampD > 0\.001;/);
   assert.match(portrait, /const busy = !m\.settled \|\| layout \|\| fx\.animates;/);
   for (const f of ["scripts/parallax/parallax-fx.mjs"]) {
     const src = read(f);
