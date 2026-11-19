@@ -1359,3 +1359,37 @@ seam `tileTestHooks.execute` i pliki rdzenia Foundry; panel przeglądarki UKRYTY
 karcie z pełnym rAF (tu panel ukryty: sprawdzone tylko wartości alfy w czasie). Okno po polsku (świat lane po
 angielsku). Batch: kafelek z batcha też jest ukryty, ale bez okna (MG odkrywa go przez HUD). Kafelek nad strefami
 moinen-maps zakrywa ich obrysy/plakietki w swoim prostokącie (strefy 258 < kafelki 500): zachowanie Foundry, bez zmian.
+
+## W8 poprawka: bez gruzu / zniszczeń na obrazie do modelu (2026-11-19)
+
+**Powód (właściciel, prawdziwy test na The Warehouse).** Warstwa 247 moinen-maps rysuje pixel-artowy gruz zniszczeń na
+mapie; model brał go za część mapy i edycja kończyła się na krawędzi gruzu (zbiornik szklany przemalowany tylko do
+gruzu, widoczny szew). Do modelu ma iść czysta mapa.
+
+**Zmiana.** `tile-core.mjs` `CAPTURE_MAP_LAYERS` = [240 woda, 245 drogi] (było [240, 245, 247]); 247 dołącza do
+pomijanych warstw (komentarz z uzasadnieniem). `tile-image.mjs`: tylko komentarz. Kafelki (także ukryte, poniżej
+`foregroundElevation`) bez zmian. Stan tymczasowy (alfa/hidden siatek kafelków) nadal wraca w `finally` (kod renderu
+bez zmian). Plan B (`composeRegion`) i tak składa tylko tło + kafelki z plików, więc gruzu nie miał.
+
+**Co jest mapą, a co zniszczeniem (moinen-maps).** 247/248/249 tworzy WYŁĄCZNIE `destruction/display.mjs`
+(`layer(247)` = obiekty uszkodzeń: kratery, gruz, spalenizna, zalane dziury, rysy, cięcia, ich statyczny cache
+`static-cache.mjs` dodawany do tego samego kontenera i „gumki” z łatami czystej mapy; 248 odłamki/odbicia, 249 pył i
+żar). Nic z nienaruszonej mapy tam nie leży, a destruction nie zmienia tła sceny (żadnego zapisu `background` poza
+`zones/orbit.mjs`, który dotyczy sceny Orbita). Woda zalanych dziur (flood) jest w 247 (patrz `water/reflect.mjs`),
+więc też odpada; 240 to malowana woda mapy, 245 drogi — obie to mapa w stanie nienaruszonym i zostają.
+
+**Testy.** `dev/test-ai-tile-core.mjs` 24 passed (zestaw [240, 245], 247/248/249 jawnie `false`, warunek elewacji
+sprawdzany na 245). Wszystkie 37 `dev/test-*.mjs` exit 0.
+
+**Na żywo (lane 8, `http://127.0.0.1:30008`, MG, The Warehouse ze zniszczeniami; zero płatnych wywołań).** Cała
+scena 768×1001: nowa reguła (`renderRegion`) = czysta mapa (zbiornik, konsola, skrzynie, rury całe, bez gruzu i
+kraterów); dla porównania stara reguła (tło+240+245+247) ma ślady pazurów, krater i gruz na zbiorniku; różni się 24,5%
+pikseli. Wycinek 2200×2200 wokół zbiornika z tymczasowym UKRYTYM kafelkiem: kafelek jest na obrazie, gruzu brak;
+`captureRegion` auto -> metoda `render`. Stan `canvas.primary` (sortLayer, elevation, visible, renderable, alpha,
+hidden), siatek kafelków, dokumentów kafelków i flag sceny identyczny przed/po (3 powtórzenia + po `captureRegion`).
+Wszystkie obrazy obejrzane. Po teście kafelek testowy i pliki skasowane, karta zamknięta, slot oddany.
+
+**Uwaga / NIESPRAWDZONE.** Panel przeglądarki był ukryty (rAF stoi; ticker pompowany ręcznie, żeby nowy kafelek się
+odświeżył). W tej karcie PIERWSZE wywołanie renderu zaraz po imporcie dało pusty obraz (kolejne poprawne); w produkcji
+`captureRegion` auto wtedy przechodzi na plan B — niezwiązane z tą zmianą, nie badane dalej. Prawdziwa edycja modelu
+po zmianie (płatna) nie była robiona: czy szew zniknie, sprawdzi właściciel.

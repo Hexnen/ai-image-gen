@@ -308,15 +308,17 @@ test("W8 capture: ONLY the map (background + moinen-maps map layers) and the til
   assert.equal(inc({ kind: "tile", sortLayer: 500, overhead: true }), false, "roofs / overhead tiles are not the floor");
   assert.equal(inc({ kind: "token", sortLayer: 700 }), false);
   assert.equal(inc({ kind: "weather", sortLayer: 1000 }), false);
-  // moinen-maps map layers stay: painted water, roads, ruins
-  assert.deepEqual([...CAPTURE_MAP_LAYERS], [240, 245, 247]);
-  for (const L of [240, 245, 247]) assert.equal(inc({ kind: "other", sortLayer: L, elevation: 0 }), true, `map layer ${L}`);
+  // moinen-maps map layers stay: painted water, roads (the intact map)
+  assert.deepEqual([...CAPTURE_MAP_LAYERS], [240, 245]);
+  for (const L of [240, 245]) assert.equal(inc({ kind: "other", sortLayer: L, elevation: 0 }), true, `map layer ${L}`);
+  // the destruction layers never go (owner, The Warehouse test): damage/rubble/ruins 247, shards 248, dust+embers 249
+  for (const L of [247, 248, 249]) assert.equal(inc({ kind: "other", sortLayer: L, elevation: 0 }), false, `destruction layer ${L}`);
   // effects / marks / overlays go: reflections+shards 248, debris 249, districts 250, light glows 251, cars+ripples 255,
   // fire 256/750/800, zones 258, drawings 600, submerge 705, steam 801, presets 819-825, weather 990/995, orbit life 100, unknown
-  for (const L of [100, 248, 249, 250, 251, 252, 253, 255, 256, 258, 600, 705, 750, 800, 801, 819, 820, 821, 825, 990, 995, 1100, undefined]) {
+  for (const L of [100, 247, 248, 249, 250, 251, 252, 253, 255, 256, 258, 600, 705, 750, 800, 801, 819, 820, 821, 825, 990, 995, 1100, undefined]) {
     assert.equal(inc({ kind: "other", sortLayer: L, elevation: 0 }), false, `effect layer ${L}`);
   }
-  assert.equal(inc({ kind: "other", sortLayer: 247, elevation: 5 }), false, "a map layer number at another elevation is not the map");
+  assert.equal(inc({ kind: "other", sortLayer: 245, elevation: 5 }), false, "a map layer number at another elevation is not the map");
   assert.equal(inc(null), false);
   // no window options for tokens / effects any more (old saves are ignored)
   assert.ok(!("tokens" in normalizeTileOptions({ tokens: true })) && !("effects" in normalizeTileOptions({ effects: true })));

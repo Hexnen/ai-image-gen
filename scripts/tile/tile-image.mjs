@@ -29,7 +29,7 @@ export function imageStats(c) {
 
 /**
  * Render grupy `canvas.primary` do RenderTexture z macierzą region -> [0,w]x[0,h]. W8 (właściciel): WYŁĄCZNIE mapa
- * (tło, warstwy mapy moinen-maps: woda, drogi, ruiny) i kafelki poniżej „overhead”, także ukryte, z alfą dokumentu
+ * (tło, warstwy mapy moinen-maps: woda, drogi; BEZ gruzu / zniszczeń 247-249) i kafelki poniżej „overhead”, także ukryte, z alfą dokumentu
  * (`captureInclude` w tile-core). Bez tokenów, pogody, efektów, ognia/dymu, VFX, znaczników stref, pinezek, rysunków,
  * świateł, siatki, ścian i interfejsu (nie są w tej grupie albo są pomijane). Pominięte dzieci po prostu nie są
  * renderowane; jedyna zmiana stanu (alfa / `hidden` siatek kafelków na czas renderu) wraca w `finally`, także po błędzie.

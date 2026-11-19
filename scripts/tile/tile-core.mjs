@@ -371,14 +371,18 @@ export function pointsIn(points, rect, scale = 1, scaleY = scale) {
 // ---------- co trafia na wysyłany obraz (render canvas.primary) ----------
 
 /**
- * W8: warstwy moinen-maps w canvas.primary, które SĄ mapą (zostają na obrazie): 240 malowana woda, 245 drogi,
- * 247 ruiny (obiekty zniszczeń + ich statyczny cache). Reszta tej grupy to efekty / znaczniki / interfejs:
+ * W8: warstwy moinen-maps w canvas.primary, które SĄ mapą (zostają na obrazie): 240 malowana woda, 245 drogi.
+ * W8 (właściciel, po teście na The Warehouse): 247 NIE idzie do modelu. To cała warstwa zniszczeń moinen-maps
+ * (destruction/display.mjs `layer(247)`: obiekty uszkodzeń - gruz, kratery, spalenizna, zalane dziury, rysy, cięcia -
+ * plus ich statyczny cache i „gumki” z czystą mapą); nic z mapy w stanie nienaruszonym tam nie leży (tło sceny
+ * destruction nie zmienia), więc bez 247 model widzi czystą mapę, a nie gruz jako jej część.
+ * Reszta tej grupy to efekty / znaczniki / interfejs: 247 zniszczenia (j.w.),
  * 248 odbicia w wodzie i odłamki, 249 cząstki zniszczeń, 250 dzielnice (nakładka), 251 poświaty świateł, 252/253,
  * 255 auta i zmarszczki wody, 256/750/800 ogień i dym, 258 strefy (numery, ikony, podświetlenia), 705 zanurzenie,
  * 801 para, 819-825 presety (rakiety, błyskawice...), 990-1000 pogoda, 100 życie sceny Orbita (gwiazdy, chmury),
  * a także rysunki, Sequencer / pixel-vfx i wszystko z innych modułów.
  */
-export const CAPTURE_MAP_LAYERS = Object.freeze([240, 245, 247]);
+export const CAPTURE_MAP_LAYERS = Object.freeze([240, 245]);
 
 /**
  * Czy dziecko canvas.primary narysować na wysyłanym obrazie. Właściciel (W8): do modelu idzie WYŁĄCZNIE mapa (tło sceny
