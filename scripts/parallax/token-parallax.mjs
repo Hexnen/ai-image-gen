@@ -369,6 +369,7 @@ class TokenView {
     this.onScreen = true;           // W6-U: camera drive, filter only on tokens on screen
     // W6-X: camera drive cap: in the set of MAX_CAMERA_TOKENS (nearest the screen centre), tilt amount eased 0..1
     this.camSel = false; this.ampC = 0; this.ampCV = 0;
+    this.arming = false;            // W6-X: switched on early this frame (rest state shown), motion from the next step
     this.phase = phaseOf(token.document?.id ?? token.id);
     this._voidWrap = null; this._voidBase = null; this._voidOwn = false;
   }
@@ -476,7 +477,7 @@ class TokenView {
       this.onScreen = tokenOnScreen(c, r, globalThis.innerWidth || 1, globalThis.innerHeight || 1);
     } catch { this.onScreen = true; }
     if (!this.onScreen && (this.camSel || this.ampC || this.ampB || this.ampD || this.animated)) {
-      this.camSel = false; this.animated = false;
+      this.camSel = false; this.animated = false; this.arming = false;
       this.ampC = this.ampCV = this.ampB = this.ampBV = this.ampD = this.ampDV = 0;
       this.breath = ZERO;
       counters.offScreenDrops++;
@@ -495,7 +496,7 @@ class TokenView {
   sync() {
     if (!this.filter) return;
     this.filter.enabled = this.drive === "camera"
-      ? this.onScreen && (this.ampC > AMP_ON || this.ampB > AMP_ON || this.ampD > AMP_ON)
+      ? this.onScreen && (this.arming || this.ampC > AMP_ON || this.ampB > AMP_ON || this.ampD > AMP_ON)
       : !(this.settled && lookIsRest(this.look)) || this.ampD > 0.001;
   }
 
@@ -529,6 +530,7 @@ class TokenView {
     counters.stepped++;
     const wasOn = !!this.filter?.enabled;
     const before = wasOn ? null : this.motionState();
+    this.arming = false;
     const ampsSettled = this.stepAmps(dt, fx);
     if (this.drive !== "pointer") {
       this.settled = ampsSettled;
@@ -545,6 +547,7 @@ class TokenView {
     if (before && shouldArm(wasOn, this.filter?.enabled)) {
       this.setMotionState(before);
       this.settled = false;
+      this.arming = true;             // sync() keeps it on until the next step (a pan's sync must not undo the arm)
       counters.armed++;
     }
     return !this.settled;

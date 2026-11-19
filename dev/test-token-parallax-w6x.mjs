@@ -155,7 +155,9 @@ await test("finding 3: pointer drive: the filter switches on one frame early (lo
 await test("wiring: arm in step(), camera set in repick, fresh stage transform, off-screen drop", () => {
   const src = read("scripts/parallax/token-parallax.mjs");
   assert.match(src, /const before = wasOn \? null : this\.motionState\(\);/);
-  assert.match(src, /if \(before && shouldArm\(wasOn, this\.filter\?\.enabled\)\) \{\s+this\.setMotionState\(before\);\s+this\.settled = false;/);
+  assert.match(src, /if \(before && shouldArm\(wasOn, this\.filter\?\.enabled\)\) \{\s+this\.setMotionState\(before\);\s+this\.settled = false;\s+this\.arming = true;/);
+  assert.match(src, /this\.arming = false;\s+const ampsSettled/, "the arm lasts until the next step (a pan's sync must not undo it)");
+  assert.match(src, /\? this\.onScreen && \(this\.arming \|\|/, "sync keeps an armed filter on");
   assert.match(src, /const camSet = camera \? pickCamera\(items, \{ center, cap: MAX_CAMERA_TOKENS \}\) : new Set\(\);/);
   assert.match(src, /const pick = camera \? \(fx\.animates \? camSet : new Set\(\)\)/, "camera: the same capped set breathes");
   assert.match(src, /const c = stageClient\(t\.center\);/, "camera boxes from the next render's transform");
