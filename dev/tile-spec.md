@@ -1,101 +1,96 @@
-# AI Tile (W7-A): rysujesz kształt na mapie, model go zmienia, wynik wklejany jako Tile
+# AI Tile (W7-A): zaznaczasz prostokąt na mapie, model go zmienia, wynik wklejany jako Tile
 
 ## 0. Interpretacja zlecenia (wiążąca dla tej pracy)
 
 Zlecenie właściciela (dosłownie): „nowy element ai gen. nowy button w ai gen, który pozwala na tworzenie tilei. rysujemy
 kształt na mapie i wysyłamy to do modelu z promptem co ma zmienić, a potem wklejamy tile".
 
-- Nowy przycisk w pasku narzędzi AI Gen (kategoria „Moinens AI Gen” po lewej, obok Ustawień / Batchy / Logu; tylko MG)
-  uruchamia tryb „AI Tile”: MG rysuje kształt (wielokąt, prostokąt, elipsa, odręcznie z wygładzeniem) bezpośrednio na
-  płótnie sceny (nakładka PIXI w układzie sceny), może przeciągać punkty, anuluje (Esc) albo zatwierdza (Enter).
-- Moduł wycina z aktualnej sceny fragment pod kształtem (bounding box + margines kontekstu, dopasowany do proporcji,
-  które model naprawdę zwraca), renderuje go z płótna (tło + kafelki; tokeny domyślnie ukryte, oświetlenie nigdy, bo
-  renderujemy tylko grupę `primary`), buduje maskę kształtu i wysyła do modelu obrazowego z promptem MG-a „co zmienić”.
-- Wynik jest skalowany z powrotem do regionu, przycinany do kształtu (alfa z maski, miękka krawędź opcjonalna),
-  optymalizowany i zapisywany w `ai-image-gen/tiles/<scena>/` jak inne obrazy, a potem wklejany jako Tile dokładnie w
-  miejscu kształtu (x/y/szer./wys. = bounding box kształtu w px sceny, rotacja 0, nad tłem i pod tokenami).
-- Kilka wariantów: podgląd na mapie (sprite w miejscu kształtu), przełączanie wariantów, Akceptuj / Odrzuć / Powtórz.
-- Fast i Batch jak reszta modułu (Batch: zadanie czeka; po wyniku wklejenie na TEJ SAMEJ scenie, geometria zapisana w
-  rekordzie batcha; >1 wariant w batchu = okno wyboru z podglądem na mapie, gdy MG otworzy tę scenę).
-- Używamy istniejących: konfiguracji typu obrazu (dostawca, model, jakość, rozmiar = górny limit, wyjście), limitów
-  budżetu, logu wywołań, licznika kosztu, kluczy (GM-only), lang pl/en. Domyślny szablon promptu (perspektywa, światło,
-  skala siatki, dopasowanie krawędzi) jest edytowalny w oknie Ustawień jako typ „AI Tile”.
-- Rzeczy niejasne -> `dev/tile-questions.md` z zachowaniem tymczasowym.
+**Zmiana właściciela 2026-11-19 (zastępuje wcześniejszy zakres):**
+1. Na razie TYLKO prostokąt (bez wielokąta, elipsy, odręcznego: usunięte z UI i ze specyfikacji). Rdzeń geometrii
+   zostaje ogólny (kształt = lista punktów, bbox, punkty w batchu, maska z punktów), ale inne kształty NIE są zaimplementowane.
+2. Do modelu idą DWA obrazy: obraz 1 = wycięty zaznaczony prostokąt (+ maska tam, gdzie dostawca ją wspiera),
+   obraz 2 = kontekst: obszar sceny 2× szerszy i 2× wyższy wokół tego samego środka (zaznaczenie pośrodku), przycięty
+   do granic płótna, z zaznaczeniem pokazanym w obrazie 2. Szablon promptu wyjaśnia, który obraz jest którym.
+   Wynik dalej przycinany do prostokąta i wklejany jako Tile.
+
+Zakres:
+- Przycisk „AI Tile” w kategorii „Moinens AI Gen” lewego paska (obok Ustawień / Batchy / Logu; tylko MG) uruchamia tryb
+  zaznaczania: przeciągnięcie LPM rysuje prostokąt na płótnie (nakładka PIXI w układzie sceny), narożniki i cały
+  prostokąt można przeciągać, Esc anuluje, Enter / „Dalej” otwiera okno.
+- Okno: prompt „co zmienić”, wersje 1-8, Teraz/Batch, miękka krawędź, tokeny na obrazach, maska (OpenAI), podgląd
+  obrazów 1, 2 i maski, liczba obrazów wejściowych z szacunkiem tokenów, szacunek kosztu, model z typu „AI Tile”.
+- Wynik: skalowany do regionu, przycięty do prostokąta, miękka krawędź do środka, zapis w `ai-image-gen/tiles/<scena>/`
+  (optymalizacja z typu, alfa), wklejenie Tile dokładnie w miejscu prostokąta (x/y/szer./wys. = prostokąt w px sceny,
+  rotacja 0, nad kafelkami tej elewacji, pod tokenami).
+- Wersje: podgląd na mapie w miejscu prostokąta, przełączanie, Akceptuj / Odrzuć / Powtórz / Oryginał.
+- Fast i Batch jak reszta modułu. Batch: geometria (scena, prostokąt, region) w rekordzie, po wyniku wklejenie na tej
+  samej scenie; >1 wersja = okno wersji (podgląd na mapie, gdy ta scena jest otwarta).
+- Typ obrazu „AI Tile” (wirtualny, `moinens-ai-gen.tile`) w oknie Ustawień: dostawca, model, jakość, rozmiar (= górny
+  limit żądania), szablon promptu (edytowalny), referencje (przeznaczenie/limit dotyczą obrazu 2), wyjście.
 
 ## 1. Przepływ
 
-1. MG klika „AI Tile” (ikona `fa-vector-square`). Moduł wymaga aktywnej sceny na płótnie (`canvas.ready`).
-2. Tryb rysowania: pasek HUD u góry płótna (kształt: wielokąt / prostokąt / elipsa / odręcznie; Cofnij punkt; Anuluj;
-   Dalej). Wielokąt: klik dodaje punkt, klik w pierwszy punkt / podwójny klik / Enter zamyka. Prostokąt i elipsa:
-   przeciągnięcie. Odręcznie: przeciągnięcie, potem uproszczenie (Ramer-Douglas-Peucker) i wygładzenie (Chaikin).
-   Po zamknięciu kształtu punkty można przeciągać (uchwyty). PPM i kółko zostają dla Foundry (przesuwanie, zoom).
-   Zdarzenia przechwytujemy na elemencie `<canvas id="board">` w fazie capture (LPM), żeby warstwy Foundry (zaznaczanie
-   tokenów) ich nie dostały; współrzędne: `canvas.canvasCoordinatesFromClient`.
-3. Okno „AI Tile”: prompt „co zmienić”, liczba wariantów (1-8), tryb Teraz/Batch, margines kontekstu (%), miękka
-   krawędź (px sceny), tokeny w wycinku (domyślnie nie), maska OpenAI (domyślnie tak, gdy dostawca = OpenAI), podgląd
-   wycinka i maski, szacunek kosztu, dostawca/model z typu „AI Tile” (link do ustawień).
-4. Generacja: `executeGeneration` (ten sam rdzeń co Fast: rezerwacja budżetu, log, koszt) z nowymi opcjami
-   `editImage` (obraz do edycji, wysłany bez zmniejszania) i `mask` (tylko OpenAI `images/edits`).
-5. Przegląd: każdy wynik od razu przetworzony (skalowanie do regionu, wycięcie bbox, alfa z maski), podgląd na mapie
-   w miejscu kształtu; okno z miniaturami: Akceptuj (zapis + Tile), Odrzuć (nic nie zapisane), Powtórz (kolejne
-   warianty z tym samym wycinkiem), Pokaż oryginał (ukrywa podgląd).
-6. Akceptuj: `saveImageBlobEx` (optymalizacja z typu, alfa wymuszona: WebP/PNG) do `ai-image-gen/tiles/<scena>`,
-   potem `scene.createEmbeddedDocuments("Tile", [data])` z flagą `moinens-ai-gen.aiTile` (prompt, model, batch).
+1. Klik „AI Tile” (ikona `fa-vector-square`); wymaga sceny na płótnie.
+2. Zaznaczanie: HUD u góry (podpowiedź, Anuluj, Dalej). LPM przechwytywany na `window` w fazie capture (przed PIXI,
+   który słucha na `<canvas id="board">`, też w capture), tylko gdy cel = płótno; PPM (przesuwanie) i kółko (zoom)
+   idą do Foundry. Współrzędne: `canvas.canvasCoordinatesFromClient`. Prostokąt w całych px sceny.
+3. Okno AI Tile przygotowuje zadanie od razu (podgląd), ponownie po zmianie trybu / tokenów / maski / krawędzi.
+4. Teraz: `executeGeneration` (wspólny rdzeń: rezerwacja budżetu, limity, log, koszt) z `editImage` = obraz 1 (bez
+   zmniejszania), `extraRefs` = [obraz 2] (zwykłe zmniejszanie referencji wg typu), `mask` (tylko OpenAI).
+5. Przegląd wersji -> Akceptuj: zapis + `scene.createEmbeddedDocuments("Tile", …)` z flagą `moinens-ai-gen.aiTile`.
 
-## 2. Geometria (czysta, `scripts/tile/tile-core.mjs`, testy Node)
+## 2. Geometria (`scripts/tile/tile-core.mjs`, testy `dev/test-ai-tile-core.mjs`)
 
-- Kształt: zamknięty wielokąt w px sceny (elipsa = 48 punktów, prostokąt = 4). `bbox` = zaokrąglony na zewnątrz.
-- Region = bbox + margines `max(minMarginPx, margin% × dłuższy bok)` z każdej strony, potem POWIĘKSZONY (nigdy
-  zmniejszony) do proporcji, które model zwróci: OpenAI = proporcje rozmiaru po `normalizeOpenAISize` (×16, < 2,9:1),
-  Gemini/OpenRouter = najbliższy dozwolony aspekt (`nearestAspect`). Region przesuwany tak, by mieścił się w
-  `canvas.dimensions` (rect całego płótna z paddingiem), gdy to możliwe; bez przycinania proporcji.
-- Rozmiar żądania: OpenAI = wymiary regionu w px sceny, ograniczone dłuższym bokiem typu (`max(width,height)` z
-  konfiguracji, domyślnie 2048) i regułami API (min. 655 360 px: mały kształt jest powiększany przez model). Gemini:
-  `imageSize` = najmniejszy z modelu ≥ dłuższy bok regionu, ale nie większy niż w konfiguracji typu.
-- Obraz do edycji: OpenAI = dokładnie rozmiar żądania (maska musi mieć te same wymiary); inni = dłuższy bok ≤ 1536.
-- Wynik: gdy proporcje wyniku różnią się od oczekiwanych o > 1 %, środek wyniku przycinany do oczekiwanych proporcji
-  (`resultCrop`), potem skala `s = wynikW / regionW` (px obrazu na px sceny). Plik kafelka = wycinek bbox w tej skali
-  (`bbox.w × s` na `bbox.h × s`), alfa = maska kształtu (opcjonalne rozmycie `feather × s`).
-- Tile: `x = bbox.x`, `y = bbox.y`, `width = bbox.w`, `height = bbox.h`, `rotation 0`, `elevation` = 0 (poziom tła;
-  poniżej `scene.foregroundElevation`, więc nie jest „overhead”), `sort` = max(sort kafelków na tej elewacji) + 1.
-  Tokeny są nad kafelkami na tej samej elewacji (warstwa sortowania TOKENS > TILES w v14).
-- Siatka: `scene.grid.size` px = `scene.grid.distance` `scene.grid.units`; do promptu idzie rozmiar pola W OBRAZIE
-  wysyłanym (`grid.size × skala wycinka`).
+- Obraz 1: region = prostokąt powiększony TYLKO do proporcji, które model zwróci (OpenAI: `normalizeOpenAISize`
+  z wymiarów prostokąta, ograniczonych dłuższym bokiem typu, domyślnie 2048; Gemini/OpenRouter: najbliższy dozwolony
+  aspekt), symetrycznie, w granicach płótna, nigdy nie odsłaniając zaznaczenia. Obraz 1 renderowany w rozmiarze
+  żądania (OpenAI: maska musi mieć te same wymiary) albo ≤ 1536 i ≤ 2× px sceny (inni).
+- Obraz 2: prostokąt 2× szer. i 2× wys. wokół środka zaznaczenia, PRZYCIĘTY do `canvas.dimensions.rect` (nie
+  przesuwany), dłuższy bok ≤ 1024 px i bez powiększania; `sel` = położenie zaznaczenia w ułamkach 0..1.
+- Wynik: kadr środka przy różnicy proporcji > 1 % (`resultCrop`), skala s = px wyniku / px sceny regionu, plik
+  kafelka = prostokąt × s (≤ maxEdge wyjścia typu, domyślnie 4096). Alfa: miękka krawędź DO ŚRODKA (`alphaRect`:
+  prostokąt zwężony o pół krawędzi, rozmycie σ = krawędź/4), więc Tile nigdy nie wychodzi poza zaznaczenie.
+- Tile: `x,y,width,height` = prostokąt, `rotation 0`, `elevation 0`, `sort` = max(sort kafelków elewacji 0) + 1.
+- Siatka w prompcie: `grid.size × (szer. obrazu 1 / szer. regionu)` px na pole, `grid.distance grid.units`.
 
-## 3. Dane
+## 3. Jak zaznaczenie jest pokazane w obrazie 2 (decyzja)
 
-- Typ obrazu (wirtualny, w pamięci, jak typy innych modułów): klucz `moinens-ai-gen.tile`, grupa „AI Tile”, domyślnie:
-  OpenAI, domyślny model, 2048×2048 (górny limit), jakość medium, szablon promptu z §5, wyjście maxEdge 4096 WebP.
-  Konfigurację zapisaną w oknie Ustawień trzyma istniejące ustawienie `imageTypes`.
-- Ustawienia świata (restricted, config: false; zmieniane w oknie AI Tile i zapamiętywane): `tile.margin` (0.25),
-  `tile.feather` (8), `tile.tokens` (false), `tile.mask` (true), `tile.count` (1), `tile.shape` ("polygon").
-- Batch: `item.target = {uuid: scene.uuid, field: "tile"}`, `item.meta.tile = {sceneId, bbox, region, points
-  (względem bbox), feather, crop:{w,h}}`; refs = [wycinek, przewodnik]. `applyBatchItem` ma gałąź tile (przetworzenie
-  + zapis + Tile; Tile z flagą `{batchId, itemId}`, więc ponowienie nie tworzy duplikatu).
+Czerwona ramka narysowana NA ZEWNĄTRZ zaznaczenia (nie zasłania jego brzegów) + położenie w prompcie słowami
+(„from 25% to 75% of its width and from 25% to 75% of its height”), dla wszystkich dostawców jednakowo. Bez
+przyciemniania (otoczenie ma być czytelne, to ono jest kontekstem). Powód: obraz 2 jest tylko referencją; ramka to
+najprostszy, jednoznaczny znak dla modeli bez maski, a procenty działają także, gdy kontekst przy krawędzi sceny jest
+przycięty i zaznaczenie nie jest pośrodku. Maska (OpenAI) dotyczy wyłącznie obrazu 1.
 
 ## 4. API dostawców
 
-- OpenAI `images/edits` (multipart): `image[]` = wycinek (+ przewodnik, gdy bez maski), `mask` = PNG tych samych
-  wymiarów co pierwszy obraz, przezroczysty tam, gdzie wolno zmieniać (kształt + miękka krawędź). Wg dokumentacji
-  OpenAI maska dotyczy pierwszego obrazu i jest „wskazówką” (model może zmienić więcej), dlatego i tak przycinamy
-  wynik maską po swojej stronie. NIEZWERYFIKOWANE dla 2.5/2.6 na prawdziwym kluczu.
-- Gemini / OpenRouter: brak maski; wysyłamy 2 obrazy: 1 = wycinek, 2 = przewodnik (ten sam wycinek, obszar poza
-  kształtem przyciemniony, kontur czerwony), prompt mówi, że kontur i przyciemnienie mają NIE trafić do wyniku.
-- Batch OpenAI: JSON `images/edits` z `images` (bez maski: pole maski w JSON niezweryfikowane) = wycinek + przewodnik.
-  Batch Gemini: inline obrazy. OpenRouter: bez batcha (jak wszędzie).
+- OpenAI `images/edits` (multipart): `image[]` = [obraz 1, obraz 2], `mask` = PNG wymiarów obrazu 1, przezroczysty
+  w zaznaczeniu (nieprzezroczysty tylko w pasku dopełnienia do proporcji). Wg dokumentacji maska dotyczy pierwszego
+  obrazu. Wynik i tak przycinamy u siebie. NIEZWERYFIKOWANE prawdziwym kluczem.
+- Gemini (Interactions / generateContent) i OpenRouter `/images`: 2 obrazy w kolejności, potem prompt; bez maski.
+- Batch: OpenAI (JSON `images/edits`, `images` = [obraz 1, obraz 2], bez maski: pole maski w JSON batcha
+  niezweryfikowane), Gemini (inline). Obraz 2 zmniejszany przed wysyłką tak samo jak w Teraz (`prepareRefs`).
+- Koszt: 2 obrazy wejściowe (`estimateInfo(cfg, refs + 2)`), szacunek tokenów OpenAI w oknie: obraz 1 wg rozmiaru
+  wysyłanego + obraz 2 po drabince referencji (`inputEstimate`). Log: `refsCount` liczy obraz 1.
 
-## 5. Domyślny szablon promptu (EN, bo modele; edytowalny)
+## 5. Domyślny szablon promptu (EN, edytowalny w Ustawieniach -> AI Tile)
 
-Zmienne: `{description}` (prompt MG), `{grid}` (px pola siatki w obrazie 1), `{distance}` `{units}`, `{scene}`,
-`{guide}` (zdanie o masce albo o obrazie przewodnika, wstawiane przez moduł).
+Pola: `{description}`, `{pos}` (położenie w obrazie 2), `{guide}` (zdanie o masce albo nic), `{grid}`, `{distance}`,
+`{units}`, `{scene}`. Treść: dwa obrazy tej samej mapy; obraz 1 = dokładny obszar do edycji; obraz 2 = szerszy
+widok tylko jako kontekst, czerwona ramka ({pos}) = gdzie leży obraz 1; edytuj obraz 1: {description}; zachowaj
+kamerę z góry, światło, paletę, styl i skalę (pole siatki ≈ {grid} px = {distance} {units}); krawędzie mają
+przechodzić w otoczenie z obrazu 2; zwróć tylko obraz 1 w tym samym kadrze, bez ramki, siatki i napisów.
 
-## 6. Ryzyka
+## 6. Dane i ustawienia
 
-- Render `canvas.primary` do RenderTexture z własną macierzą: grupa primary w v14 może zależeć od stanu ekranu
-  (okluzja, głębia). Plan B: złożenie 2D z plików (tło sceny + kafelki wg sort/elewacji, z rotacją/alfą/odbiciem).
-  Wybór metody sprawdzany na żywo.
-- Modele nie trzymają dokładnie kadru (przesunięcie/obrót treści, inny aspekt): przycinamy środek, krawędź miękka
-  maskuje drobne przesunięcia. Prawdziwej odpowiedzi modeli NIE sprawdzamy (zero płatnych wywołań).
-- Duże regiony: koszt rośnie z rozmiarem (OpenAI płaci tokenami wyjścia); limit = rozmiar z konfiguracji typu.
-- Tile poza `sceneRect` (w paddingu) jest dozwolony, render daje tam tło płótna.
-- Gracze: nic (przycisk, okna i API tylko MG; Tile widzą normalnie jak każdy kafelek).
+- `tileOptions` (świat, config: false): `feather` (8), `tokens` (false), `mask` (true), `count` (1).
+- Typ `moinens-ai-gen.tile`: domyślnie OpenAI / model domyślny, 2048×2048 (limit), medium, referencje „max” 512,
+  wyjście WebP 4096 q 0.9.
+- Batch: `item.target = {uuid: scene.uuid, field: "tile"}`, `item.meta.tile = {sceneId, bbox, region, ratio, feather,
+  points}`; gałąź w `applyBatchItem`; Tile z flagą `key = <batch>-<item>` (ponowienie nie robi duplikatu).
+
+## 7. Ryzyka
+
+- Render `canvas.primary` do RenderTexture z własną macierzą (stan ekranu, okluzja). Plan B: złożenie z plików
+  (tło + kafelki poniżej `foregroundElevation`). Kafelki „overhead” i (domyślnie) tokeny ukryte na czas renderu.
+- Modele nie trzymają kadru dokładnie: kadr środka + miękka krawędź; prawdziwych odpowiedzi NIE sprawdzamy.
+- Obraz 2 domyślnie 512 px (OpenAI) po zmniejszeniu: tani, ale mało szczegółów; MG może podnieść w typie.
