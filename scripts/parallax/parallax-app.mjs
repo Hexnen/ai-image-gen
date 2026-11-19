@@ -8,6 +8,7 @@ import {
   offsetFor, overscanFor, stepsFor, clampLook, easeToward, idleBlend, swayAt, backingSize, containRect
 } from "./parallax-core.mjs";
 import { ParallaxRenderer } from "./parallax-gl.mjs";
+import { LIGHT } from "./parallax-fx.mjs";
 import { loadPortrait, loadDepth } from "./parallax-load.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
@@ -423,7 +424,7 @@ export class ParallaxApp extends HandlebarsApplicationMixin(ApplicationV2) {
       focus: v.focus, gamma: v.gamma, contrast: v.contrast,
       light: v.on.light ? v.light : 0, rim: v.on.rim ? v.rim : 0, dust: v.on.dust ? v.dust : 0,
       vignette: v.on.vignette ? 1 : 0, holeFill: v.on.holeFill ? 1 : 0,
-      time: t / 1000, relief: 10, view: Math.max(0, VIEWS.indexOf(v.view)),
+      time: t / 1000, relief: LIGHT.relief, view: Math.max(0, VIEWS.indexOf(v.view)),
       rectFor: (p) => containRect(p.w, p.h, aspect),
       stepsFor: (d) => stepsFor(offsetFor({ x: 1, y: 0 }, v.strength, img.w, img.h), d.w, d.h)
     });

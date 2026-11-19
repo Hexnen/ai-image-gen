@@ -10,7 +10,7 @@ import {
   dilateForeground, conditionDepth, MAX_SHIFT, condition, clampLook, offsetFor, overscanFor, stepsFor, normalFromGradient,
   stretchFactor, holeWeight, marchRay, easeToward, idleBlend, swayAt, backingSize, containRect, VIEW_RANGES, viewDefaults,
   normalizeView, viewFromTypeParallax, depthNameFor, inflateZlib, pngInfo, pngRawSize, imageSize, DEPTH_LIMITS, prepareDepth,
-  toHalf, halfToFloat, withRev, boxFactorFor
+  toHalf, halfToFloat, withRev, boxFactorFor, normalSource, NORMAL_SMOOTH
 } from "../scripts/parallax/parallax-core.mjs";
 import { encodeDepthPng16, encodeDepthRG16, encodeGray8, crc32 } from "../scripts/depth/post.mjs";
 
@@ -214,6 +214,32 @@ await test("conditionDepth: normalised R, blurred G, mask B (1 without one), bac
   // flat map: no crash, values kept in 0..1
   const flat = conditionDepth({ D: new Float32Array(w * h).fill(0.5), mask: null, w, h, bits: 8 });
   assert.ok(flat.info.flat);
+});
+
+await test("W6-V normals: guided, display-scale smoothing kills grain, keeps the outline, R / B / A untouched", () => {
+  // a figure (ellipse, near) on a far background, with per-pixel noise of ±0.01 (an 8-bit-ish model map's grain)
+  const W = 470, Hh = 836;
+  let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5);
+  const D = fill(W, Hh, (x, y) => { const e = ((x - 235) / 160) ** 2 + ((y - 400) / 300) ** 2; return (e < 1 ? 0.75 - 0.25 * e : 0.1) + rnd() * 0.02; });
+  const src = { D, mask: null, w: W, h: Hh, bits: 16, format: "png16" };
+  const box = conditionDepth(src, { dilatePx: 2, normalBlurPx: 3 });
+  const gd = conditionDepth(src, { dilatePx: 2, normalBlurPx: 0, normals: "guided" });
+  assert.equal(gd.info.normals, "guided"); assert.equal(box.info.normals, undefined, "default stays box");
+  for (let i = 0; i < W * Hh * 4; i += 4 * 101) { assert.equal(gd.rgba[i], box.rgba[i]); assert.equal(gd.rgba[i + 2], box.rgba[i + 2]); assert.equal(gd.rgba[i + 3], box.rgba[i + 3]); }
+  // grain: the second difference of G inside the figure (curvature noise the light turns into speckle) at the shader's stencil
+  const k = 2;
+  const curv = (c) => { let s2 = 0, n = 0; for (let y = 300; y < 500; y++) for (let x = 180; x < 290; x++) { const g = (xx) => c.rgba[4 * (y * W + xx) + 1]; const v = g(x + k) - 2 * g(x) + g(x - k); s2 += v * v; n++; } return Math.sqrt(s2 / n); };
+  const cb = curv(box), cg = curv(gd);
+  assert.ok(cg < cb / 2, `curvature noise guided ${cg} vs box ${cb}`);
+  // the outline stays a step (guided keeps edges): across the left edge of the ellipse G still climbs most of the way within ~3% of the short side
+  const row = 400, g = (x) => gd.rgba[4 * (row * W + x) + 1];
+  assert.ok(g(75 + 14) - g(75 - 14) > 0.35, `edge kept: ${g(75 - 14)} -> ${g(75 + 14)}`);
+  // resolution independent: the radius / box are fractions of the short side; a 2× map gives the same profile
+  assert.deepEqual({ ...NORMAL_SMOOTH }, { side: 320, radius: 0.017, eps: 6e-3, box: 0.006 });
+  const ramp = fill(64, 64, (x) => x / 63);
+  const nr = normalSource(ramp, 64, 64);
+  near(nr[32 * 64 + 32], ramp[32 * 64 + 32], 0.02, "a plain ramp passes through (no bias)");
+  assert.equal(nr.length, 64 * 64);
 });
 
 await test("condition(): gamma then contrast, monotonic, ends pinned with contrast 1", () => {

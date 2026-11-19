@@ -21,9 +21,10 @@ export const FX_RANGES = Object.freeze({
  * dust off. Tokens: everything off (a token with breathing / dust keeps its filter running at rest).
  */
 export const FX_DEFAULTS = Object.freeze({
-  // W6-Q (owner: "uruchom efekty"): breathing, light and dust ON by default for portraits and tokens; strengths unchanged
+  // W6-Q (owner: "uruchom efekty"): breathing, light and dust ON by default for portraits and tokens
+  // W6-V: light strength = the light's own amount now (no hidden 0.6 / 0.5 base): portraits 1, tokens 0.8
   portrait: Object.freeze({ breath: true, breathStrength: 0.5, light: true, lightStrength: 1, dust: true, dustStrength: 0.4 }),
-  token: Object.freeze({ breath: true, breathStrength: 0.5, light: true, lightStrength: 0.6, dust: true, dustStrength: 0.4 })
+  token: Object.freeze({ breath: true, breathStrength: 0.5, light: true, lightStrength: 0.8, dust: true, dustStrength: 0.4 })
 });
 
 /**
@@ -135,9 +136,43 @@ export const dustScale = (sidePx) => clamp((Number(sidePx) || 0) / 450, 0.3, 1.5
  * - fxDust(du, off, focus, d, t, sc): brightness of the dust in three depth planes at panel uv `du` (the planes shift
  *   with the parallax offset `off`; the two far planes are hidden behind nearer surfaces, `d` = conditioned depth at
  *   the sample); `sc` = cell scale (1 = the window).
- * - fxLightRim(c, dx, dy, fig, look, light, rim, relief): diffuse light from the normal of the blurred-depth gradient
- *   (dx, dy) towards the look, plus a warm rim on edges facing the look; `fig` = figure weight.
+ * - fxLightRim(c, dx, dy, fig, look, light, rim, relief) (W6-V): shading RELATIVE TO A FLAT SURFACE, so the picture
+ *   never gets an overall tint or haze: c × (1 + fig·light·1.5·clamp(N·L − L.z, −0.35, 0.6)); N from the slope of the
+ *   smoothed depth (dx, dy = differences across ±fxNormalK texels, `relief` = height of depth 1 per unit of stencil
+ *   distance), slope limited to 0.8; L = a light 41° above the picture on the pointer's side (fixed elevation, only the
+ *   side follows the look). Darkening fades out on steep slopes (0.7..1.6: outlines, thin strands, no dark lines);
+ *   callers weight `fig` with fxOnSurface (no light on the far side of an outline: no dark halo). Plus a neutral rim
+ *   (gain 1) on slopes facing the pointer. `fig` = figure weight.
  */
+
+/**
+ * W6-V: the light's constants (the GLSL above hardcodes the same numbers; dev/test-parallax-fx.mjs checks them).
+ * relief = height of depth 0..1 as a fraction of the map's SHORT side (the shader turns it into a slope with the stencil
+ * size: reliefFor), normalStep = half-stencil as a fraction of the short side.
+ */
+export const LIGHT = Object.freeze({ relief: 0.13, normalStep: 0.005, slopeMax: 0.8, gain: 1.5, elevationDeg: 41, shadeMin: -0.35, shadeMax: 0.6, rimGain: 1 });
+
+/** Stencil in texels for a depth map w × h (mirror of the GLSL fxNormalK). */
+export const normalK = (w, h) => Math.max(1, LIGHT.normalStep * Math.min(w, h));
+
+/** The `relief` argument of fxLightRim for a map w × h: slope = (G(+k) − G(−k)) × reliefFor. */
+export const reliefFor = (w, h, relief = LIGHT.relief) => (relief * Math.min(w, h)) / (2 * normalK(w, h));
+
+/** JS mirror of fxLightRim (tests and tools): shade factor and the rim added, for slope differences dx, dy. */
+export function lightShade(dx, dy, { fig = 1, look = { x: 1, y: 0 }, light = 1, rim = 1, relief = LIGHT.relief / (2 * LIGHT.normalStep) } = {}) {
+  let sx = -dx * relief, sy = -dy * relief;
+  const sm = Math.hypot(sx, sy);
+  const k = sm > LIGHT.slopeMax ? LIGHT.slopeMax / sm : 1;
+  const nx = sx * k, ny = sy * k, nl = Math.hypot(nx, ny, 1);
+  const N = [nx / nl, ny / nl, 1 / nl];
+  const ll = Math.hypot(look.x, look.y), ld = ll > 1e-5 ? [look.x / ll, look.y / ll] : [0, 0];
+  const e = (LIGHT.elevationDeg * Math.PI) / 180, L = [ld[0] * Math.cos(e), ld[1] * Math.cos(e), Math.sin(e)];
+  const sst = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+  let sh = clamp(N[0] * L[0] + N[1] * L[1] + N[2] * L[2] - L[2], LIGHT.shadeMin, LIGHT.shadeMax);
+  if (sh < 0) sh *= 1 - sst(0.7, 1.6, sm);
+  const facing = sm > 1e-4 ? sst(0, 0.7, (sx / sm) * ld[0] + (sy / sm) * ld[1]) : 0;
+  return { shade: 1 + fig * light * LIGHT.gain * sh, rim: Math.pow(1 - N[2], 1.4) * facing * fig * rim * LIGHT.rimGain, sh };
+}
 export const GLSL_FX = `
 float fxHash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float fxDustPlane(vec2 uv, float sc, float sp, float seed, float t){
@@ -154,13 +189,22 @@ float fxDust(vec2 du, vec2 off, float focus, float d, float t, float sc){
        + fxDustPlane(du + off * (1.25 - focus) * 0.9, 11.0 * sc, 1.9, 9.0, t) * 0.7;
 }
 vec3 fxDustColor(){ return vec3(1.0, 0.72, 0.6); }
+// W6-V: stencil of the light's normals in depth texels: ±0.5% of the map's short side (at least one texel)
+float fxNormalK(vec2 texel){ return max(1.0, 0.005 / max(texel.x, texel.y)); }
+// W6-V: a pixel BELOW the smoothed surface (d < g) is the far side of an outline (background or far hair behind a near
+// edge): the smoothed slope there belongs to the edge, not to this pixel, so the light leaves it alone (no dark halo)
+float fxOnSurface(float d, float g){ return 1.0 - smoothstep(0.02, 0.08, g - d); }
 vec3 fxLightRim(vec3 c, float dx, float dy, float fig, vec2 look, float light, float rim, float relief){
-  vec3 N = normalize(vec3(-dx * relief, -dy * relief, 1.0));
-  vec3 L = normalize(vec3(look.x, look.y, 0.8));
-  float nl = dot(N, L);
-  c *= mix(1.0, 0.8 + 0.36 * max(nl, 0.0), fig * light);
-  float facing = length(N.xy) > 1e-4 ? smoothstep(0.0, 0.7, dot(normalize(N.xy), normalize(look + vec2(1e-4)))) : 0.0;
-  float rr = (pow(1.0 - N.z, 1.4) * facing * 1.4 + pow(clamp(nl, 0.0, 1.0), 6.0) * 0.35) * fig * rim;
-  return c + vec3(1.0, 0.58, 0.44) * rr * 0.6;
+  vec2 sl = vec2(-dx, -dy) * relief;
+  float sm = length(sl);
+  vec3 N = normalize(vec3(sm > 0.8 ? sl * (0.8 / sm) : sl, 1.0));
+  float ll = length(look);
+  vec2 ld = ll > 1e-5 ? look / ll : vec2(0.0);
+  vec3 L = vec3(ld * 0.7547, 0.6561);
+  float sh = clamp(dot(N, L) - L.z, -0.35, 0.6);
+  if (sh < 0.0) sh *= 1.0 - smoothstep(0.7, 1.6, sm);
+  c *= 1.0 + fig * light * 1.5 * sh;
+  float facing = sm > 1e-4 ? smoothstep(0.0, 0.7, dot(sl / sm, ld)) : 0.0;
+  return c + vec3(pow(1.0 - N.z, 1.4) * facing * fig * rim);
 }
 `;

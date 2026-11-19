@@ -31,7 +31,7 @@
 // - GM: "Generate depth" in the sheet's header controls opens the depth window on the portrait (its own estimate +
 //   confirmation before every paid call). The finished map lands in the index and every client's open sheet picks it up.
 import { MODULE_ID } from "../constants.mjs";
-import { FX_DEFAULTS, FX_KEYS, FX_RANGES, FX_DEVICE_OFF_KEY, fxSettingKey, normalizeFx, effectiveFx, breathLook } from "./parallax-fx.mjs";
+import { FX_DEFAULTS, FX_KEYS, FX_RANGES, FX_DEVICE_OFF_KEY, fxSettingKey, normalizeFx, effectiveFx, breathLook, LIGHT } from "./parallax-fx.mjs";
 import { depthIndex, normalizeImagePath } from "../depth/depth-index.mjs";
 import { offsetFor, overscanFor, stepsFor, backingSize, normalizeView } from "./parallax-core.mjs";
 import {
@@ -190,9 +190,12 @@ function lingerHost() {
 
 // ------------------------------------------------------------------ shared picture + map per image (W6-T)
 
+/** W6-V: conditioning of portrait maps: normals from the guided, display-scale smoothed copy (parallax-core normalSource). */
+export const portraitCondition = (view) => ({ dilatePx: view.dilate, normalBlurPx: 0, normals: "guided" });
+
 /** One upload per picture / map / revision / conditioning: sheets of the same image share textures. */
 function assetKey(info, view) {
-  return JSON.stringify([info.image, info.depth, info.rev || 0, info.format ?? null, info.sidecar ? 1 : 0, view.dilate, view.normalBlur]);
+  return JSON.stringify([info.image, info.depth, info.rev || 0, info.format ?? null, info.sidecar ? 1 : 0, view.dilate, "guided"]);
 }
 
 function acquireAsset(info, view) {
@@ -219,7 +222,7 @@ async function buildAsset(a, info, view) {
     const [pr, dr] = await Promise.allSettled([
       L.loadPortrait(info.image, { maxSide: side, colorManaged: true, rev }),
       // W6-T: decode + downscale (≤ DEPTH_SIDE) + condition in the depth worker: no main-thread long task
-      L.loadDepthConditioned({ path: info.depth, format: info.format, sidecar: info.sidecar, rev }, { maxSide: DEPTH_SIDE, condition: { dilatePx: view.dilate, normalBlurPx: view.normalBlur }, half: true })
+      L.loadDepthConditioned({ path: info.depth, format: info.format, sidecar: info.sidecar, rev }, { maxSide: DEPTH_SIDE, condition: portraitCondition(view), half: true })
     ]);
     if (pr.status === "rejected" || dr.status === "rejected") {
       if (pr.status === "fulfilled") pr.value.bitmap?.close?.();
@@ -678,16 +681,17 @@ class PortraitView {
     const v = this.view, tw = a.tex.w, th = a.tex.h, M = this.motion, look = M.look;
     if (!host.timing) { g.timerBegin(); host.timing = true; }
     // W6-T: light / rim / dust amounts are the eased motion values (no switching on / off between frames)
+    // W6-V: the strength setting IS the light amount (no hidden 0.6 / 0.5 base of the window's sliders), rim gain 1
     const u = {
-      light: v.on.light ? effectAmount(v.light * M.light, look) : 0,
-      rim: v.on.rim ? effectAmount(v.rim * M.light, look) : 0,
+      light: v.on.light ? effectAmount(M.light, look) : 0,
+      rim: v.on.rim ? effectAmount(LIGHT.rimGain * M.light, look) : 0,
       dust: M.dust > 0.001 ? M.dust : 0
     };
     // the panel sits at the top-left of the shared canvas (the renderer's panels are y-down from the top)
     g.draw([{ key: a.depKey, image: a.imgKey, x: 0, y: 0, w: b.w, h: b.h }], {
       off: offsetFor(look, v.strength, tw, th), crop: cropForLook(overscanFor(v.strength, v.focus, tw, th), look), look,
       bg: [0, 0, 0], focus: v.focus, gamma: v.gamma, contrast: v.contrast,
-      light: u.light, rim: u.rim, dust: u.dust, vignette: 0, holeFill: v.on.holeFill ? 1 : 0, time: clock / 1000, relief: 10, view: 0, alphaOut: 1,
+      light: u.light, rim: u.rim, dust: u.dust, vignette: 0, holeFill: v.on.holeFill ? 1 : 0, time: clock / 1000, relief: LIGHT.relief, view: 0, alphaOut: 1,
       rectFor: () => p.panel,
       stepsFor: (d) => stepsFor(offsetFor({ x: 1, y: 0 }, v.strength, tw, th), d.w, d.h)
     });

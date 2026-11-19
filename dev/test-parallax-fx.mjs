@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   FX_DEFAULTS, FX_RANGES, FX_KEYS, FX_DEVICE_OFF_KEY, fxSettingKey, cleanFxStrength, normalizeFx, effectiveFx, breathLook, withBreath,
-  phaseOf, pickAnimated, inView, dustScale, BREATH_MAX, IDLE_FRAME_MS, MAX_ANIMATED_TOKENS, GLSL_FX
+  phaseOf, pickAnimated, inView, dustScale, BREATH_MAX, IDLE_FRAME_MS, MAX_ANIMATED_TOKENS, GLSL_FX, LIGHT, lightShade, normalK, reliefFor
 } from "../scripts/parallax/parallax-fx.mjs";
 import { TOKEN_FS } from "../scripts/parallax/token-core.mjs";
 
@@ -23,7 +23,7 @@ await test("W6-Q defaults: breathing, light and dust ON for portraits and tokens
   assert.deepEqual([p.breath, p.light, p.dust], [true, true, true]);
   assert.deepEqual([t.breath, t.light, t.dust], [true, true, true]);
   assert.deepEqual([p.breathStrength, p.lightStrength, p.dustStrength], [0.5, 1, 0.4], "portrait strengths as in W6-P");
-  assert.deepEqual([t.breathStrength, t.lightStrength, t.dustStrength], [0.5, 0.6, 0.4], "token strengths as in W6-P");
+  assert.deepEqual([t.breathStrength, t.lightStrength, t.dustStrength], [0.5, 0.8, 0.4], "token strengths (W6-V: light 0.8 = the light's own amount)");
   assert.equal(effectiveFx(t).animates, true);
   assert.equal(effectiveFx(p).animates, true);
   // reduced motion still forces breathing + dust off (light stays); the device opt-out turns all three off
@@ -195,7 +195,60 @@ await test("GLSL parity: GLSL_FX = the window's pre-W6-P dust and light/rim math
   assert.match(GLSL_FX, /vec3 fxDustColor\(\)\{ return vec3\(1\.0, 0\.72, 0\.6\); \}/);
   const light = OLD.light.replace(/\buRelief\b/g, "relief").replace(/\buLook\b/g, "look").replace(/\buLight\b/g, "light")
     .replace(/\buRim\b/g, "rim").replace("float rim = (", "float rr = (").replace("c += vec3(1.0, 0.58, 0.44) * rim * 0.6;", "return c + vec3(1.0, 0.58, 0.44) * rr * 0.6;");
-  assert.ok(squash(GLSL_FX).includes(squash(light)), "light / rim");
+  // W6-V: the light / rim is NOT the pre-W6-P maths any more (see the W6-V test below): the old warm tint is gone
+  assert.ok(!squash(GLSL_FX).includes(squash(light)), "old light / rim replaced");
+});
+
+await test("W6-V light: relative to a flat surface, slope-limited, 41° from the pointer's side, neutral rim, no warm tint", () => {
+  const f = squash(GLSL_FX.slice(GLSL_FX.indexOf("float fxNormalK(")));
+  assert.doesNotMatch(GLSL_FX, /0\.58, 0\.44|pow\(clamp\(nl, 0\.0, 1\.0\), 6\.0\)/, "no warm rim colour, no pow(nl, 6) term");
+  assert.ok(f.includes("float fxNormalK(vec2 texel){ return max(1.0, 0.005 / max(texel.x, texel.y)); }"), "stencil ±0.5% of the short side");
+  assert.ok(f.includes("vec3 N = normalize(vec3(sm > 0.8 ? sl * (0.8 / sm) : sl, 1.0));"), "slope limit 0.8");
+  const e = (LIGHT.elevationDeg * Math.PI) / 180;
+  assert.ok(f.includes(`vec3 L = vec3(ld * ${Math.cos(e).toFixed(4)}, ${Math.sin(e).toFixed(4)});`), "fixed 41° elevation on the pointer's side");
+  assert.ok(f.includes("float sh = clamp(dot(N, L) - L.z, -0.35, 0.6);"), "relative to a flat surface, clamped");
+  assert.ok(f.includes("c *= 1.0 + fig * light * 1.5 * sh;"), "gain 1.5, figure only");
+  assert.ok(f.includes("if (sh < 0.0) sh *= 1.0 - smoothstep(0.7, 1.6, sm);"), "no dark lines along steep outlines (darkening fades on steep slopes)");
+  assert.ok(f.includes("float fxOnSurface(float d, float g){ return 1.0 - smoothstep(0.02, 0.08, g - d); }"), "far side of an outline: no light (no dark halo)");
+  assert.match(TOKEN_FS, /dep2\.b \* smoothstep\(0\.1, 0\.3, d2\) \* fxOnSurface\(d2, cond\(dep2\.g\)\)/, "token: same far-side weight");
+  assert.ok(f.includes("return c + vec3(pow(1.0 - N.z, 1.4) * facing * fig * rim);"), "neutral rim, gain 1");
+  assert.deepEqual([LIGHT.slopeMax, LIGHT.gain, LIGHT.shadeMin, LIGHT.shadeMax, LIGHT.rimGain, LIGHT.relief, LIGHT.normalStep], [0.8, 1.5, -0.35, 0.6, 1, 0.13, 0.005]);
+  // JS mirror: flat = exactly the picture (no overall tint / haze) whatever the look and strength
+  for (const look of [{ x: 1, y: 0 }, { x: -0.3, y: 0.7 }, { x: 0, y: 0 }]) {
+    const r = lightShade(0, 0, { look, light: 1.5, rim: 1 });
+    assert.equal(r.shade, 1); assert.equal(r.rim, 0);
+  }
+  // a slope facing the light brightens, facing away darkens; mirror-symmetric in the pointer's side
+  const toR = lightShade(-0.03, 0, { look: { x: 1, y: 0 } }), awayR = lightShade(0.03, 0, { look: { x: 1, y: 0 } });
+  assert.ok(toR.shade > 1.2 && awayR.shade < 0.8, `${toR.shade} / ${awayR.shade}`);
+  const toL = lightShade(0.03, 0, { look: { x: -1, y: 0 } });
+  assert.ok(Math.abs(toL.shade - toR.shade) < 1e-9, "mirror");
+  // limits: shade within 1 + 1.5·[-0.35, 0.6] at strength 1; the slope limit caps the steepest walls
+  for (const d of [0.01, 0.1, 1, 10]) for (const s of [1, -1]) {
+    const r = lightShade(d * s, d * s * 0.3, { look: { x: 0.6, y: 0.8 } });
+    assert.ok(r.shade >= 1 - 1.5 * 0.35 - 1e-9 && r.shade <= 1 + 1.5 * 0.6 + 1e-9);
+  }
+  assert.ok(Math.abs(lightShade(-1, 0).shade - lightShade(-10, 0).shade) < 1e-9, "slope limit");
+  // the stencil / relief pair is resolution-independent: slope = 13 × difference (stencil above one texel)
+  assert.equal(normalK(470, 836), 2.35); assert.equal(normalK(100, 100), 1);
+  assert.ok(Math.abs(reliefFor(470, 836) - 13) < 1e-9 && Math.abs(reliefFor(512, 512) - 13) < 1e-9);
+  assert.ok(Math.abs(reliefFor(100, 100) - 6.5) < 1e-9, "tiny maps: one texel, relief per texel");
+  // both shaders turn uRelief (per short side) into the stencil's slope the same way
+  const gl = read("scripts/parallax/parallax-gl.mjs");
+  assert.match(gl, /float nk = fxNormalK\(e\);\s*vec2 e2 = e \* nk;/);
+  assert.match(TOKEN_FS, /float nk = fxNormalK\(uDTexel\);\s*vec2 e2 = uDTexel \* nk;/);
+  assert.match(TOKEN_FS, /uRelief \/ \(2\.0 \* nk \* max\(uDTexel\.x, uDTexel\.y\)\)\);/);
+  // portraits / tokens: strength = the light amount (no 0.6 / 0.5 base), rim gain 1, relief per short side, guided normals
+  const portrait = read("scripts/parallax/portrait.mjs"), token = read("scripts/parallax/token-parallax.mjs"), tc = read("scripts/parallax/token-core.mjs");
+  assert.match(portrait, /light: v\.on\.light \? effectAmount\(M\.light, look\) : 0,/);
+  assert.match(portrait, /rim: v\.on\.rim \? effectAmount\(LIGHT\.rimGain \* M\.light, look\) : 0,/);
+  assert.match(portrait, /relief: LIGHT\.relief, view: 0/);
+  assert.match(portrait, /condition: portraitCondition\(view\)/);
+  assert.match(portrait, /normalBlurPx: 0, normals: "guided"/);
+  assert.match(token, /const TOKEN_LIGHT = 1, TOKEN_RIM = LIGHT\.rimGain, TOKEN_RELIEF = LIGHT\.relief;/);
+  assert.match(token, /condition: TOKEN_CONDITION, half: true/);
+  assert.match(tc, /TOKEN_CONDITION = Object\.freeze\(\{ dilatePx: 2, normalBlurPx: 0, normals: "guided" \}\)/);
+  assert.match(read("scripts/parallax/parallax-app.mjs"), /relief: LIGHT\.relief,/);
 });
 
 await test("GLSL: one shared copy, common subset of GLSL ES 1.0 and 3.0", () => {
@@ -205,7 +258,7 @@ await test("GLSL: one shared copy, common subset of GLSL ES 1.0 and 3.0", () => 
   assert.equal((gl.match(/\$\{GLSL_FX\}/g) ?? []).length, 1, "window shader includes it once");
   assert.doesNotMatch(gl, /float dustPlane\(|float hash\(|vec3 L = normalize/, "no second copy left in the window shader");
   assert.match(gl, /if \(uDust > 0\.001\) c \+= fxDustColor\(\) \* fxDust\(q, uOff, uFocus, d, uTime, 1\.0\) \* uDust;/, "window: same inputs, scale 1");
-  assert.match(gl, /c = fxLightRim\(c, dx, dy, fig, uLook, uLight, uRim, uRelief\);/);
+  assert.match(gl, /c = fxLightRim\(c, dx, dy, fig \* fxOnSurface\(d, cond\(dep\.g\)\), uLook, uLight, uRim, uRelief \/ \(2\.0 \* nk \* max\(e\.x, e\.y\)\)\);/);
   assert.ok(TOKEN_FS.includes(GLSL_FX), "token filter includes the same text");
   assert.ok(TOKEN_FS.indexOf("precision highp float;") < TOKEN_FS.indexOf("float fxHash("), "after the precision statement");
   assert.doesNotMatch(TOKEN_FS.replace(GLSL_FX, ""), /fxHash\(vec2|float fxDustPlane\(vec2/, "no forked copy in the token shader");

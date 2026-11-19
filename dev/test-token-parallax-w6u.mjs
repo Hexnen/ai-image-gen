@@ -234,7 +234,8 @@ await test("perf a: prepareDepthTexture (worker / inline) = the old inline pipel
   let s = src;
   const f = depthFactor(s.w, s.h, 512);
   if (f >= 2) { const d = downscaleMap(s.D, s.w, s.h, f); s = { ...s, D: d.M, mask: downscaleMap(s.mask, s.w, s.h, f).M, w: d.w, h: d.h }; }
-  const c = conditionDepth(s, { dilatePx: 2, normalBlurPx: 2 });
+  // W6-V: the conditioning itself changed (normals from the guided, display-scale copy); the pipeline is still the same
+  const c = conditionDepth(s, { dilatePx: 2, normalBlurPx: 0, normals: "guided" });
   const oldHalf = toHalfArrayOld(c.rgba);
   const r = prepareDepthTexture(src, 512);
   assert.equal(r.w, c.w); assert.equal(r.h, c.h);

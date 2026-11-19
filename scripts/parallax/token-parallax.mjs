@@ -39,12 +39,12 @@ import { createFrameGuard, effectAmount } from "./portrait-core.mjs";
 import { registerFxSettings, fxDeviceOff } from "./portrait.mjs";
 import {
   FX_KEYS, fxSettingKey, normalizeFx, effectiveFx, breathLook, withBreath, phaseOf, pickAnimated, inView, dustScale,
-  MAX_ANIMATED_TOKENS
+  MAX_ANIMATED_TOKENS, LIGHT
 } from "./parallax-fx.mjs";
 import {
   tokenWanted, unsupportedReason, pointerLook, cameraLook, uvOffset, cleanStrength, lookIsRest, gmOnList, gmOnListAfter,
   stepLook, stepAmp, scaleLook, needsStep, tokenOnScreen, depthKey, guardVerdict, probeFrame, createDepthCache,
-  prepareDepthTexture, TOKEN_MODES, DRIVES, STRENGTH_RANGE, STRENGTH_DEFAULT, TOKEN_VS, TOKEN_FS
+  prepareDepthTexture, TOKEN_CONDITION, TOKEN_MODES, DRIVES, STRENGTH_RANGE, STRENGTH_DEFAULT, TOKEN_VS, TOKEN_FS
 } from "./token-core.mjs";
 
 export const SETTING = "tokenParallax";
@@ -56,8 +56,9 @@ export const FLAG_GM_ON = "tokenParallaxGmOn";
 const DEPTH_MAX_SIDE = 512;
 const RELEASE_MS = 10_000;
 const FOCUS = 0.45;
-/** W6-P: base light / rim of the token filter (times the viewer's light strength; they fade in with the tilt). */
-const TOKEN_LIGHT = 0.6, TOKEN_RIM = 0.5, TOKEN_RELIEF = 10;
+/** W6-P: base light / rim of the token filter (times the viewer's light strength; they fade in with the tilt).
+ *  W6-V: base 1 (the strength setting is the light's own amount, default 0.8), rim gain LIGHT.rimGain, relief per short side. */
+const TOKEN_LIGHT = 1, TOKEN_RIM = LIGHT.rimGain, TOKEN_RELIEF = LIGHT.relief;
 const ZERO = Object.freeze({ x: 0, y: 0 });
 const PICK_MS = 250;
 
@@ -211,7 +212,7 @@ async function buildDepthTexture(info) {
   let c;
   if (typeof L.loadDepthConditioned === "function") {
     // W6-T loader: fetch + decode + downscale + condition + binary16 all in its worker
-    const r = await L.loadDepthConditioned(spec, { maxSide: DEPTH_MAX_SIDE, condition: { dilatePx: 2, normalBlurPx: 2 }, half: true });
+    const r = await L.loadDepthConditioned(spec, { maxSide: DEPTH_MAX_SIDE, condition: TOKEN_CONDITION, half: true });
     c = r?.cond?.half ? { half: r.cond.half, w: r.cond.w, h: r.cond.h } : await prepareOffThread(await L.loadDepth(spec));
     if (r?.cond?.half) counters.workerMaps++;
   } else {

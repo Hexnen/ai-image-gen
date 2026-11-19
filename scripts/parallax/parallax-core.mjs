@@ -404,11 +404,39 @@ export function dilateForeground(D, w, h, r, threshold = 0.06) {
 }
 
 /**
+ * W6-V: smoothing of the light's normals, relative to the map's SHORT side so it looks the same at any resolution.
+ * radius / box = fractions of the short side, eps = guided-filter regulariser (variance below it is smoothed away, the
+ * silhouette and big steps above it are kept), side = the short side the normals are computed at (about the displayed
+ * size: finer detail would only turn into grain on screen).
+ */
+export const NORMAL_SMOOTH = Object.freeze({ side: 320, radius: 0.017, eps: 6e-3, box: 0.006 });
+
+/**
+ * W6-V: the G channel for the light: the depth box-downscaled to about `side` px on its short side, a self-guided filter
+ * (radius ≈ 1.7% of the short side, eps 6e-3) that removes the map's fine bumps and noise but keeps the figure's
+ * outline, a small box (≈ 0.6%) that rounds what is left, then bilinear back to the map size. Done once per map (in the
+ * worker); the shader only reads it. Options (conditionDepth): normalSide, normalRadius, normalEps, normalBox.
+ */
+export function normalSource(d, w, h, o = {}) {
+  const side = o.normalSide ?? NORMAL_SMOOTH.side;
+  const f = Math.max(1, Math.floor(Math.min(w, h) / Math.max(16, side)));
+  const s = downscaleMap(d, w, h, f);
+  const ss = Math.min(s.w, s.h);
+  const r = Math.max(1, Math.round((o.normalRadius ?? NORMAL_SMOOTH.radius) * ss));
+  const rb = Math.max(1, Math.round((o.normalBox ?? NORMAL_SMOOTH.box) * ss));
+  let g = guidedFilter(s.M, s.M, s.w, s.h, r, o.normalEps ?? NORMAL_SMOOTH.eps);
+  g = boxMean(g, s.w, s.h, rb);
+  for (let i = 0; i < g.length; i++) g[i] = clamp01(g[i]);
+  return upsampleNearestBilinear(g, s.w, s.h, w, h);
+}
+
+/**
  * Prepare a raw depth map for the shader. @returns {{rgba:Float32Array, w, h, info:object}}  4 floats per pixel:
  *   R = depth (normalised, de-quantised, dilated), G = blurred depth for normals, B = figure mask (1 without a mask),
  *   A = background depth (local minimum, radius `bgRadius`): where the hole fill looks for the far surface.
  * Options: normalize (robust percentiles, default on), lowPct/highPct, dequantize ("auto" = only 8-bit maps: a light
- * edge-preserving filter that removes the 1/255 terraces), dilatePx, normalBlurPx, bgRadius.
+ * edge-preserving filter that removes the 1/255 terraces), dilatePx, normalBlurPx, bgRadius; W6-V: normals ("box" =
+ * default, G = normalBlurPx box blur; "guided" = normalSource, for the light of portraits and tokens) + its options.
  */
 export function conditionDepth(src, o = {}) {
   const { w, h } = src;
@@ -425,7 +453,10 @@ export function conditionDepth(src, o = {}) {
   if (opt.dilatePx > 0) d = dilateForeground(d, w, h, opt.dilatePx, opt.dilateThreshold);
   for (let i = 0; i < d.length; i++) d[i] = clamp01(d[i]);
   const nb = Math.max(0, Math.round(opt.normalBlurPx));
-  const g = nb > 0 ? boxMean(boxMean(d, w, h, nb), w, h, nb) : d;
+  // W6-V: "guided" = the light's normals from an edge-preserving, display-scale smoothed copy (normalSource); "box" =
+  // the old two box blurs of `normalBlurPx` at full resolution (the parallax window keeps its slider on this one)
+  const g = opt.normals === "guided" ? normalSource(d, w, h, opt) : nb > 0 ? boxMean(boxMean(d, w, h, nb), w, h, nb) : d;
+  if (opt.normals === "guided") info.normals = "guided";
   const bgR = opt.bgRadius ?? Math.max(4, Math.round(Math.max(w, h) / 40));
   // min filter on a 1/4 grid is enough (the hole fill only needs the level of the far surface), then bilinear back up
   const f = Math.max(1, Math.min(4, Math.floor(Math.min(w, h) / 64)));

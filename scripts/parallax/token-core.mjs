@@ -290,9 +290,13 @@ export function toHalfArray(src) {
   return out;
 }
 
+/** W6-V: conditioning of token maps (worker loader and the inline / own-worker fallback): normals from the guided,
+ *  display-scale smoothed copy (parallax-core normalSource), no extra box blur. */
+export const TOKEN_CONDITION = Object.freeze({ dilatePx: 2, normalBlurPx: 0, normals: "guided" });
+
 /**
  * W6-U: the CPU part of a depth texture, off the main thread (token-depth-worker.mjs) or inline as a fallback:
- * box-downscale to ≤ `maxSide`, condition (normals from a lightly blurred copy), pack as binary16.
+ * box-downscale to ≤ `maxSide`, condition (W6-V: normals from the guided smoothed copy), pack as binary16.
  * `src` = {D, mask, w, h, bits, format}. @returns {{half: Uint16Array, w: number, h: number}}
  */
 export function prepareDepthTexture(src, maxSide = 512) {
@@ -301,7 +305,7 @@ export function prepareDepthTexture(src, maxSide = 512) {
     const d = downscaleMap(src.D, src.w, src.h, f);
     src = { ...src, D: d.M, mask: src.mask ? downscaleMap(src.mask, src.w, src.h, f).M : null, w: d.w, h: d.h };
   }
-  const c = conditionDepth(src, { dilatePx: 2, normalBlurPx: 2 });
+  const c = conditionDepth(src, TOKEN_CONDITION);
   return { half: toHalfArray(c.rgba), w: c.w, h: c.h };
 }
 
@@ -359,7 +363,7 @@ uniform float uSteps;
 uniform vec2 uLook;           // W6-P: look in token-texture space (light direction), unit disc
 uniform float uLight;         // W6-P: light / rim / dust amounts (0 = off: the pre-W6-P output, untouched)
 uniform float uRim;
-uniform float uRelief;
+uniform float uRelief;       // W6-V: height of depth 1 as a fraction of the short side (parallax-fx LIGHT.relief)
 uniform float uDust;
 uniform float uDustScale;
 uniform float uTime;
@@ -430,10 +434,11 @@ void main(void){
     vec4 dep2 = texture2D(uDepth, s);
     float d2 = cond(dep2.r);
     if (uLight > 0.001 || uRim > 0.001) {
-      vec2 e2 = uDTexel * 2.0;
+      float nk = fxNormalK(uDTexel);
+      vec2 e2 = uDTexel * nk;
       float dx = G(s + vec2(e2.x, 0.0)) - G(s - vec2(e2.x, 0.0));
       float dy = G(s + vec2(0.0, e2.y)) - G(s - vec2(0.0, e2.y));
-      rgb = fxLightRim(rgb, dx, dy, dep2.b * smoothstep(0.1, 0.3, d2), uLook, uLight, uRim, uRelief);
+      rgb = fxLightRim(rgb, dx, dy, dep2.b * smoothstep(0.1, 0.3, d2) * fxOnSurface(d2, cond(dep2.g)), uLook, uLight, uRim, uRelief / (2.0 * nk * max(uDTexel.x, uDTexel.y)));
     }
     if (uDust > 0.001) rgb += fxDustColor() * fxDust(uv, uOff, uFocus, d2, uTime, uDustScale) * uDust;
     rgb = clamp(rgb, 0.0, 1.0);

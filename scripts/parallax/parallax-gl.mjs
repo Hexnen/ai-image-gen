@@ -11,7 +11,8 @@
 //   walk down the depth gradient to the background level, uDep.a = local minimum) and blended in: no rubber smear.
 // - overscan instead of a frame: the image is zoomed by the largest possible shift, so samples never leave it.
 // - depth conditioning: gamma + contrast as uniforms (instant sliders); de-quantise, dilate and normal blur at load.
-// - light, rim, dust, vignette each with its own amount (0 = off); normals from a blurred copy (uDep.g).
+// - light, rim, dust, vignette each with its own amount (0 = off); normals from a smoothed copy (uDep.g; W6-V: guided
+//   filter at display scale for portraits / tokens), uRelief = height of depth 1 as a fraction of the short side.
 // - texture LOD from the undisplaced uv (textureGrad): no mip seams along depth edges.
 // `cond`, the stretch factor and the ray search mirror parallax-core.mjs (condition, stretchFactor, marchRay), which the
 // Node tests cover. W6-P: the dust and light/rim code lives in parallax-fx.mjs (GLSL_FX), shared with the token filter.
@@ -94,13 +95,14 @@ void main(){
     c = mix(c, bgc, hole);
   }
 
-  // --- light + rim from normals of the blurred depth ---
+  // --- light + rim from normals of the smoothed depth (W6-V: stencil ±0.5% of the short side, relief per short side) ---
   float fig = dep.b * smoothstep(0.1, 0.3, d);
   if (uLight > 0.001 || uRim > 0.001) {
-    vec2 e2 = e * 2.0;
+    float nk = fxNormalK(e);
+    vec2 e2 = e * nk;
     float dx = G(s + vec2(e2.x, 0.0)) - G(s - vec2(e2.x, 0.0));
     float dy = G(s + vec2(0.0, e2.y)) - G(s - vec2(0.0, e2.y));
-    c = fxLightRim(c, dx, dy, fig, uLook, uLight, uRim, uRelief);   // W6-P: shared with the token filter (parallax-fx.mjs)
+    c = fxLightRim(c, dx, dy, fig * fxOnSurface(d, cond(dep.g)), uLook, uLight, uRim, uRelief / (2.0 * nk * max(e.x, e.y)));   // W6-P: shared with the token filter
   }
 
   // --- dust in three depth planes, hidden behind nearer surfaces (W6-P: shared code, scale 1 = as before) ---
