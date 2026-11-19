@@ -1470,3 +1470,69 @@ całego obrazu o kilka px dałoby wiele zmian przy krawędziach obiektów; wtedy
 najwyżej do wysłanego obszaru). Gemini / OpenRouter. Batch (bez powiększania z założenia). Okno po polsku (świat po
 angielsku) i wygląd checkboxa / karty na zrzucie (sprawdzone tekstem z DOM). Migracja zapisanego szablonu W7-B przy
 starcie: po starcie szablon na lane 8 był nowym domyślnym, ale nie sprawdziłem, co było zapisane przed startem.
+
+## W10: AI Tile zgodny z wyglądem sceny (ciemność, strefy, deszcz) — kafelek AI pod nakładkami mapy
+
+**Powód (właściciel, The Warehouse: ciemność 0,9, czerwone strefy, deszcz, ogień).** Model dostaje czystą mapę, a
+wklejony kafelek był jaśniejszym / bardziej nasyconym prostokątem. Doprecyzowanie: kafelek ma wyglądać jak mapa, a
+efekty sceny mają się rysować NA nim tak jak na mapie. Wersja bez zmian, nic nie wypchnięte.
+
+**Przyczyna (zmierzona na lane 8).** Ciemność/światła Foundry v14 działają na kafelek identycznie jak na tło: ta sama
+siatka `PrimarySpriteMesh` + `PrimaryBaseSamplerShader`, oświetlenie jako filtr całej grupy `canvas.primary`
+(`PrimaryCanvasGroupAmbienceFilter`). Kafelek-kopia czystej mapy przy ukrytych wszystkich dzieciach `canvas.primary`
+innych niż siatki: średnia różnica w prostokącie 1,2 / 255 (szum webp). Jaśniejszy prostokąt robiły nakładki moinen-maps
+rysowane na mapie POD kafelkami (sortLayer kafelków 500 z `Tile#_refreshState`): pojedynczo (różnica w prostokącie
+z / bez kafelka) 258 zabarwienie stref 18,5, 252 mokra ziemia deszczu (mnoży barwy mapy, k < 1) 11,6, 247 zniszczenia
+10,4, 253 rozbryzgi 1,6; reszta (245, 249, 250, 255, `hr`) < 0,5. Razem przy sortLayer 500: 20,9.
+
+**Zmiana.** Nowy `scripts/tile/tile-layer.mjs`, instalowany w `init` obok fade (`module.mjs`): hook `refreshTile`
+(po `refreshState`, który zawsze wpisuje 500) ustawia na KAŻDYM kliencie siatce kafelka z flagą `aiTile` sortLayer
+`AI_TILE_SORT_LAYER` = 247,5: nad tłem (0), wodą (240), drogami (245) i warstwą zniszczeń (247), pod 248-258 (odbicia,
+pył, dzielnice, poświaty świateł, mokra ziemia, rozbryzgi, auta/zmarszczki, ogień przyziemny 256, strefy 258),
+rysunkami 600, tokenami 700, 705, ogniem/dymem 750/800, parą 801, presetami, pogodą 990-1000. Silnik i moinen-maps
+same nakładają na kafelek ciemność, światła, strefy, deszcz, także po ich zmianie (nic nie jest pieczone). Dokument
+kafelka nie jest zmieniany (elewacja 0, sort jak dotąd). Na scenie bez warstw między 0 a 500 kolejność względem
+wszystkiego poza innymi kafelkami jest ta sama co przy 500.
+- Dlaczego nad 247, a nie pod: warstwa zniszczeń zawiera „łaty czystej mapy” (obiekt na starszym uszkodzeniu, pociągnięcia
+  gumki: oryginalne tło nad wszystkim pod nimi); nad kafelkiem odsłoniłyby starą mapę na edycji. Gruz w prostokącie
+  kafelka jest więc zakryty jak przed W10 (zgodnie z W8: model dostaje mapę bez gruzu).
+- Wyjątek: ZWYKŁY kafelek na tej samej elewacji, nachodzący (pole > 0) i pod kafelkiem AI (sort <=) -> 500 jak dotąd
+  (kafelek AI zostaje nad nim; wtedy nakładki są zakryte jak przed W10). Przeliczane po create/update/delete
+  dowolnego kafelka sceny (`refreshState` kafelków AI). Inne kafelki AI też schodzą na 247,5 i zachowują swój `sort`.
+- Czyste `aiTileSortLayer`, `rectsOverlap`, `isAiTileDoc`, stałe `AI_TILE_SORT_LAYER`, `TILES_SORT_LAYER`.
+- Przechwycenie do modelu (`renderRegion`) idzie po posortowanych dzieciach `canvas.primary`, więc kafelek AI na 247,5
+  trafia na obraz w tej samej kolejności co na ekranie (po 240/245, przed zwykłymi kafelkami).
+
+**Testy.** Nowy `dev/test-ai-tile-layer.mjs` (5: położenie względem wszystkich znanych warstw, w tym
+`CAPTURE_MAP_LAYERS`; tylko kafelki AI; wyjątek zwykłego kafelka pod spodem: sort równy/wyższy, inna elewacja, bez
+nakładania, stykanie krawędzią, inne kafelki AI, liczby jako tekst; `rectsOverlap`; okablowanie hooków i brak zapisu
+dokumentu). Wszystkie 38 `dev/test-*.mjs` exit 0.
+
+**Na żywo (lane 8, `http://127.0.0.1:30008`, MG „claude”, własna karta panelu (panel ukryty, ticker pompowany ręcznie,
+pogoda „w powietrzu” 990+ ukryta tylko na czas zrzutów, żeby smugi deszczu nie psuły porównań), zero płatnych wywołań,
+bez kluczy).** moinens-ai-gen włączony w świecie lane (był wyłączony), na końcu `lane8.ps1 restore`.
+- The Warehouse (ciemność 0,9, strefa 7 „ogień 6” na czerwono, deszcz): kafelek-kopia czystej mapy 900×600 przy
+  1500,2250 (na granicy strefy): różnica z / bez kafelka w prostokącie 20,9 przy 500 -> 3,3 przy 247,5 -> 0,19 przy
+  247,5 z ukrytą 247 (czyli cała reszta to zakryty gruz).
+- Cały przepływ: `prepareJob` -> test seam `tileTestHooks.execute` (syntetyczny „wynik modelu” 1536×1019: czysta mapa
+  otoczenia, w zaznaczeniu chłodny nalot soft-light + namalowana skrzynia) -> `generateTileVariants` -> `acceptVariant`
+  (ukryty, fade) -> odkrycie. Siatka po odświeżeniu: sortLayer 247,5, między `247` a `248` w `canvas.primary`.
+  Skok jasności w poprzek krawędzi (2-3 px po obu stronach, środki boków) stary/nowy: lewa 8,3/4,0, prawa 20,8/6,6,
+  góra 7,7/3,1, dół 20,6/7,8 (dla porównania zwykły skok 5 px wewnątrz mapy 9,6/5,2). Zrzuty obejrzane: przy 500
+  niebieskawy, jasny prostokąt bez czerwieni strefy i bez mokrej ziemi; przy 247,5 czerwień strefy, przyciemnienie
+  deszczu i zmarszczki kropel przechodzą przez kafelek tak samo jak obok, skrzynia widoczna, ale w świetle sceny.
+- Zmiana ciemności 0,9 -> 0,2 (bez animacji) przy wklejonym kafelku: nadal 247,5, kafelek jaśnieje razem z mapą;
+  zrzut obejrzany (przy 500 znów jasny niebieski prostokąt). Ciemność wróciła do 0,9.
+- Jasna scena bez stref i pogody (ZZ-t6-plain, ciemność 0): kafelek-kopia 500×400 przez cały przepływ: różnica z / bez
+  kafelka 1,8 (resampling), zrzuty obejrzane: prostokąta nie widać, brak regresji.
+- Wyjątek: zwykły kafelek pod spodem (sort -1, nachodzi) -> 500 i kafelek AI nad nim w `canvas.primary`; sort zwykłego
+  5 -> 247,5; odsunięty -> 247,5; z powrotem -> 500; usunięty -> 247,5.
+- Po teście: kafelki testowe i pliki (`_tests/blend`, dwa pliki w `tiles/`) skasowane, karta zamknięta, `lane8.ps1
+  restore`, slot oddany; karty `seed` (30000) nie dotykałem.
+
+**Pozostaje / NIESPRAWDZONE.** Szew gruzu: w prostokącie kafelka nie ma pikselowego gruzu/spalenizny warstwy 247, więc
+na scenie ze zniszczeniami widać, gdzie gruz się urywa (słabo, ale widać; to zachowanie z W8, bez zmiany). Kafelek nad
+zwykłym kafelkiem (wyjątek) nadal zakrywa nakładki. Ogień/dym moinen-maps (256/750/800) nad kafelkiem: na lane 8 nie
+było ognia na scenie, sprawdzone tylko kolejnością sortLayer. Widok gracza (hook jest u wszystkich, bez warunku MG) nie
+oglądany na żywo. Panel ukryty: płynność w pierwszoplanowej karcie nie oglądana. Prawdziwy wynik modelu (płatny) nie
+robiony: jeśli model sam zmieni jasność/kolor w środku, tego W10 nie wyrówna.

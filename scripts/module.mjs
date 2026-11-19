@@ -22,6 +22,7 @@ import { syncOptimizerProfile } from "./optimize.mjs";
 import { generateImage, estimateGeneration } from "./api.mjs";
 import { TILE_TYPE_KEY, DEFAULT_TILE_PROMPT, isLegacyTilePrompt } from "./tile/tile-core.mjs";
 import { installTileFade } from "./tile/tile-fade.mjs";
+import { installTileLayer } from "./tile/tile-layer.mjs";
 
 /**
  * The old module (id "ai-image-gen") is enabled at the same time: this one stays dormant (no API, no poller, no buttons,
@@ -54,6 +55,7 @@ Hooks.once("init", () => {
   registerSheetButtons();
   registerContextMenus();
   installTileFade();   // W8: AI Tile fade-in on every client (create by this GM / reveal to players)
+  installTileLayer();  // W10: AI Tile mesh under the scene's map overlays (darkness/zones/wet ground apply to it)
 });
 
 Hooks.once("ready", async () => {
