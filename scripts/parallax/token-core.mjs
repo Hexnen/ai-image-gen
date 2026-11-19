@@ -5,7 +5,7 @@
 // search, parallax-gl.mjs FS, to GLSL ES 1.0 for Foundry's PIXI 7 context). No PIXI, no Foundry: tested in Node
 // (dev/test-token-parallax.mjs). W6-P: the optional light / rim / dust use the window's own GLSL (parallax-fx.mjs
 // GLSL_FX, included verbatim), gated by their amounts (all 0 = the W6-O output) and applied before the input alpha.
-import { clampLook, MAX_SHIFT } from "./parallax-core.mjs";
+import { clampLook, MAX_SHIFT, conditionDepth, downscaleMap } from "./parallax-core.mjs";
 import { GLSL_FX } from "./parallax-fx.mjs";
 
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -18,14 +18,154 @@ export const STRENGTH_RANGE = Object.freeze([0.1, 1, 0.05]);
 export const STRENGTH_DEFAULT = 0.5;
 
 /**
- * Does this token want the effect? World switch first (off = nothing anywhere), then the token's own override
- * ("on" / "off"), then the scene switch (default off).
+ * Does this token want the effect? World switch first (off = nothing anywhere), then the token's own "off" (honoured
+ * from anyone: an owner may always switch his own token off), then the scene switch (default off). W6-U: the token's
+ * "on" beats an OFF scene only when a GM confirmed it (`gmOn`: the token id is in the scene's GM-only list, see
+ * gmOnList; scenes can only be updated by a GM, so an owner cannot forge it). A plain "on" without that confirmation
+ * (an owner's setFlag, or a flag set before W6-U) works like "like the scene".
  */
-export function tokenWanted({ world = true, scene = false, token = "" } = {}) {
+export function tokenWanted({ world = true, scene = false, token = "", gmOn = false } = {}) {
   if (!world) return false;
-  if (token === "on") return true;
   if (token === "off") return false;
+  if (token === "on" && gmOn) return true;
   return !!scene;
+}
+
+/** W6-U: the scene flag holding the ids of tokens a GM switched "on" (tolerant reader: junk = empty). */
+export function gmOnList(raw) {
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.filter((x) => typeof x === "string" && x.length > 0 && x.length <= 64))];
+}
+
+/** W6-U: the list after a GM set a token's mode to `mode` (null = no change needed). */
+export function gmOnListAfter(raw, tokenId, mode) {
+  const list = gmOnList(raw);
+  if (!tokenId) return null;
+  const has = list.includes(tokenId);
+  if (mode === "on" && !has) return [...list, tokenId];
+  if (mode !== "on" && has) return list.filter((x) => x !== tokenId);
+  return null;
+}
+
+// ------------------------------------------------------------------ W6-U: smoothing (dt-based, frame-rate independent)
+
+/** Look spring (|look| units): ω 11 rad/s ≈ the old 0.12 s half-life ease in lag, but with no velocity jump at the start. */
+export const LOOK_OMEGA = 11;
+/** Breathing / dust amplitude (0..1) when a token joins or leaves the animated set, or an extra is switched: ~1.5 s fade. */
+export const AMP_OMEGA = 4;
+export const REST_EPS = 1e-3;
+
+/**
+ * One step of a critically damped spring towards `target` (exact solution for a constant target over `dt` seconds, so
+ * the motion is the same at 30, 60 or 144 fps and the velocity is continuous: no snap when the target jumps).
+ * @returns {{x:number, v:number}}
+ */
+export function springStep(x, v, target, dt, omega) {
+  if (!(dt > 0) || !(omega > 0)) return { x, v };
+  const d = x - target, e = Math.exp(-omega * dt), k = v + omega * d;
+  return { x: target + (d + k * dt) * e, v: (v - omega * k * dt) * e };
+}
+
+/** Is a spring (practically) settled on its target? */
+export const springSettled = (x, v, target, eps = REST_EPS) => Math.abs(x - target) < eps && Math.abs(v) < eps * 10;
+
+/** 2D look spring: {look, vel} -> {look, vel, settled}; settled snaps exactly onto the target. */
+export function stepLook(look, vel, target, dt, omega = LOOK_OMEGA) {
+  const sx = springStep(look.x, vel.x, target.x, dt, omega), sy = springStep(look.y, vel.y, target.y, dt, omega);
+  const settled = springSettled(sx.x, sx.v, target.x) && springSettled(sy.x, sy.v, target.y);
+  return settled ? { look: { x: target.x, y: target.y }, vel: { x: 0, y: 0 }, settled }
+    : { look: { x: sx.x, y: sy.x }, vel: { x: sx.v, y: sy.v }, settled };
+}
+
+/** Scalar amplitude spring 0..1 (clamped), settled snaps onto the target. */
+export function stepAmp(a, v, target, dt, omega = AMP_OMEGA) {
+  const s = springStep(a, v, target, dt, omega);
+  if (springSettled(s.x, s.v, target)) return { a: target, v: 0, settled: true };
+  return { a: clamp01(s.x), v: s.v, settled: false };
+}
+
+/** Breathing look scaled by its fade amplitude (0 = none). */
+export const scaleLook = (l, k) => (k > 0 && l ? { x: l.x * k, y: l.y * k } : { x: 0, y: 0 });
+
+/**
+ * W6-U (perf d): does a view need a pointer-drive step this frame? Settled views AT REST far from the pointer (beyond
+ * the fade radius plus a margin) and without any animation keep their state without work (a tilted one must return).
+ */
+export function needsStep({ settled = true, atRest = true, animated = false, amp = 0, pointer = null, center = null, size = 0, far = 2.5 } = {}) {
+  if (!settled || !atRest || animated || amp > 0) return true;
+  if (!pointer || !center || !(size > 0)) return false;
+  return Math.hypot(pointer.x - center.x, pointer.y - center.y) < (far + 0.25) * size;
+}
+
+/** W6-U (perf c): camera drive: is the token's screen box (client px, centre + half size) on screen, with a margin? */
+export const tokenOnScreen = (c, r, w, h, margin = 32) => !!c && c.x + r > -margin && c.y + r > -margin && c.x - r < w + margin && c.y - r < h + margin;
+
+// ------------------------------------------------------------------ W6-U: depth texture identity (W6-R `rev`)
+
+/** Cache key of a depth texture: the map file plus its revision (a new revision = a new texture; 0 / none = old entry). */
+export const depthKey = (info) => `${info?.depth ?? ""}${info?.rev ? `#${info.rev}` : ""}`;
+
+/**
+ * W6-U: shared depth textures with reference counts. `acquire(info)` returns the ENTRY ({key, refs, p, value, dead,
+ * timer}); `release(entry)` drops exactly that entry's reference (never "whatever entry has this path now"); the last
+ * release destroys it after `releaseMs` (or at once), `destroyAll()` on scene tear-down. `build(info)` -> Promise of
+ * the value, `dispose(value)` frees it. Timers injectable for tests.
+ */
+export function createDepthCache({ build, dispose, releaseMs = 10_000, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
+  const map = new Map();
+  const kill = (e) => {
+    if (e.timer) clearTimer(e.timer);
+    e.timer = 0;
+    if (e.dead) return;
+    e.dead = true;
+    if (map.get(e.key) === e) map.delete(e.key);
+    e.p.then((v) => { try { dispose(v); } catch { /* gone */ } }, () => {});
+  };
+  return {
+    acquire(info) {
+      const key = depthKey(info);
+      let e = map.get(key);
+      if (!e) {
+        const entry = { key, refs: 0, timer: 0, value: null, p: null, dead: false };
+        entry.p = Promise.resolve().then(() => build(info)).then((v) => { entry.value = v; return v; });
+        entry.p.catch(() => { if (map.get(key) === entry) map.delete(key); });
+        map.set(key, entry);
+        e = entry;
+      }
+      if (e.timer) clearTimer(e.timer);
+      e.timer = 0;
+      e.refs++;
+      return e;
+    },
+    release(e, now = false) {
+      if (!e || e.dead) return;
+      e.refs = Math.max(0, e.refs - 1);
+      if (e.refs > 0) return;
+      if (e.timer) clearTimer(e.timer);
+      if (now) kill(e);
+      else e.timer = setTimer(() => { e.timer = 0; if (e.refs === 0) kill(e); }, releaseMs);
+    },
+    destroyAll() { for (const e of [...map.values()]) kill(e); },
+    get: (key) => map.get(key),
+    entries: () => [...map.values()]
+  };
+}
+
+// ------------------------------------------------------------------ W6-U: frame guard decision from the module's OWN cost
+
+/**
+ * The page's frames were slow while we animated (the plain gap guard said "bad"). Is it us? `base` = median frame gap
+ * with our filters as they are, `probe` = median gap while every enabled filter of ours ran TWICE (an invisible A/B:
+ * the second pass writes the same pixels). Our cost ≈ probe − base. We are guilty when that cost is a large part of the
+ * frame (≥ `share` of base and ≥ `minMs`). `ownCpuMs` = mean CPU ms per frame inside our filter applies: a last-resort
+ * hard limit (`hardCpuMs`) that needs no probe.
+ * @returns {"slow"|"notUs"|"probe"}
+ */
+export function guardVerdict({ base = null, probe = null, ownCpuMs = 0, minMs = 6, share = 0.25, hardCpuMs = 8 } = {}) {
+  if (ownCpuMs > hardCpuMs) return "slow";
+  if (!(base > 0) || !(probe > 0)) return "probe";
+  const cost = probe - base;
+  return cost >= minMs && cost >= share * base ? "slow" : "notUs";
 }
 
 /**
@@ -97,12 +237,17 @@ export function depthFactor(w, h, maxSide = 512) {
   return m > maxSide ? Math.ceil(m / maxSide) : 1;
 }
 
+// W6-U (perf a): one shared scratch view (was two typed arrays allocated per call: ~1M calls per map, 300 ms -> ~9 ms)
+const F32 = new Float32Array(1), U32 = new Uint32Array(F32.buffer);
 /** IEEE 754 binary16 bits of a float (round to nearest even, clamped to ±65504, NaN kept). */
 export function floatToHalf(v) {
   if (Number.isNaN(v)) return 0x7e00;
-  const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
-  f32[0] = v;
-  const x = u32[0];
+  F32[0] = v;
+  return bitsToHalf(U32[0]);
+}
+
+/** binary16 bits from the binary32 bits `x` (shared by floatToHalf and the one-pass toHalfArray). */
+function bitsToHalf(x) {
   const sign = (x >>> 16) & 0x8000;
   let exp = (x >>> 23) & 0xff;
   let mant = x & 0x7fffff;
@@ -135,8 +280,38 @@ export function halfToFloat(h) {
 /** Float32Array -> Uint16Array of binary16 (the RGBA16F upload of the conditioned depth). */
 export function toHalfArray(src) {
   const out = new Uint16Array(src.length);
-  for (let i = 0; i < src.length; i++) out[i] = floatToHalf(src[i]);
+  // one pass over the float bits (a Float32Array source is read in place; other arrays are copied once)
+  const f = src instanceof Float32Array ? src : Float32Array.from(src);
+  const bits = new Uint32Array(f.buffer, f.byteOffset, f.length);
+  for (let i = 0; i < bits.length; i++) {
+    const x = bits[i];
+    out[i] = ((x >>> 23) & 0xff) === 0xff && (x & 0x7fffff) ? 0x7e00 : bitsToHalf(x);
+  }
   return out;
+}
+
+/**
+ * W6-U: the CPU part of a depth texture, off the main thread (token-depth-worker.mjs) or inline as a fallback:
+ * box-downscale to ≤ `maxSide`, condition (normals from a lightly blurred copy), pack as binary16.
+ * `src` = {D, mask, w, h, bits, format}. @returns {{half: Uint16Array, w: number, h: number}}
+ */
+export function prepareDepthTexture(src, maxSide = 512) {
+  const f = depthFactor(src.w, src.h, maxSide);
+  if (f >= 2) {
+    const d = downscaleMap(src.D, src.w, src.h, f);
+    src = { ...src, D: d.M, mask: src.mask ? downscaleMap(src.mask, src.w, src.h, f).M : null, w: d.w, h: d.h };
+  }
+  const c = conditionDepth(src, { dilatePx: 2, normalBlurPx: 2 });
+  return { half: toHalfArray(c.rgba), w: c.w, h: c.h };
+}
+
+/**
+ * W6-U guard probe: frame `i` of the A/B probe. Blocks of 8 frames alternate normal / doubled filter passes; the first
+ * 2 frames of each block are dropped (GPU work spills into the next frame). `done` after `blocks` blocks.
+ */
+export function probeFrame(i, { block = 8, skip = 2, blocks = 8 } = {}) {
+  const b = Math.floor(i / block);
+  return { double: b % 2 === 1, use: i % block >= skip, done: b >= blocks };
 }
 
 /** Is a look (practically) zero? Then the filter is disabled: the token renders exactly as without the module. */
@@ -172,6 +347,7 @@ varying vec2 vTokUv;
 uniform sampler2D uSampler;
 uniform sampler2D uDepth;     // r depth, g blurred, b mask, a background depth (parallax-core conditionDepth)
 uniform vec4 inputClamp;
+uniform vec4 inputPixel;
 uniform mat3 uTokToIn;        // token uv -> input uv (inverse of otherMatrix)
 uniform vec2 uOff;            // uv shift between depth 1 and depth 0
 uniform vec2 uDTexel;
@@ -192,7 +368,13 @@ float cond(float d){ float g = pow(clamp(d, 0.0, 1.0), uGamma); return clamp((g 
 float H(vec2 p){ return cond(texture2D(uDepth, p).r); }
 float G(vec2 p){ return cond(texture2D(uDepth, p).g); }
 vec2 at(vec2 uv, float h){ return uv - uOff * (h - uFocus); }
-vec4 inp(vec2 t){ vec2 q = (uTokToIn * vec3(t, 1.0)).xy; return texture2D(uSampler, clamp(q, inputClamp.xy, inputClamp.zw)); }
+// W6-U: PIXI's autoFit cuts the input to the screen; a shifted read that falls outside the input (token partly off
+// screen) takes the fallback (the unshifted colour) instead of a clamped, stretched border pixel
+vec4 inpOr(vec2 t, vec4 fb){
+  vec2 q = (uTokToIn * vec3(t, 1.0)).xy, hp = inputPixel.zw * 0.5;
+  if (q.x < inputClamp.x - hp.x || q.y < inputClamp.y - hp.y || q.x > inputClamp.z + hp.x || q.y > inputClamp.w + hp.y) return fb;
+  return texture2D(uSampler, clamp(q, inputClamp.xy, inputClamp.zw));
+}
 ${GLSL_FX}
 
 void main(void){
@@ -216,7 +398,7 @@ void main(void){
     h = 0.5 * (lo + hi);
   }
   vec2 s = clamp(at(uv, h), 0.0, 1.0);
-  vec4 c = inp(s);
+  vec4 c = inpOr(s, orig);
 
   if (uHoleFill > 0.0) {
     vec4 dep = texture2D(uDepth, s);
@@ -236,7 +418,7 @@ void main(void){
       for (int k = 0; k < 12; k++) { p += dir * stepL; if (H(p) <= target) break; }
       p = clamp(p + dir * 2.0, 0.0, 1.0);
       vec2 side = vec2(-dir.y, dir.x) * 1.5;
-      vec4 bgc = (inp(p) * 2.0 + inp(clamp(p + side, 0.0, 1.0)) + inp(clamp(p - side, 0.0, 1.0))) * 0.25;
+      vec4 bgc = (inpOr(p, c) * 2.0 + inpOr(clamp(p + side, 0.0, 1.0), c) + inpOr(clamp(p - side, 0.0, 1.0), c)) * 0.25;
       c = mix(c, bgc, hole);
     }
   }

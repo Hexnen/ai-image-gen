@@ -22,26 +22,37 @@
 //   non-transparent token pixels). Breathing / dust keep the filter ENABLED at rest and the ticker callback running;
 //   at most MAX_ANIMATED_TOKENS tokens (in view, nearest the pointer, else nearest the screen centre) animate at once,
 //   their time / breath advance at most ~30 fps; the rest stay as before. Reduced motion = the whole feature off.
+// - W6-U: every change eases (critically damped springs, dt-based): the look, and the breathing / dust / light amounts
+//   when a token joins or leaves the animated set or an extra is switched; the filter is disabled only once the token
+//   has settled at rest. Breathing / dust run on a continuous clock (no 30 fps steps). The void (ERASE) pass renders
+//   the mesh without our filter (alpha is the same, the ray search ran twice). Camera drive enables the filter only on
+//   tokens on screen; pointer drive steps only tokens near the pointer, moving or animated. Depth maps are conditioned
+//   in a Worker. Depth textures are released by the entry a view acquired (not by path). The frame guard switches off
+//   only when the module's OWN cost is large (invisible A/B probe: our passes doubled), not on unrelated slow frames.
+//   A token's "on" beats an off scene only when a GM confirmed it (scene flag list, GM-only).
 // - GM: a token HUD button opens the "Generate depth" window on the token image (its own estimate + confirmation before
 //   every paid call; nothing runs in bulk).
 import { MODULE_ID } from "../constants.mjs";
 import { depthIndex } from "../depth/depth-index.mjs";
-import { conditionDepth, downscaleMap, stepsFor, easeToward } from "./parallax-core.mjs";
+import { stepsFor } from "./parallax-core.mjs";
 import { createFrameGuard, effectAmount } from "./portrait-core.mjs";
 import { registerFxSettings, fxDeviceOff } from "./portrait.mjs";
 import {
   FX_KEYS, fxSettingKey, normalizeFx, effectiveFx, breathLook, withBreath, phaseOf, pickAnimated, inView, dustScale,
-  IDLE_FRAME_MS, MAX_ANIMATED_TOKENS
+  MAX_ANIMATED_TOKENS
 } from "./parallax-fx.mjs";
 import {
-  tokenWanted, unsupportedReason, pointerLook, cameraLook, uvOffset, cleanStrength, depthFactor, toHalfArray, lookIsRest,
-  TOKEN_MODES, DRIVES, STRENGTH_RANGE, STRENGTH_DEFAULT, TOKEN_VS, TOKEN_FS
+  tokenWanted, unsupportedReason, pointerLook, cameraLook, uvOffset, cleanStrength, lookIsRest, gmOnList, gmOnListAfter,
+  stepLook, stepAmp, scaleLook, needsStep, tokenOnScreen, depthKey, guardVerdict, probeFrame, createDepthCache,
+  prepareDepthTexture, TOKEN_MODES, DRIVES, STRENGTH_RANGE, STRENGTH_DEFAULT, TOKEN_VS, TOKEN_FS
 } from "./token-core.mjs";
 
 export const SETTING = "tokenParallax";
 export const DRIVE_SETTING = "tokenParallaxDrive";
 export const STRENGTH_SETTING = "tokenParallaxStrength";
 export const FLAG = "tokenParallax";
+/** W6-U: scene flag, ids of tokens whose "on" a GM confirmed (scenes are GM-only: an owner cannot forge it). */
+export const FLAG_GM_ON = "tokenParallaxGmOn";
 const DEPTH_MAX_SIDE = 512;
 const RELEASE_MS = 10_000;
 const FOCUS = 0.45;
@@ -51,7 +62,6 @@ const ZERO = Object.freeze({ x: 0, y: 0 });
 const PICK_MS = 250;
 
 const views = new Map();        // Token (placeable) -> TokenView
-const depthCache = new Map();   // depth path -> {refs, p: Promise<{tex, w, h}>, timer, tex?}
 const attachSeq = new WeakMap();
 let disabled = "";              // "", "slow" (this page)
 let notified = false;
@@ -61,12 +71,22 @@ let guard = null;
 let panUntil = 0;
 let lastTickT = 0;
 let fxCache = null;             // W6-P: effective extras on this client
-let fxTimeMs = 0;               // W6-P: clock of breathing / dust, advanced at most every IDLE_FRAME_MS
-let lastIdleT = 0;
+let fxTimeMs = 0;               // W6-P: clock of breathing / dust (W6-U: continuous, every frame)
 let lastPickT = 0;
-let pointerClient = null;       // W6-P: pointer in client px while it is on the board (cap selection)
+let panStale = false;           // W6-U: a pan / zoom happened; re-read the pointer and camera boxes in the next tick
+let pointerClient = null;       // W6-P: pointer in client px while it is on the board (cap selection; W6-U: re-read on pan)
 let animatedCount = 0;
-const counters = { attached: 0, detached: 0, depthLoads: 0, depthDestroyed: 0, frames: 0 };
+let lastBreathS = 0, lastDustS = 0;   // W6-U: strengths kept while an extra fades out after being switched off
+const counters = { attached: 0, detached: 0, depthLoads: 0, depthDestroyed: 0, frames: 0, stepped: 0, applies: 0, voidSkips: 0, workerMaps: 0, inlineMaps: 0 };
+// W6-U guard: own CPU per frame inside our applies, the A/B probe, the last verdict
+let frameCpu = 0;
+const cpuHist = [];
+let probe = null;               // {i, base, a: [], b: []}
+let probeDouble = false;
+let probeUntil = 0;             // no new probe before this time (after a "not us" verdict)
+let lastVerdict = null;
+let testCostMs = 0;             // checks: simulated GPU cost per filter pass (busy wait, outside the CPU timer)
+let testLoadDelayMs = 0;        // checks: delay every depth map load (the torn-down-while-loading repro)
 
 const reducedMotion = () => globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
 const get = (k, d) => { try { return game.settings.get(MODULE_ID, k); } catch { return d; } };
@@ -93,9 +113,25 @@ function sceneOn(scene = canvas?.scene) {
   return !!scene?.getFlag?.(MODULE_ID, FLAG);
 }
 
+/** Token override, tolerant: "" / "on" / "off" (also an object {v} written by other tools). */
 function tokenMode(doc) {
-  const m = doc?.getFlag?.(MODULE_ID, FLAG) ?? "";
+  let m = doc?.getFlag?.(MODULE_ID, FLAG) ?? "";
+  if (m && typeof m === "object") m = m.v ?? "";
   return TOKEN_MODES.includes(m) ? m : "";
+}
+
+/** W6-U: did a GM confirm this token's "on"? (its id in the scene's GM-only list) */
+function gmOn(doc) {
+  const id = doc?.id;
+  return !!id && gmOnList(doc?.parent?.getFlag?.(MODULE_ID, FLAG_GM_ON)).includes(id);
+}
+
+/** W6-U (GM, own action): keep the scene's GM list in step with the mode the GM gave a token. */
+async function mirrorGmOn(doc, mode) {
+  const scene = doc?.parent;
+  if (!game.user?.isGM || !scene || scene.documentName !== "Scene" || !doc.id) return;
+  const next = gmOnListAfter(scene.getFlag(MODULE_ID, FLAG_GM_ON), doc.id, mode);
+  if (next) await scene.setFlag(MODULE_ID, FLAG_GM_ON, next);
 }
 
 function isVideo(token) {
@@ -106,7 +142,7 @@ function isVideo(token) {
 function whyNot(token) {
   if (!token || token.destroyed) return "gone";
   if (!tokenParallaxActive()) return disabled || (reducedMotion() ? "reducedMotion" : "setting");
-  if (!tokenWanted({ world: true, scene: sceneOn(token.document?.parent), token: tokenMode(token.document) })) return "off";
+  if (!tokenWanted({ world: true, scene: sceneOn(token.document?.parent), token: tokenMode(token.document), gmOn: gmOn(token.document) })) return "off";
   return unsupportedReason({
     preview: !!token.isPreview || !!token._original,
     video: isVideo(token),
@@ -118,18 +154,71 @@ function whyNot(token) {
 
 // ------------------------------------------------------------------ depth textures (shared per map file)
 
-async function buildDepthTexture(info) {
-  const L = await import("./parallax-load.mjs");
-  let src = await L.loadDepth({ path: info.depth, format: info.format, sidecar: info.sidecar });
-  const f = depthFactor(src.w, src.h, DEPTH_MAX_SIDE);
-  if (f >= 2) {
-    const d = downscaleMap(src.D, src.w, src.h, f);
-    src = { ...src, D: d.M, mask: src.mask ? downscaleMap(src.mask, src.w, src.h, f).M : null, w: d.w, h: d.h };
+// W6-U (perf a): the CPU work (downscale, conditioning, binary16) runs in a Worker; inline after a yield as a fallback
+let worker = null, workerBroken = false, workerSeq = 0;
+const workerJobs = new Map();
+function getWorker() {
+  if (worker || workerBroken || typeof Worker !== "function") return worker;
+  try {
+    worker = new Worker(new URL("./token-depth-worker.mjs", import.meta.url), { type: "module" });
+    worker.onmessage = (ev) => {
+      const j = workerJobs.get(ev.data?.id);
+      if (!j) return;
+      workerJobs.delete(ev.data.id);
+      if (ev.data.error) j.reject(new Error(ev.data.error));
+      else j.resolve(ev.data);
+    };
+    worker.onerror = (ev) => {
+      console.warn(`${MODULE_ID} | token parallax: depth worker failed, conditioning on the page`, ev?.message ?? ev);
+      workerBroken = true;
+      try { worker.terminate(); } catch { /* gone */ }
+      worker = null;
+      for (const j of workerJobs.values()) j.reject(Object.assign(new Error("worker"), { retryInline: true }));
+      workerJobs.clear();
+    };
+  } catch { workerBroken = true; worker = null; }
+  return worker;
+}
+
+async function prepareOffThread(src) {
+  const w = getWorker();
+  if (w) {
+    // copies: the source arrays stay usable for the inline fallback if the worker dies mid-job
+    const D = Float32Array.from(src.D);
+    const mask = src.mask ? Float32Array.from(src.mask) : null;
+    try {
+      const id = ++workerSeq;
+      const msg = { id, maxSide: DEPTH_MAX_SIDE, src: { D, mask, w: src.w, h: src.h, bits: src.bits, format: src.format } };
+      const r = await new Promise((resolve, reject) => {
+        workerJobs.set(id, { resolve, reject });
+        w.postMessage(msg, [D.buffer, ...(mask ? [mask.buffer] : [])]);
+      });
+      counters.workerMaps++;
+      return r;
+    } catch (e) {
+      if (!e?.retryInline) throw e;
+    }
   }
   await new Promise((r) => setTimeout(r, 0));
-  // W6-P: normals for the light come from a lightly blurred copy (G channel); depth (R) is unchanged by the blur
-  const c = conditionDepth(src, { dilatePx: 2, normalBlurPx: 2 });
-  const base = PIXI.BaseTexture.fromBuffer(toHalfArray(c.rgba), c.w, c.h, {
+  counters.inlineMaps++;
+  return prepareDepthTexture(src, DEPTH_MAX_SIDE);
+}
+
+async function buildDepthTexture(info) {
+  const L = await import("./parallax-load.mjs");
+  // the loader encodes the path segments and adds `?v=<rev>` (W6-R/T; an older loader ignores `rev`: plain path)
+  const spec = { path: info.depth, rev: info.rev || null, format: info.format, sidecar: info.sidecar };
+  let c;
+  if (typeof L.loadDepthConditioned === "function") {
+    // W6-T loader: fetch + decode + downscale + condition + binary16 all in its worker
+    const r = await L.loadDepthConditioned(spec, { maxSide: DEPTH_MAX_SIDE, condition: { dilatePx: 2, normalBlurPx: 2 }, half: true });
+    c = r?.cond?.half ? { half: r.cond.half, w: r.cond.w, h: r.cond.h } : await prepareOffThread(await L.loadDepth(spec));
+    if (r?.cond?.half) counters.workerMaps++;
+  } else {
+    c = await prepareOffThread(await L.loadDepth(spec));
+  }
+  if (testLoadDelayMs > 0) await new Promise((r) => setTimeout(r, testLoadDelayMs));
+  const base = PIXI.BaseTexture.fromBuffer(c.half, c.w, c.h, {
     format: PIXI.FORMATS.RGBA, type: PIXI.TYPES.HALF_FLOAT, scaleMode: PIXI.SCALE_MODES.LINEAR,
     mipmap: PIXI.MIPMAP_MODES.OFF, wrapMode: PIXI.WRAP_MODES.CLAMP, alphaMode: PIXI.ALPHA_MODES.NO_PREMULTIPLIED_ALPHA
   });
@@ -137,41 +226,23 @@ async function buildDepthTexture(info) {
   return { tex: new PIXI.Texture(base), w: c.w, h: c.h };
 }
 
-function acquireDepth(info) {
-  let e = depthCache.get(info.depth);
-  if (!e) {
-    e = { refs: 0, timer: 0, tex: null, p: null };
-    e.p = buildDepthTexture(info).then((r) => { e.tex = r.tex; return r; });
-    e.p.catch(() => { if (depthCache.get(info.depth) === e) depthCache.delete(info.depth); });
-    depthCache.set(info.depth, e);
-  }
-  clearTimeout(e.timer);
-  e.timer = 0;
-  e.refs++;
-  return e.p;
-}
-
-function destroyDepthEntry(path, e) {
-  clearTimeout(e.timer);
-  if (depthCache.get(path) === e) depthCache.delete(path);
-  e.p.then((r) => { try { r.tex.destroy(true); counters.depthDestroyed++; } catch { /* gone */ } }, () => {});
-}
-
-function releaseDepth(path, now = false) {
-  const e = depthCache.get(path);
-  if (!e) return;
-  e.refs = Math.max(0, e.refs - 1);
-  if (e.refs > 0) return;
-  clearTimeout(e.timer);
-  if (now) destroyDepthEntry(path, e);
-  else e.timer = setTimeout(() => { if (e.refs === 0) destroyDepthEntry(path, e); }, RELEASE_MS);
-}
-
-function destroyAllDepth() {
-  for (const [path, e] of [...depthCache]) destroyDepthEntry(path, e);
-}
+/**
+ * W6-U: one entry per depth map revision (token-core createDepthCache); a view keeps the ENTRY OBJECT it acquired and
+ * releases exactly that one (a view torn down while loading used to release by path, i.e. the NEXT entry of the same
+ * file after a redraw, whose texture was then destroyed under a live view).
+ */
+const depthCache = createDepthCache({
+  build: (info) => buildDepthTexture(info),
+  dispose: (r) => { r.tex.destroy(true); counters.depthDestroyed++; },
+  releaseMs: RELEASE_MS
+});
+const acquireDepth = (info) => depthCache.acquire(info);
+const releaseDepth = (e, now = false) => depthCache.release(e, now);
+const destroyAllDepth = () => depthCache.destroyAll();
 
 // ------------------------------------------------------------------ the filter
+
+const busyWait = (ms) => { const end = performance.now() + ms; while (performance.now() < end) { /* checks only */ } };
 
 let FilterClass = null;
 function filterClass() {
@@ -192,9 +263,13 @@ function filterClass() {
     }
 
     apply(filterManager, input, output, clearMode) {
+      const t0 = performance.now();
       const v = this.view, mesh = v?.mesh, u = this.uniforms;
       let off = { x: 0, y: 0 }, light = 0, rim = 0, dust = 0;
-      if (mesh && !mesh.destroyed && mesh._texture?.orig?.width) {
+      // W6-U (Z3): Foundry pads the mesh during its image-change transition (Token.#updatePadding, ~0.4 s); the sprite
+      // matrix ignores the padding, so the map would sit off: pass the picture through untouched meanwhile
+      const padded = !!(mesh?._paddingX || mesh?._paddingY);
+      if (mesh && !mesh.destroyed && mesh._texture?.orig?.width && !padded) {
         const m = filterManager.calculateSpriteMatrix(this._m, mesh);
         u.otherMatrix = m;
         u.uTokToIn = this._inv.copyFrom(m).invert();
@@ -202,24 +277,39 @@ function filterClass() {
         if (v.drive === "camera" && (v.breath.x || v.breath.y)) look = withBreath(look, v.breath);
         const o = mesh._texture.orig, wt = mesh.worldTransform;
         off = uvOffset(look, v.strength, wt, o.width, o.height);
-        // W6-P extras: light direction in token-texture space (the look turned like the uv offset), amounts
+        // W6-P extras (W6-U: light / dust amounts eased by the view's fades)
         const fx = tokenFx();
-        if (fx.light || (fx.dust && v.animated)) {
+        const lightK = v.ampL, dustK = v.ampD;
+        if (lightK > 0.001 || dustK > 0.001) {
           const tx = off.x * o.width, ty = off.y * o.height, tl = Math.hypot(tx, ty), ll = Math.min(1, Math.hypot(look.x, look.y));
           u.uLook[0] = tl > 1e-9 ? (tx / tl) * ll : 0; u.uLook[1] = tl > 1e-9 ? (ty / tl) * ll : 0;
-          if (fx.light) { light = effectAmount(TOKEN_LIGHT * fx.lightStrength, look); rim = effectAmount(TOKEN_RIM * fx.lightStrength, look); }
-          if (fx.dust && v.animated) {
-            dust = fx.dustStrength;
+          if (lightK > 0.001) {
+            light = effectAmount(TOKEN_LIGHT * fx.lightStrength, look) * lightK;
+            rim = effectAmount(TOKEN_RIM * fx.lightStrength, look) * lightK;
+          }
+          if (dustK > 0.001) {
+            dust = (fx.dust ? fx.dustStrength : lastDustS) * dustK;
             u.uDustScale = dustScale(Math.min(Math.hypot(wt.a, wt.b) * o.width, Math.hypot(wt.c, wt.d) * o.height));
             u.uTime = (fxTimeMs / 1000) % 3600;
           }
         }
+      } else if (mesh && padded) {
+        u.otherMatrix = this._m.identity();
+        u.uTokToIn = this._inv.identity();
       }
       u.uOff[0] = off.x; u.uOff[1] = off.y;
       u.uLight = light; u.uRim = rim; u.uDust = dust;
       u.uSteps = stepsFor(off, this.dw, this.dh);
-      v && (v.applied++);
+      if (v) v.applied++;
+      counters.applies++;
       filterManager.applyFilter(this, input, output, clearMode);
+      frameCpu += performance.now() - t0;
+      if (testCostMs > 0) busyWait(testCostMs);
+      // W6-U guard probe: the same pass again (writes the same pixels: invisible); the frame-time difference = our cost
+      if (probeDouble) {
+        filterManager.applyFilter(this, input, output, clearMode);
+        if (testCostMs > 0) busyWait(testCostMs);
+      }
     }
   };
   return FilterClass;
@@ -231,11 +321,15 @@ class TokenView {
   constructor(token, info) {
     this.token = token;
     this.info = info;
+    this.key = depthKey(info);
     this.src = token.document.texture.src;
     this.mesh = null;
     this.filter = null;
+    this.entry = null;              // W6-U: the depth entry THIS view acquired (released exactly once)
     this.look = { x: 0, y: 0 };
+    this.vel = { x: 0, y: 0 };      // W6-U: look spring velocity
     this.target = { x: 0, y: 0 };
+    this.settled = true;
     this.drive = drive();
     this.strength = strength();
     this.status = "loading";
@@ -244,27 +338,42 @@ class TokenView {
     this.destroyed = false;
     this.animated = false;          // W6-P: one of the tokens allowed to animate at rest (cap)
     this.breath = ZERO;
+    // W6-U: eased amounts (0..1) of breathing, dust and light; light starts where it is (no fade at load)
+    this.ampB = 0; this.ampBV = 0; this.ampD = 0; this.ampDV = 0;
+    this.ampL = tokenFx().light ? 1 : 0; this.ampLV = 0;
+    this.onScreen = true;           // W6-U: camera drive, filter only on tokens on screen
     this.phase = phaseOf(token.document?.id ?? token.id);
+    this._voidWrap = null; this._voidBase = null; this._voidOwn = false;
   }
 
   async load() {
+    const e = this.entry = acquireDepth(this.info);
     try {
-      const d = await acquireDepth(this.info);
-      if (this.destroyed) { releaseDepth(this.info.depth); return; }
+      const d = await e.p;
+      if (this.destroyed) return;     // destroy() already released `e` (by object)
+      if (e.dead || !d?.tex?.baseTexture) throw new Error("depth texture gone");
       this.filter = new (filterClass())(d.tex, d.w, d.h);
       this.filter.view = this;
       this.status = "ready";
       this.bindMesh();
+      this.cameraRefresh();
       this.sync();
       kick();
-    } catch (e) {
+    } catch (err) {
+      this.releaseEntry();
       if (this.destroyed) return;
       this.status = "error";
-      this.error = String(e?.message ?? e);
-      if (e?.status === 404 || e?.status === 403) depthIndex.reportMissing(this.src);
-      console.warn(`${MODULE_ID} | token parallax: ${this.src}`, e);
+      this.error = String(err?.message ?? err);
+      if (err?.status === 404 || err?.status === 403) depthIndex.reportMissing(this.src);
+      console.warn(`${MODULE_ID} | token parallax: ${this.src}`, err);
       this.unbindMesh();
     }
+  }
+
+  releaseEntry(now = false) {
+    const e = this.entry;
+    this.entry = null;
+    if (e) releaseDepth(e, now);
   }
 
   /** Put the filter first on the token's current mesh (again, if another module replaced the array). */
@@ -276,12 +385,44 @@ class TokenView {
     this.mesh = mesh;
     const fs = Array.isArray(mesh.filters) ? mesh.filters : [];
     if (!fs.includes(this.filter)) mesh.filters = [this.filter, ...fs];
+    this.wrapVoid(mesh);
+  }
+
+  /**
+   * W6-U (perf b): Foundry renders the token mesh a second time for the void (ERASE) pass, with its filters. That pass
+   * only needs alpha and our filter keeps alpha unchanged: render it with our filter switched off for the call.
+   */
+  wrapVoid(mesh) {
+    if (this._voidWrap && mesh._renderVoid === this._voidWrap) return;
+    if (typeof mesh._renderVoid !== "function") return;
+    const base = mesh._renderVoid, view = this;
+    this._voidOwn = Object.prototype.hasOwnProperty.call(mesh, "_renderVoid");
+    this._voidBase = base;
+    this._voidWrap = function (renderer) {
+      const f = view.filter;
+      if (!f || !f.enabled) return base.call(this, renderer);
+      f.enabled = false;
+      counters.voidSkips++;
+      try { return base.call(this, renderer); } finally { f.enabled = true; }
+    };
+    mesh._renderVoid = this._voidWrap;
+  }
+
+  unwrapVoid(mesh) {
+    if (!mesh || !this._voidWrap) return;
+    if (mesh._renderVoid === this._voidWrap) {
+      if (this._voidOwn) mesh._renderVoid = this._voidBase;
+      else delete mesh._renderVoid;
+    }
+    this._voidWrap = null; this._voidBase = null; this._voidOwn = false;
   }
 
   unbindMesh() {
     const mesh = this.mesh;
     this.mesh = null;
-    if (!mesh || mesh.destroyed || !Array.isArray(mesh.filters)) return;
+    if (!mesh) return;
+    this.unwrapVoid(mesh);
+    if (mesh.destroyed || !Array.isArray(mesh.filters)) return;
     const i = mesh.filters.indexOf(this.filter);
     if (i >= 0) {
       const rest = mesh.filters.filter((f) => f !== this.filter);
@@ -296,28 +437,62 @@ class TokenView {
     } catch { return { x: 0, y: 0 }; }
   }
 
-  /** Enabled only when it changes the picture. */
-  sync() {
-    if (!this.filter) return;
-    // W6-P: dust needs the filter at rest too (only on the capped, animated tokens)
-    this.filter.enabled = this.drive === "camera" ? true : !lookIsRest(this.look) || (this.animated && tokenFx().dust);
+  /** W6-U (perf c): camera drive, is the token on screen (with a margin)? */
+  cameraRefresh() {
+    if (this.drive !== "camera") { this.onScreen = true; return; }
+    const t = this.token;
+    try {
+      const c = canvas.clientCoordinatesFromCanvas(t.center);
+      const r = (Math.max(t.w || 0, t.h || 0) / 2) * (canvas.stage?.scale?.x || 1);
+      this.onScreen = tokenOnScreen(c, r, globalThis.innerWidth || 1, globalThis.innerHeight || 1);
+    } catch { this.onScreen = true; }
   }
 
-  /** One eased step (pointer drive). @returns {boolean} still moving */
-  step(dt) {
+  /** Enabled only when it changes the picture (W6-U: and only once settled at rest; camera: only on screen). */
+  sync() {
+    if (!this.filter) return;
+    this.filter.enabled = this.drive === "camera" ? this.onScreen
+      : !(this.settled && lookIsRest(this.look)) || this.ampD > 0.001;
+  }
+
+  /** W6-U: ease the extras' amounts; @returns {boolean} all settled */
+  stepAmps(dt, fx) {
+    const b = stepAmp(this.ampB, this.ampBV, this.animated && fx.breath ? 1 : 0, dt);
+    const d = stepAmp(this.ampD, this.ampDV, this.animated && fx.dust ? 1 : 0, dt);
+    const l = stepAmp(this.ampL, this.ampLV, fx.light ? 1 : 0, dt);
+    this.ampB = b.a; this.ampBV = b.v; this.ampD = d.a; this.ampDV = d.v; this.ampL = l.a; this.ampLV = l.v;
+    const bs = fx.breath ? fx.breathStrength : lastBreathS;
+    this.breath = this.ampB > 0 && bs > 0 ? scaleLook(breathLook(fxTimeMs, bs, this.phase), this.ampB) : ZERO;
+    return b.settled && d.settled && l.settled;
+  }
+
+  /** One eased step. @returns {boolean} still moving (look, or an extra's amount) */
+  step(dt, fx = tokenFx()) {
     if (this.status !== "ready" || this.destroyed) return false;
     const t = this.token;
     if (!t || t.destroyed) return false;
-    const fx = tokenFx();
-    this.breath = this.animated && fx.breath ? breathLook(fxTimeMs, fx.breathStrength, this.phase) : ZERO;
-    if (this.drive !== "pointer") { this.sync(); return false; }   // camera: the breath is added in the filter's apply
-    this.target = pointer ? pointerLook(pointer, t.center, Math.max(t.w || 0, t.h || 0)) : { x: 0, y: 0 };
-    if (this.breath !== ZERO) this.target = withBreath(this.target, this.breath);
-    this.look = { x: easeToward(this.look.x, this.target.x, dt, 0.12), y: easeToward(this.look.y, this.target.y, dt, 0.12) };
-    const moving = Math.hypot(this.look.x - this.target.x, this.look.y - this.target.y) > 0.002;
-    if (!moving) this.look = { ...this.target };
+    counters.stepped++;
+    const ampsSettled = this.stepAmps(dt, fx);
+    if (this.drive !== "pointer") { this.settled = ampsSettled; this.sync(); return !ampsSettled; }
+    let target = pointer ? pointerLook(pointer, t.center, Math.max(t.w || 0, t.h || 0)) : { x: 0, y: 0 };
+    if (this.breath !== ZERO) target = withBreath(target, this.breath);
+    this.target = target;
+    const r = stepLook(this.look, this.vel, target, dt);
+    this.look = r.look; this.vel = r.vel;
+    this.settled = r.settled && ampsSettled;
     this.sync();
-    return moving;
+    return !this.settled;
+  }
+
+  /** W6-U (perf d): pointer drive, does this view need a step this frame? */
+  wantsStep(fx) {
+    const t = this.token;
+    if (this.status !== "ready" || !t || t.destroyed) return false;
+    const ampWork = this.ampB + this.ampD + Math.abs(this.ampL - (fx.light ? 1 : 0));
+    return needsStep({
+      settled: this.settled, atRest: lookIsRest(this.look) && lookIsRest(this.vel), animated: this.animated, amp: ampWork,
+      pointer, center: t.center, size: Math.max(t.w || 0, t.h || 0)
+    });
   }
 
   destroy() {
@@ -327,14 +502,16 @@ class TokenView {
       this.filter.view = null;
       try { this.filter.destroy(); } catch { /* gone */ }
       this.filter = null;
-      releaseDepth(this.info.depth);
     }
+    this.releaseEntry();
   }
 
   report() {
     return {
-      token: this.token?.document?.uuid, image: this.src, depth: this.info.depth, status: this.status, error: this.error,
+      token: this.token?.document?.uuid, image: this.src, depth: this.info.depth, rev: this.info.rev ?? null, status: this.status, error: this.error,
       enabled: !!this.filter?.enabled, onMesh: !!this.mesh?.filters?.includes?.(this.filter), look: { ...this.look }, animated: this.animated,
+      amp: { breath: this.ampB, dust: this.ampD, light: this.ampL }, settled: this.settled, onScreen: this.onScreen,
+      depthOk: !!this.filter?.uniforms?.uDepth?.baseTexture && !this.entry?.dead,
       drive: this.drive, strength: this.strength, applied: this.applied
     };
   }
@@ -367,8 +544,9 @@ async function attach(token) {
   if (attachSeq.get(token) !== n || token.destroyed) return;
   if (!info || whyNot(token)) { detach(token); return; }
   let v = views.get(token);
-  if (v && (v.src !== src || v.info.depth !== info.depth || v.status === "error")) { detach(token); v = null; }
-  if (v) { v.drive = drive(); v.strength = strength(); v.bindMesh(); v.sync(); return; }
+  // W6-U: a new revision of the map (task D's `rev`) = a new texture
+  if (v && (v.src !== src || v.key !== depthKey(info) || v.status === "error")) { detach(token); v = null; }
+  if (v) { v.drive = drive(); v.strength = strength(); v.bindMesh(); v.cameraRefresh(); v.sync(); return; }
   v = new TokenView(token, info);
   views.set(token, v);
   counters.attached++;
@@ -388,7 +566,7 @@ export function refreshTokens() {
   }, 60);
 }
 
-// ------------------------------------------------------------------ frame loop (pointer drive) + guard
+// ------------------------------------------------------------------ frame loop + guard
 
 function maxGapMs() {
   const fps = Number(canvas?.app?.ticker?.maxFPS) || 0;
@@ -400,9 +578,52 @@ function ensureGuard() {
   return guard;
 }
 
+const median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+const meanCpu = () => (cpuHist.length ? cpuHist.reduce((s, x) => s + x, 0) / cpuHist.length : 0);
+
+/**
+ * W6-U (perf e): decide from the module's OWN cost. The page-gap guard only raises the question; an invisible A/B
+ * probe (our passes doubled in alternating 8-frame blocks) answers it. Unrelated slow frames = "notUs" (the guard
+ * resets and waits 15 s before asking again). Last resort: our CPU time in the applies alone > 8 ms per frame.
+ * @returns {boolean} switched off
+ */
+function guardFrame(gap, now) {
+  cpuHist.push(frameCpu);
+  if (cpuHist.length > 90) cpuHist.shift();
+  if (probe) {
+    const f = probeFrame(probe.i);
+    if (f.use && gap > 0 && gap <= 250) (probe.cur ? probe.b : probe.a).push(gap);
+    probe.i++;
+    const next = probeFrame(probe.i);
+    if (next.done) {
+      const v = guardVerdict({ base: median(probe.a), probe: median(probe.b), ownCpuMs: meanCpu() });
+      lastVerdict = { verdict: v, base: median(probe.a), probe: median(probe.b), ownCpuMs: meanCpu(), at: Date.now() };
+      probe = null; probeDouble = false;
+      if (v === "slow") { tooSlow(); return true; }
+      guard?.reset();
+      probeUntil = now + 15_000;
+      return false;
+    }
+    probe.cur = next.double;
+    probeDouble = next.double;
+    return false;
+  }
+  if (cpuHist.length >= 30 && guardVerdict({ ownCpuMs: meanCpu() }) === "slow") {
+    lastVerdict = { verdict: "slow", hard: true, ownCpuMs: meanCpu(), at: Date.now() };
+    tooSlow();
+    return true;
+  }
+  if (gap > 0 && ensureGuard().push(gap, 0) === "bad" && now >= probeUntil) {
+    probe = { i: 0, a: [], b: [], cur: false };
+    probeDouble = false;
+  }
+  return false;
+}
+
 /**
  * W6-P: which tokens may animate at rest (breathing / dust): in view and visible, nearest the pointer (else the screen
  * centre), at most MAX_ANIMATED_TOKENS. The others keep the pre-W6-P behaviour (flat unless the pointer is near).
+ * W6-U: a token leaving the set fades its breathing / dust out (and one joining fades in) instead of switching.
  */
 function repick() {
   const fx = tokenFx();
@@ -424,12 +645,12 @@ function repick() {
   animatedCount = pick.size;
   for (const v of views.values()) {
     const a = pick.has(v);
-    if (a !== v.animated) { v.animated = a; if (!a) v.breath = ZERO; }
+    if (a !== v.animated) { v.animated = a; v.settled = false; }
     v.sync();
   }
 }
 
-/** Ticker callback: eases the looks (pointer drive) and feeds the frame guard while the effect animates. */
+/** Ticker callback: eases looks and amounts and feeds the frame guard while the effect moves. */
 function tick() {
   const ticker = canvas?.app?.ticker;
   const now = performance.now();
@@ -438,28 +659,45 @@ function tick() {
   const dt = Math.min(0.1, Math.max(0, (ticker?.deltaMS ?? 16) / 1000));
   counters.frames++;
   const fx = tokenFx();
-  // W6-P: breathing / dust clock advances at most ~30 fps; the animated set is re-picked a few times a second
-  if (fx.animates) {
-    if (now - lastIdleT >= IDLE_FRAME_MS) { lastIdleT = now; fxTimeMs = now; }
-    if (now - lastPickT >= PICK_MS) { lastPickT = now; repick(); }
+  if (fx.breath) lastBreathS = fx.breathStrength;
+  if (fx.dust) lastDustS = fx.dustStrength;
+  // W6-U: continuous clock for breathing / dust (the 30 fps clock made the motion visibly stepped)
+  fxTimeMs = now;
+  if (panStale) {
+    panStale = false;
+    rereadAfterPan();
   }
-  let moving = false, enabled = 0;
+  if (fx.animates && now - lastPickT >= PICK_MS) { lastPickT = now; repick(); }
+  let moving = false, enabled = 0, extras = false;
   for (const v of views.values()) {
-    if (v.drive === "pointer" || fx.animates) moving = v.step(dt) || moving;
+    const go = v.drive === "pointer" ? v.wantsStep(fx) : (fx.animates || !v.settled);
+    if (go) moving = v.step(dt, fx) || moving;
     if (v.filter?.enabled) enabled++;
+    if (v.ampB > 0 || v.ampD > 0) extras = true;
   }
   const panning = now < panUntil;
-  const animating = fx.animates && animatedCount > 0;
-  // the guard only listens while the effect animates on screen (frames of a still scene say nothing about us)
-  if ((moving || panning || animating) && enabled > 0 && gap > 0 && ensureGuard().push(gap, 0) === "bad") { tooSlow(); return; }
+  const animating = (fx.animates && animatedCount > 0) || extras;
+  // the guard only listens while the effect moves on screen (frames of a still scene say nothing about us)
+  if ((moving || panning || animating) && enabled > 0 && guardFrame(gap, now)) return;
+  frameCpu = 0;
   if (!moving && !panning && !animating) stopLoop();
 }
 
-/** Camera drive: the filters read the pan in their apply(); the loop only runs the guard while the view moves. */
+/** W6-U: after a pan / zoom (fresh worldTransform): the pointer under the unmoved mouse, camera on-screen boxes. */
+function rereadAfterPan() {
+  if (pointerClient) {
+    try { pointer = canvas.canvasCoordinatesFromClient(pointerClient); } catch { /* torn down */ }
+  }
+  for (const v of views.values()) if (v.drive === "camera") { v.cameraRefresh(); v.sync(); }
+}
+
+/** W6-U: the view moved without a pointer event (wheel zoom, keys, animatePan, pings): re-read the pointer, camera boxes. */
 function onPan() {
-  if (tokenFx().animates && views.size) { lastPickT = 0; kick(); }   // W6-P: tokens panned into view may start animating
-  if (![...views.values()].some((v) => v.drive === "camera" && v.filter?.enabled)) return;
-  panUntil = performance.now() + 500;
+  if (!views.size) return;
+  // the stage's worldTransform is only updated by the next render: re-read in the tick (it runs after the render)
+  panStale = true;
+  if (tokenFx().animates) lastPickT = 0;   // W6-P: tokens panned into view may start animating
+  if ([...views.values()].some((v) => v.drive === "camera" && v.filter?.enabled)) panUntil = performance.now() + 500;
   kick();
 }
 
@@ -468,6 +706,7 @@ function kick() {
   if (document.hidden) return;
   loopOn = true;
   lastTickT = 0;
+  frameCpu = 0;
   canvas.app.ticker.add(tick, null, PIXI.UPDATE_PRIORITY?.LOW ?? -25);
 }
 
@@ -475,12 +714,14 @@ function stopLoop() {
   if (!loopOn) return;
   loopOn = false;
   lastTickT = 0;
+  probe = null; probeDouble = false;
   try { canvas?.app?.ticker?.remove(tick); } catch { /* torn down */ }
 }
 
 function tooSlow() {
   disabled = "slow";
-  console.warn(`${MODULE_ID} | token parallax turned off on this page: frames too slow`, guard?.state());
+  probe = null; probeDouble = false;
+  console.warn(`${MODULE_ID} | token parallax turned off on this page: the effect itself is too slow`, guard?.state(), lastVerdict);
   detachAll();
   if (!notified) { notified = true; ui.notifications?.info(game.i18n.localize("AIIMG.TokenParallax.Slow")); }
 }
@@ -585,12 +826,17 @@ function tokenConfigField(app, html) {
     sel.append(o);
   }
   tab.append(formGroup(game.i18n.localize("AIIMG.TokenParallax.Token.Label"), game.i18n.localize("AIIMG.TokenParallax.Token.Hint"), sel));
+  // W6-U: saving the form as a GM confirms "on" in the scene's GM-only list (also for an unchanged, older plain "on")
+  const form = root.tagName === "FORM" ? root : root.querySelector("form");
+  if (form && doc.parent?.documentName === "Scene") {
+    form.addEventListener("submit", () => { mirrorGmOn(doc, sel.value).catch((e) => console.warn(`${MODULE_ID} | token parallax`, e)); });
+  }
 }
 
 // ------------------------------------------------------------------ registration
 
-const flagChanged = (changes) => foundry.utils.hasProperty(changes, `flags.${MODULE_ID}.${FLAG}`)
-  || foundry.utils.hasProperty(changes, `flags.${MODULE_ID}.-=${FLAG}`) || foundry.utils.hasProperty(changes, `flags.-=${MODULE_ID}`);
+const flagChanged = (changes, flag = FLAG) => foundry.utils.hasProperty(changes, `flags.${MODULE_ID}.${flag}`)
+  || foundry.utils.hasProperty(changes, `flags.${MODULE_ID}.-=${flag}`) || foundry.utils.hasProperty(changes, `flags.-=${MODULE_ID}`);
 
 let registered = false;
 export function registerTokenParallax() {
@@ -605,15 +851,24 @@ export function registerTokenParallax() {
     if (!v) return;
     if (token.document?.texture?.src !== v.src || token.mesh !== v.mesh || whyNot(token)) { attach(token).catch(() => {}); return; }
     if (v.filter && !v.mesh?.filters?.includes(v.filter)) v.bindMesh();
+    if (v.drive === "camera") { v.cameraRefresh(); v.sync(); }   // W6-U: moved into / out of the screen
     if (v.drive === "pointer" && pointer) kick();
   });
-  Hooks.on("updateToken", (doc, changes) => {
+  Hooks.on("updateToken", (doc, changes, _options, userId) => {
+    // W6-U: a GM's own change of the mode keeps the scene's GM list in step (other users' changes never add to it)
+    if (flagChanged(changes) && userId === game.user?.id) mirrorGmOn(doc, tokenMode(doc)).catch(() => {});
     if (doc.parent !== canvas?.scene) return;
     if (flagChanged(changes) || foundry.utils.hasProperty(changes, "texture.src") || foundry.utils.hasProperty(changes, "ring")) {
       if (doc.object) attach(doc.object).catch(() => {});
     }
   });
-  Hooks.on("updateScene", (scene, changes) => { if (scene === canvas?.scene && flagChanged(changes)) refreshTokens(); });
+  // W6-U: a token a GM places with "on" (e.g. from a prototype) is confirmed by that GM
+  Hooks.on("createToken", (doc, _options, userId) => {
+    if (userId === game.user?.id && tokenMode(doc) === "on") mirrorGmOn(doc, "on").catch(() => {});
+  });
+  Hooks.on("updateScene", (scene, changes) => {
+    if (scene === canvas?.scene && (flagChanged(changes) || flagChanged(changes, FLAG_GM_ON))) refreshTokens();
+  });
   Hooks.on("canvasPan", () => onPan());
   Hooks.on("renderTokenHUD", hudButton);
   Hooks.on("renderSceneConfig", sceneConfigField);
@@ -623,13 +878,14 @@ export function registerTokenParallax() {
   globalThis.addEventListener?.("pointermove", onPointerMove, { passive: true });
   globalThis.document?.addEventListener?.("pointerout", onPointerOut, { passive: true });
   globalThis.document?.addEventListener?.("visibilitychange", () => { if (!document.hidden) kick(); });
+  globalThis.addEventListener?.("resize", () => onPan(), { passive: true });
 }
 
 /** World settings (init, from settings.mjs). */
 export function registerTokenSettings() {
   const onChange = () => {
     if (worldOn() && disabled === "slow") { disabled = ""; guard = null; }
-    for (const v of views.values()) { v.drive = drive(); v.strength = strength(); v.sync(); }
+    for (const v of views.values()) { v.drive = drive(); v.strength = strength(); v.settled = false; v.cameraRefresh(); v.sync(); }
     refreshTokens();
   };
   game.settings.register(MODULE_ID, SETTING, {
@@ -661,8 +917,9 @@ export function registerTokenSettings() {
   registerFxSettings("token", () => {
     fxCache = null;
     lastPickT = 0;
-    if (!tokenFx().animates) { animatedCount = 0; for (const v of views.values()) { v.animated = false; v.breath = ZERO; } }
-    for (const v of views.values()) v.sync();
+    // W6-U: no hard switch: the views' amounts fade to the new settings in the loop
+    if (!tokenFx().animates) { animatedCount = 0; for (const v of views.values()) v.animated = false; }
+    for (const v of views.values()) { v.settled = false; v.sync(); }
     kick();
   });
 }
@@ -673,13 +930,15 @@ export const tokenApi = {
     active: tokenParallaxActive(), setting: worldOn(), scene: sceneOn(), drive: drive(), strength: strength(), disabled,
     reducedMotion: reducedMotion(), loop: loopOn, pointer: pointer ? { ...pointer } : null, guard: guard?.state() ?? null,
     fx: { ...tokenFx() }, animated: animatedCount, maxAnimated: MAX_ANIMATED_TOKENS,
-    depthTextures: [...depthCache].map(([path, e]) => ({ path, refs: e.refs, ready: !!e.tex, releasing: !!e.timer })),
+    depthTextures: depthCache.entries().map((e) => ({ key: e.key, refs: e.refs, ready: !!e.value, alive: !!e.value?.tex?.baseTexture, releasing: !!e.timer })),
+    guardProbe: probe ? { i: probe.i, a: probe.a.length, b: probe.b.length } : null, lastVerdict, probeUntil, ownCpuMs: meanCpu(),
+    worker: workerBroken ? "broken" : worker ? "on" : "idle",
     counters: { ...counters },
     views: [...views.values()].map((v) => v.report())
   }),
   refresh: () => refreshTokens(),
   /** Turn the feature back on after the slow-frame guard switched it off (this page). */
-  resume: () => { if (disabled === "slow") disabled = ""; guard = null; refreshTokens(); },
+  resume: () => { if (disabled === "slow") disabled = ""; guard = null; probe = null; probeDouble = false; probeUntil = 0; cpuHist.length = 0; refreshTokens(); },
   /** Checks: put the pointer at a canvas point (null = off the board) and run the easing, as a real move would. */
   setPointer: (p) => { pointer = p ? { x: Number(p.x) || 0, y: Number(p.y) || 0 } : null; kick(); return !!pointer; },
   /** Checks in a throttled tab: step the easing `n` times by `dt` seconds without the ticker. */
@@ -688,13 +947,20 @@ export const tokenApi = {
     const fx = tokenFx();
     for (let i = 0; i < n; i++) {
       moving = false;
-      if (fx.animates) { fxTimeMs += dt * 1000; repick(); }
-      for (const v of views.values()) if (v.drive === "pointer" || fx.animates) moving = v.step(dt) || moving;
+      fxTimeMs += dt * 1000;
+      if (fx.animates) repick();
+      for (const v of views.values()) if (v.drive === "pointer" ? v.wantsStep(fx) : (fx.animates || !v.settled)) moving = v.step(dt, fx) || moving;
     }
     return { moving, enabled: [...views.values()].filter((v) => v.filter?.enabled).length, animated: animatedCount };
   },
   /** W6-P checks: re-pick the tokens allowed to animate at rest now; optional pointer in client px. */
   pick: (client) => { if (client !== undefined) pointerClient = client ? { x: Number(client.x) || 0, y: Number(client.y) || 0 } : null; repick(); return animatedCount; },
   /** Why a token does / does not carry the filter ("" = it may). */
-  whyNot: (token) => whyNot(token)
+  whyNot: (token) => whyNot(token),
+  /** W6-U checks: simulated GPU cost per filter pass in ms (guard test), delay of every depth load in ms (F2 repro). */
+  _test: ({ costMs, loadDelayMs } = {}) => {
+    if (costMs !== undefined) testCostMs = Math.max(0, Number(costMs) || 0);
+    if (loadDelayMs !== undefined) testLoadDelayMs = Math.max(0, Number(loadDelayMs) || 0);
+    return { costMs: testCostMs, loadDelayMs: testLoadDelayMs };
+  }
 };

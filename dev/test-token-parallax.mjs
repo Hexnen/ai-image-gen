@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   tokenWanted, unsupportedReason, pointerLook, cameraLook, uvOffset, cleanStrength, depthFactor, floatToHalf, halfToFloat,
-  toHalfArray, lookIsRest, TOKEN_VS, TOKEN_FS, STRENGTH_DEFAULT
+  toHalfArray, lookIsRest, TOKEN_VS, TOKEN_FS, STRENGTH_DEFAULT, gmOnList, gmOnListAfter
 } from "../scripts/parallax/token-core.mjs";
 import { offsetFor, MAX_SHIFT, marchRay } from "../scripts/parallax/parallax-core.mjs";
 
@@ -27,9 +27,33 @@ await test("switches: world off wins, token override, scene default off", () => 
   assert.equal(tokenWanted({}), false, "scene off by default");
   assert.equal(tokenWanted({ scene: true }), true);
   assert.equal(tokenWanted({ scene: true, token: "off" }), false);
-  assert.equal(tokenWanted({ scene: false, token: "on" }), true);
-  assert.equal(tokenWanted({ world: false, scene: true, token: "on" }), false);
+  assert.equal(tokenWanted({ scene: false, token: "on", gmOn: true }), true, "GM-confirmed on beats an off scene");
+  assert.equal(tokenWanted({ world: false, scene: true, token: "on", gmOn: true }), false);
   assert.equal(tokenWanted({ scene: true, token: "junk" }), true, "unknown = inherit");
+});
+
+await test("W6-U F6: an owner's plain 'on' cannot beat an off scene; 'off' from anyone; the owner's current setup still on", () => {
+  assert.equal(tokenWanted({ scene: false, token: "on" }), false, "plain on (owner setFlag / pre-W6-U) = like the scene");
+  assert.equal(tokenWanted({ scene: false, token: "on", gmOn: false }), false);
+  assert.equal(tokenWanted({ scene: true, token: "on" }), true, "scene 'Invincible' on + tokens 'on' (owner's setup) = shown");
+  assert.equal(tokenWanted({ scene: true, token: "off", gmOn: true }), false, "off wins even over a GM list entry");
+  assert.equal(tokenWanted({ scene: false, token: "", gmOn: true }), false, "a stale list entry without the token's 'on' = nothing");
+  // tolerant reader of the scene's GM list
+  assert.deepEqual(gmOnList(null), []);
+  assert.deepEqual(gmOnList("abc"), []);
+  assert.deepEqual(gmOnList(["a", "a", 3, "", null, "b", "x".repeat(65)]), ["a", "b"]);
+  // GM writes
+  assert.deepEqual(gmOnListAfter(["a"], "b", "on"), ["a", "b"]);
+  assert.equal(gmOnListAfter(["a", "b"], "b", "on"), null, "already there: no write");
+  assert.deepEqual(gmOnListAfter(["a", "b"], "b", ""), ["a"]);
+  assert.deepEqual(gmOnListAfter(["a", "b"], "b", "off"), ["a"]);
+  assert.equal(gmOnListAfter(["a"], "b", "off"), null);
+  assert.equal(gmOnListAfter(["a"], "", "on"), null);
+  const src = read("scripts/parallax/token-parallax.mjs");
+  assert.match(src, /gmOn: gmOn\(token\.document\)/, "whyNot passes the GM confirmation");
+  assert.match(src, /if \(!game\.user\?\.isGM \|\| !scene/, "only a GM writes the scene list");
+  assert.match(src, /flagChanged\(changes\) && userId === game\.user\?\.id\) mirrorGmOn/, "only the user's OWN change is mirrored");
+  assert.match(src, /flagChanged\(changes, FLAG_GM_ON\)/, "a list change re-checks the tokens");
 });
 
 await test("unsupported tokens are skipped with a reason", () => {
@@ -178,8 +202,12 @@ await test("GLSL: the output alpha is the input alpha (silhouette, borders, hit 
   const outs = TOKEN_FS.match(/gl_FragColor = [^;]+;/g);
   assert.deepEqual(outs, ["gl_FragColor = orig;", "gl_FragColor = vec4(rgb * a, a);"]);
   assert.match(TOKEN_FS, /float a = orig\.a;/);
-  // displaced reads go through the clamped input sampler only
+  // displaced reads go through the clamped input sampler only; W6-U: outside the (screen-cut) input = the fallback
   assert.match(TOKEN_FS, /texture2D\(uSampler, clamp\(q, inputClamp\.xy, inputClamp\.zw\)\)/);
+  assert.match(TOKEN_FS, /q\.x < inputClamp\.x - hp\.x \|\| q\.y < inputClamp\.y - hp\.y \|\| q\.x > inputClamp\.z \+ hp\.x \|\| q\.y > inputClamp\.w \+ hp\.y\) return fb;/);
+  assert.match(TOKEN_FS, /vec4 c = inpOr\(s, orig\);/, "shifted colour falls back to the unshifted pixel");
+  assert.doesNotMatch(TOKEN_FS, /\binp\(/, "no unguarded displaced read left");
+  assert.equal((TOKEN_FS.match(/texture2D\(uSampler,/g) ?? []).length, 2, "orig + the guarded read");
 });
 
 await test("ray search on a token-sized profile: zero offset returns the pixel itself (filter at rest = identity)", () => {
