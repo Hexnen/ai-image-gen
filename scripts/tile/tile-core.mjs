@@ -37,7 +37,8 @@ const GEMINI_ORDER = ["0.5K", "1K", "2K", "4K"];
 export const DEFAULT_TILE_OPTS = Object.freeze({
   feather: 8,       // px sceny: miękka krawędź DO ŚRODKA prostokąta; 0 = ostra krawędź
   context: CONTEXT_FACTOR,
-  count: 1
+  count: 1,
+  expand: true      // W9: powiększ kafelek o zmiany modelu poza obrysem (expandFromDiff / expandTileRect)
 });
 
 /** Opcje okna z zapisu `tileOptions` (albo z formularza) + domyślne; nieznane klucze (dawne `mask`, `tokens`) pomijane. */
@@ -48,7 +49,8 @@ export function normalizeTileOptions(saved = {}) {
   return {
     feather: s.feather != null && Number.isFinite(Number(s.feather)) ? Math.min(256, Math.max(0, Math.round(Number(s.feather)))) : d.feather,
     context: CONTEXT_FACTORS.includes(f) ? f : d.context,
-    count: Math.min(8, Math.max(1, Math.floor(Number(s.count)) || d.count))
+    count: Math.min(8, Math.max(1, Math.floor(Number(s.count)) || d.count)),
+    expand: s.expand == null ? d.expand : !(s.expand === false || s.expand === "false" || s.expand === 0 || s.expand === "0")
   };
 }
 
@@ -59,14 +61,19 @@ export function normalizeTileOptions(saved = {}) {
 export const DEFAULT_TILE_PROMPT = [
   "This is a top-down battle map.",
   "Edit ONLY the area inside the red rectangle: {description}.",
-  "Everything outside the red rectangle must stay exactly the same, pixel for pixel.",
+  "The red rectangle is a hard border: if an object crosses the red line, change only the part of it inside the rectangle and leave the part outside exactly as it is, even if that cuts the object.",
+  "Everything outside the red rectangle must stay exactly the same, pixel for pixel: do not redraw, repaint, clean up, sharpen, recolour or move anything there, including rubble, debris, cracks, shadows and the pixel-art style.",
   "Keep the same camera, zoom and scale (one grid square is about {grid} px, which is {distance} {units}), lighting and art style.",
   "Do not zoom out, do not crop, do not add or remove objects unless asked.",
+  "Make the edit meet the untouched surroundings seamlessly at the red line.",
   "Return the whole image with the same framing and remove the red rectangle outline.",
   "No grid lines, text or labels."
 ].join(" ");
 
-/** Wcześniejsze domyślne szablony (W7-A, dwa obrazy): zapis równy któremuś z nich = nie zmieniany -> nowy domyślny. */
+/**
+ * Wcześniejsze domyślne szablony: zapis równy któremuś z nich = nie zmieniany -> nowy domyślny.
+ * [0] W7-A (dwa obrazy), [1] W7-B (jeden obraz z obrysem, przed zaostrzeniem granicy obrysu, W9).
+ */
 export const LEGACY_TILE_PROMPTS = Object.freeze([
   [
     "You get two images of the same top-down battle map.",
@@ -77,6 +84,15 @@ export const LEGACY_TILE_PROMPTS = Object.freeze([
     "(one grid square is about {grid} px in image 1, which is {distance} {units}).",
     "Make the edges of image 1 continue seamlessly into the surrounding map shown in image 2.",
     "Return only the edited image 1 with the same framing. Do not reproduce image 2 or the red rectangle. No grid lines, text, labels, borders or frames."
+  ].join(" "),
+  [
+    "This is a top-down battle map.",
+    "Edit ONLY the area inside the red rectangle: {description}.",
+    "Everything outside the red rectangle must stay exactly the same, pixel for pixel.",
+    "Keep the same camera, zoom and scale (one grid square is about {grid} px, which is {distance} {units}), lighting and art style.",
+    "Do not zoom out, do not crop, do not add or remove objects unless asked.",
+    "Return the whole image with the same framing and remove the red rectangle outline.",
+    "No grid lines, text or labels."
   ].join(" ")
 ]);
 
@@ -363,6 +379,150 @@ export function alphaRect(out, featherPx) {
   return { x: f / 2, y: f / 2, width: out.width - f, height: out.height - f, blur: f / 4 };
 }
 
+// ---------- W9: kafelek powiększony o zmiany modelu poza obrysem ----------
+
+/**
+ * Model (test właściciela, gpt-image-2.6-flare) przemalowuje obiekty przecinające obrys w całości, także poza nim; kafelek
+ * przycięty do zaznaczenia gubił tę część i zostawał szew. Porównanie wysłanego obrazu z wynikiem POZA strefą obrysu
+ * (zaznaczenie + obrys + margines) na uśrednionych komórkach, próg adaptacyjny do ogólnego szumu modelu, tylko skupiska
+ * dotykające strefy obrysu; kafelek = prostokąt zaznaczenia ∪ te skupiska.
+ *   cell     px obrazu analizy na komórkę (średnia w komórce = rozmycie; drobny szum znika)
+ *   minDiff  najmniejsza średnia różnica komórki (0..255, średnia z |dR|,|dG|,|dB|) uznawana za zmianę
+ *   noiseK   próg = max(minDiff, mediana + noiseK × MAD) różnic komórek poza strefą (model zmienia wszystko troszkę)
+ *   minCells skupisko mniejsze (w komórkach ponad progiem) = szum
+ *   bandK    strefa pominięta = zaznaczenie poszerzone o bandK × grubość obrysu + 1 px (czerwony obrys znika w wyniku)
+ */
+export const EXPAND_DEFAULTS = Object.freeze({ cell: 4, minDiff: 20, noiseK: 6, minCells: 3, bandK: 2 });
+/** Dłuższy bok obrazu analizy (wysłany obraz i wynik zmniejszone do tego rozmiaru przed porównaniem). */
+export const EXPAND_ANALYSIS_EDGE = 512;
+
+const median = (arr) => {
+  if (!arr.length) return 0;
+  const s = Float64Array.from(arr).sort();
+  const i = s.length >> 1;
+  return s.length % 2 ? s[i] : (s[i - 1] + s[i]) / 2;
+};
+
+/**
+ * Czysta analiza różnic (bez canvas). `a` = wysłany obraz, `b` = wynik modelu w tym samym kadrze i rozmiarze w×h (RGBA).
+ * @param {{a:ArrayLike<number>, b:ArrayLike<number>, w:number, h:number, sel:{x0,y0,x1,y1}, lw?:number, opts?:object}} p
+ *   sel = zaznaczenie w ułamkach 0..1 obrazu; lw = grubość obrysu w px TEGO obrazu
+ * @returns {{changed:boolean, rect:{x0,y0,x1,y1}, threshold:number, noise:{median:number, mad:number},
+ *   components:{x0,y0,x1,y1,cells:number,touch:boolean,kept:boolean}[]}}  rect w ułamkach (zawsze zawiera `sel`),
+ *   components w px obrazu
+ */
+export function expandFromDiff({ a, b, w, h, sel, lw = 1, opts = {} }) {
+  const o = { ...EXPAND_DEFAULTS, ...opts };
+  const cs = Math.max(1, Math.round(o.cell));
+  const gw = Math.ceil(w / cs), gh = Math.ceil(h / cs), n = gw * gh;
+  const sx0 = Math.floor(clamp(sel.x0, 0, 1) * w + 1e-6), sy0 = Math.floor(clamp(sel.y0, 0, 1) * h + 1e-6);
+  const sx1 = Math.ceil(clamp(sel.x1, 0, 1) * w - 1e-6), sy1 = Math.ceil(clamp(sel.y1, 0, 1) * h - 1e-6);
+  const m = Math.ceil(Math.max(0, num(lw, 1)) * o.bandK) + 1;
+  const ex0 = sx0 - m, ey0 = sy0 - m, ex1 = sx1 + m, ey1 = sy1 + m;
+  const diff = new Float32Array(n), valid = new Uint8Array(n), exc = new Uint8Array(n);
+  for (let cy = 0; cy < gh; cy++) {
+    for (let cx = 0; cx < gw; cx++) {
+      const i = cy * gw + cx;
+      const px0 = cx * cs, py0 = cy * cs, px1 = Math.min(w, px0 + cs), py1 = Math.min(h, py0 + cs);
+      let sum = 0, cnt = 0, tot = 0;
+      for (let y = py0; y < py1; y++) {
+        const inY = y >= ey0 && y < ey1;
+        for (let x = px0; x < px1; x++) {
+          tot++;
+          if (inY && x >= ex0 && x < ex1) { exc[i] = 1; continue; }
+          const k = (y * w + x) * 4;
+          sum += (Math.abs(a[k] - b[k]) + Math.abs(a[k + 1] - b[k + 1]) + Math.abs(a[k + 2] - b[k + 2])) / 3;
+          cnt++;
+        }
+      }
+      if (cnt >= tot * 0.25 && cnt > 0) { valid[i] = 1; diff[i] = sum / cnt; }
+    }
+  }
+  // szum modelu: komórki w całości poza strefą
+  const outside = [];
+  for (let i = 0; i < n; i++) if (valid[i] && !exc[i]) outside.push(diff[i]);
+  const med = median(outside);
+  const mad = median(outside.map((v) => Math.abs(v - med)));
+  const threshold = Math.max(o.minDiff, med + o.noiseK * mad);
+  const sig = new Uint8Array(n);
+  for (let i = 0; i < n; i++) if (valid[i] && diff[i] > threshold) sig[i] = 1;
+  // domknięcie o 1 komórkę (rozdarte przez przemalowanie skupisko = jedno); komórka strefy obrysu przy zmianie -> „dotyka”
+  const dil = new Uint8Array(n);
+  for (let cy = 0; cy < gh; cy++) for (let cx = 0; cx < gw; cx++) {
+    if (!sig[cy * gw + cx]) continue;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const x = cx + dx, y = cy + dy;
+      if (x >= 0 && y >= 0 && x < gw && y < gh) dil[y * gw + x] = 1;
+    }
+  }
+  const seen = new Uint8Array(n), components = [];
+  // skupiska w px; zaznaczenie dołączane niżej w DOKŁADNYCH ułamkach (zaokrąglenie do px analizy nie może go poszerzyć)
+  let rx0 = Infinity, ry0 = Infinity, rx1 = -Infinity, ry1 = -Infinity, changed = false;
+  for (let s = 0; s < n; s++) {
+    if (!dil[s] || seen[s]) continue;
+    const stack = [s];
+    seen[s] = 1;
+    let cells = 0, touch = false, c0 = Infinity, r0 = Infinity, c1 = -Infinity, r1 = -Infinity;
+    while (stack.length) {
+      const i = stack.pop();
+      const cx = i % gw, cy = (i / gw) | 0;
+      if (exc[i]) touch = true;
+      if (sig[i]) { cells++; c0 = Math.min(c0, cx); r0 = Math.min(r0, cy); c1 = Math.max(c1, cx); r1 = Math.max(r1, cy); }
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const x = cx + dx, y = cy + dy;
+        if (x < 0 || y < 0 || x >= gw || y >= gh) continue;
+        const j = y * gw + x;
+        if (dil[j] && !seen[j]) { seen[j] = 1; stack.push(j); }
+      }
+    }
+    if (!cells) continue;
+    const comp = { x0: c0 * cs, y0: r0 * cs, x1: Math.min(w, (c1 + 1) * cs), y1: Math.min(h, (r1 + 1) * cs), cells, touch, kept: false };
+    comp.kept = touch && cells >= o.minCells;
+    if (comp.kept) {
+      changed = true;
+      rx0 = Math.min(rx0, comp.x0); ry0 = Math.min(ry0, comp.y0); rx1 = Math.max(rx1, comp.x1); ry1 = Math.max(ry1, comp.y1);
+    }
+    components.push(comp);
+  }
+  const rect = changed
+    ? { x0: Math.max(0, rx0) / w, y0: Math.max(0, ry0) / h, x1: Math.min(w, rx1) / w, y1: Math.min(h, ry1) / h }
+    : { x0: clamp(sel.x0, 0, 1), y0: clamp(sel.y0, 0, 1), x1: clamp(sel.x1, 0, 1), y1: clamp(sel.y1, 0, 1) };
+  if (changed) {   // zaznaczenie zawsze w całości (zaokrąglenie do px nie może go uciąć)
+    rect.x0 = Math.min(rect.x0, clamp(sel.x0, 0, 1)); rect.y0 = Math.min(rect.y0, clamp(sel.y0, 0, 1));
+    rect.x1 = Math.max(rect.x1, clamp(sel.x1, 0, 1)); rect.y1 = Math.max(rect.y1, clamp(sel.y1, 0, 1));
+  }
+  return { changed, rect, threshold, noise: { median: med, mad }, components };
+}
+
+/**
+ * Ułamki obrazu (`frac` z expandFromDiff) -> prostokąt kafelka w px sceny: zaznaczenie `bbox` ∪ zmiany, na
+ * POWIĘKSZONYCH bokach dodatkowo `pad` px sceny (miękka krawędź leży wtedy na niezmienionej mapie), zaokrąglone na
+ * zewnątrz, przycięte do regionu (wysłany obraz) i `bounds` (płótno), nigdy mniejsze niż `bbox`. Bok rośnie dopiero
+ * od `minGrow` px sceny (mniej = zaokrąglenia).
+ * @returns {{rect:{x,y,width,height}, expanded:boolean, grow:{left,top,right,bottom}}}
+ */
+export function expandTileRect({ bbox, region, frac, bounds, pad = 0, minGrow = 2 }) {
+  const lim = (bounds ? intersect(region, bounds) : region) ?? region;
+  const fx = (f) => region.x + clamp(f, 0, 1) * region.width, fy = (f) => region.y + clamp(f, 0, 1) * region.height;
+  const bx1 = bbox.x + bbox.width, by1 = bbox.y + bbox.height;
+  const p = Math.max(0, num(pad, 0));
+  let x0 = bbox.x, y0 = bbox.y, x1 = bx1, y1 = by1;
+  if (frac) {
+    const cx0 = Math.floor(fx(frac.x0)), cy0 = Math.floor(fy(frac.y0)), cx1 = Math.ceil(fx(frac.x1)), cy1 = Math.ceil(fy(frac.y1));
+    if (bbox.x - cx0 >= minGrow) x0 = Math.max(lim.x, cx0 - p);
+    if (bbox.y - cy0 >= minGrow) y0 = Math.max(lim.y, cy0 - p);
+    if (cx1 - bx1 >= minGrow) x1 = Math.min(lim.x + lim.width, cx1 + p);
+    if (cy1 - by1 >= minGrow) y1 = Math.min(lim.y + lim.height, cy1 + p);
+  }
+  x0 = Math.min(x0, bbox.x); y0 = Math.min(y0, bbox.y); x1 = Math.max(x1, bx1); y1 = Math.max(y1, by1);
+  const grow = { left: bbox.x - x0, top: bbox.y - y0, right: x1 - bx1, bottom: y1 - by1 };
+  return {
+    rect: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 },
+    expanded: grow.left > 0 || grow.top > 0 || grow.right > 0 || grow.bottom > 0,
+    grow
+  };
+}
+
 /** Punkty kształtu w układzie prostokąta `rect` przeskalowanego o `scale` (maska, kontekst, plik kafelka). */
 export function pointsIn(points, rect, scale = 1, scaleY = scale) {
   return points.map((p) => ({ x: (p.x - rect.x) * scale, y: (p.y - rect.y) * scaleY }));
@@ -407,7 +567,9 @@ export function captureInclude(c) {
 /**
  * Dane Tile: bbox kształtu w px sceny, rotacja 0, elewacja `elevation` (domyślnie 0), sort nad kafelkami tej elewacji.
  * v14: x/y Tile to punkt KOTWICY kształtu (`texture.anchorX/Y`, domyślnie 0.5 = środek), nie lewy górny róg
- * (sprawdzone na żywo, lane 8: x/y = róg dało kafelek przesunięty o pół rozmiaru). Kotwica 0.5 podana jawnie.
+ * (sprawdzone na żywo, lane 8: x/y = róg dało kafelek przesunięty o pół rozmiaru). Kotwica podana jawnie.
+ * W9 (lane 8): Foundry zaokrągla Tile x/y do całych px, więc przy NIEPARZYSTYM boku środek (np. 2062,5) przesuwał kafelek
+ * o pół piksela; wtedy kotwica = floor(bok/2)/bok (x/y całkowite, lewy górny róg dokładnie w bbox), przy parzystym 0.5.
  * @param {{x,y,width,height}} bbox
  * W8: `hidden` (domyślnie true): nowy kafelek widzi tylko MG (półprzezroczysty), gracze dopiero po odkryciu.
  * @param {{elevation?:number, sort?:number}[]} existing  kafelki sceny
@@ -415,10 +577,11 @@ export function captureInclude(c) {
 export function tileData({ bbox, src, existing = [], elevation = 0, hidden = true, flags }) {
   const same = existing.filter((t) => num(t.elevation, 0) === elevation).map((t) => num(t.sort, 0));
   const sort = same.length ? Math.max(...same) + 1 : 0;
+  const hw = Math.floor(bbox.width / 2), hh = Math.floor(bbox.height / 2);
   return {
-    x: bbox.x + bbox.width / 2, y: bbox.y + bbox.height / 2, width: bbox.width, height: bbox.height,
+    x: bbox.x + hw, y: bbox.y + hh, width: bbox.width, height: bbox.height,
     rotation: 0, elevation, sort, hidden: !!hidden,
-    texture: { src, anchorX: 0.5, anchorY: 0.5 },
+    texture: { src, anchorX: bbox.width > 0 ? hw / bbox.width : 0.5, anchorY: bbox.height > 0 ? hh / bbox.height : 0.5 },
     ...(flags ? { flags } : {})
   };
 }

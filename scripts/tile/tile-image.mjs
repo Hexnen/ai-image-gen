@@ -1,6 +1,9 @@
 // W7-A/W7-B AI Tile: obrazy w przeglądarce (wycinek otoczenia, obrys zaznaczenia, wynik -> plik kafelka).
 // Geometria w tile-core.mjs (czysta); tu tylko canvas 2D i PIXI.
-import { tileRaster, alphaRect, outlineBands, OUTLINE_COLOR, captureInclude } from "./tile-core.mjs";
+import {
+  tileRaster, alphaRect, outlineBands, OUTLINE_COLOR, captureInclude, resultCrop, selIn, expandFromDiff, expandTileRect,
+  EXPAND_DEFAULTS, EXPAND_ANALYSIS_EDGE
+} from "./tile-core.mjs";
 
 export function newCanvas(w, h) {
   return Object.assign(document.createElement("canvas"), { width: Math.max(1, Math.round(w)), height: Math.max(1, Math.round(h)) });
@@ -175,6 +178,42 @@ export function outlinedImage(src, sel, background = "#000000") {
   for (const b of outlineBands(sel, w, h).bands) ctx.fillRect(b.x, b.y, b.width, b.height);
   return c;
 }
+// ---------- W9: zmiany poza obrysem -> powiększony prostokąt kafelka ----------
+
+/**
+ * Porównaj wysłany obraz (`send`, kanwa z obrysem) z wynikiem modelu w tym samym kadrze (wynik przycięty jak w
+ * tileRaster: `resultCrop`), oba zmniejszone do EXPAND_ANALYSIS_EDGE (zmniejszenie = dodatkowe rozmycie), i policz
+ * prostokąt kafelka (tile-core `expandFromDiff` + `expandTileRect`). Na powiększonych bokach margines = miękka krawędź
+ * + jedna komórka analizy (px sceny), żeby wygaszanie leżało na niezmienionej mapie.
+ * @param {HTMLCanvasElement} send
+ * @param {ImageBitmap|HTMLCanvasElement} result
+ * @param {{region, tileRect, ratio, feather}} geom
+ * @param {{bounds?:{x,y,width,height}}} [o]
+ * @returns {{rect, expanded:boolean, grow, diff}}
+ */
+export function measureExpansion(send, result, geom, { bounds } = {}) {
+  const k = Math.min(1, EXPAND_ANALYSIS_EDGE / Math.max(send.width, send.height));
+  const w = Math.max(1, Math.round(send.width * k)), h = Math.max(1, Math.round(send.height * k));
+  const read = (draw) => {
+    const c = newCanvas(w, h);
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    ctx.imageSmoothingQuality = "high";
+    draw(ctx);
+    return ctx.getImageData(0, 0, w, h).data;
+  };
+  const crop = resultCrop(result.width, result.height, geom.ratio ?? geom.region.width / geom.region.height);
+  const a = read((ctx) => ctx.drawImage(send, 0, 0, w, h));
+  const b = read((ctx) => ctx.drawImage(result, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, w, h));
+  const sel = selIn(geom.tileRect, geom.region);
+  const lw = outlineBands(sel, send.width, send.height).lw * k;
+  const diff = expandFromDiff({ a, b, w, h, sel, lw });
+  const cellScene = (EXPAND_DEFAULTS.cell / w) * geom.region.width;
+  const pad = Math.ceil(Math.max(0, Number(geom.feather) || 0) + cellScene);
+  // bok rośnie dopiero o co najmniej jedną komórkę analizy (mniej = zaokrąglenie przy zmniejszeniu, nie zmiana)
+  const minGrow = Math.max(2, Math.ceil(cellScene));
+  return { ...expandTileRect({ bbox: geom.tileRect, region: geom.region, frac: diff.changed ? diff.rect : null, bounds, pad, minGrow }), diff };
+}
+
 // ---------- wynik -> plik kafelka ----------
 
 /**

@@ -8,7 +8,8 @@ import {
   geminiSizeFor, planRegion, contextRect, selIn, outlineBands, positionText, inputEstimate, resultCrop, tileRaster, alphaRect,
   pointsIn, tileData, renderTilePrompt, gridInEdit, packGeometry, unpackGeometry, DEFAULT_TILE_PROMPT, TILE_TYPE_KEY, SHAPES,
   CONTEXT_FACTOR, CONTEXT_FACTORS, INPUT_IMAGES, OUTLINE_COLOR, OUTLINE_FRAC, OUTLINE_MIN, DEFAULT_TILE_OPTS,
-  normalizeTileOptions, LEGACY_TILE_PROMPTS, isLegacyTilePrompt, tilePromptTemplate, captureInclude, CAPTURE_MAP_LAYERS
+  normalizeTileOptions, LEGACY_TILE_PROMPTS, isLegacyTilePrompt, tilePromptTemplate, captureInclude, CAPTURE_MAP_LAYERS,
+  expandFromDiff, expandTileRect, EXPAND_DEFAULTS
 } from "../scripts/tile/tile-core.mjs";
 import { normalizeOpenAISize } from "../scripts/providers/models.mjs";
 import { openaiInputTokens } from "../scripts/image-cost.mjs";
@@ -229,11 +230,18 @@ test("pointsIn maps scene points into a scaled rectangle", () => {
   assert.deepEqual(pointsIn([{ x: 110, y: 220 }], { x: 100, y: 200 }, 2, 3), [{ x: 20, y: 60 }]);
 });
 
-test("tileData: v14 x/y = centre (anchor 0.5), rotation 0, sort above tiles of the same elevation", () => {
+test("tileData: v14 x/y = anchor (centre, whole px), rotation 0, sort above tiles of the same elevation", () => {
   const d = tileData({ bbox: { x: 1, y: 2, width: 3, height: 4 }, src: "a.webp", existing: [{ elevation: 0, sort: 5 }, { elevation: 20, sort: 99 }, { sort: 7 }] });
-  assert.deepEqual({ x: d.x, y: d.y, width: d.width, height: d.height, rotation: d.rotation, elevation: d.elevation, sort: d.sort }, { x: 2.5, y: 4, width: 3, height: 4, rotation: 0, elevation: 0, sort: 8 });
+  assert.deepEqual({ x: d.x, y: d.y, width: d.width, height: d.height, rotation: d.rotation, elevation: d.elevation, sort: d.sort }, { x: 2, y: 4, width: 3, height: 4, rotation: 0, elevation: 0, sort: 8 });
   assert.equal(d.texture.src, "a.webp");
-  assert.deepEqual([d.texture.anchorX, d.texture.anchorY], [0.5, 0.5]);
+  // W9: Foundry rounds Tile x/y to whole px: an odd side gets the anchor floor(side/2)/side so x/y are integers
+  assert.deepEqual([d.texture.anchorX, d.texture.anchorY], [1 / 3, 0.5]);
+  for (const b of [{ x: 1400, y: 1750, width: 1325, height: 701 }, { x: 7, y: 9, width: 1, height: 2 }, { x: 1400, y: 1750, width: 1050, height: 700 }]) {
+    const t = tileData({ bbox: b, src: "o" });
+    assert.ok(Number.isInteger(t.x) && Number.isInteger(t.y), JSON.stringify(t));
+    near(t.x - t.width * t.texture.anchorX, b.x, 1e-9); near(t.y - t.height * t.texture.anchorY, b.y, 1e-9);
+  }
+  assert.deepEqual([tileData({ bbox: { x: 0, y: 0, width: 1050, height: 700 }, src: "e" }).texture.anchorX, tileData({ bbox: { x: 0, y: 0, width: 1050, height: 700 }, src: "e" }).texture.anchorY], [0.5, 0.5], "even sides: centre");
   const e = tileData({ bbox: { x: 1400, y: 1750, width: 1050, height: 700 }, src: "c" });
   assert.deepEqual([e.x - e.width * e.texture.anchorX, e.y - e.height * e.texture.anchorY], [1400, 1750], "top-left back at the selection");
   assert.equal(tileData({ bbox: { x: 0, y: 0, width: 1, height: 1 }, src: "b" }).sort, 0);
@@ -247,7 +255,10 @@ test("prompt: one picture, edit only inside the red rectangle, keep framing, rem
   const p = renderTilePrompt(DEFAULT_TILE_PROMPT, base);
   assert.match(p, /^This is a top-down battle map\./);
   assert.match(p, /Edit ONLY the area inside the red rectangle: a collapsed wall with rubble\./);
-  assert.match(p, /Everything outside the red rectangle must stay exactly the same, pixel for pixel\./);
+  assert.match(p, /Everything outside the red rectangle must stay exactly the same, pixel for pixel/);
+  // W9: the outline is a hard border, also for objects that cross it; debris and pixel-art style outside stay
+  assert.match(p, /if an object crosses the red line, change only the part of it inside the rectangle and leave the part outside exactly as it is/);
+  assert.match(p, /rubble, debris, cracks, shadows and the pixel-art style/);
   assert.match(p, /Do not zoom out, do not crop, do not add or remove objects unless asked\./);
   assert.match(p, /Return the whole image with the same framing and remove the red rectangle outline\./);
   assert.match(p, /142 px/);
@@ -260,8 +271,13 @@ test("prompt: one picture, edit only inside the red rectangle, keep framing, rem
   near(gridInEdit(100, { width: 1536 }, { width: 2100 }), 73.1428, 0.001);
 });
 
-test("prompt migration: the earlier default (W7-A, two images) becomes the new default; own templates stay", () => {
-  assert.equal(LEGACY_TILE_PROMPTS.length >= 1, true);
+test("prompt migration: the earlier defaults (W7-A two images, W7-B one picture) become the new default; own templates stay", () => {
+  assert.equal(LEGACY_TILE_PROMPTS.length >= 2, true);
+  const w7b = LEGACY_TILE_PROMPTS[1];
+  assert.match(w7b, /^This is a top-down battle map\. Edit ONLY the area inside the red rectangle: \{description\}\. Everything outside the red rectangle must stay exactly the same, pixel for pixel\. Keep/);
+  assert.ok(isLegacyTilePrompt(w7b) && isLegacyTilePrompt(w7b.replace(/ /g, "\n")));
+  assert.equal(tilePromptTemplate(w7b), DEFAULT_TILE_PROMPT);
+  assert.equal(tilePromptTemplate(w7b + " Use warm colours."), w7b + " Use warm colours.", "an edited W7-B template stays the user's own");
   const old = LEGACY_TILE_PROMPTS[0];
   assert.match(old, /You get two images/);
   assert.ok(isLegacyTilePrompt(old));
@@ -275,11 +291,15 @@ test("prompt migration: the earlier default (W7-A, two images) becomes the new d
 });
 
 test("window options: defaults, context factor choices, old `mask` key ignored, clamping", () => {
-  assert.deepEqual({ ...DEFAULT_TILE_OPTS }, { feather: 8, context: 2, count: 1 });
+  assert.deepEqual({ ...DEFAULT_TILE_OPTS }, { feather: 8, context: 2, count: 1, expand: true });
   assert.ok(!("mask" in DEFAULT_TILE_OPTS) && !("sendMask" in DEFAULT_TILE_OPTS));
-  assert.deepEqual(normalizeTileOptions({ feather: 8, tokens: false, mask: true, count: 1 }), { feather: 8, context: 2, count: 1 }, "W7-A save");
-  assert.deepEqual(normalizeTileOptions(), { feather: 8, context: 2, count: 1 });
-  assert.deepEqual(normalizeTileOptions(null), { feather: 8, context: 2, count: 1 });
+  assert.deepEqual(normalizeTileOptions({ feather: 8, tokens: false, mask: true, count: 1 }), { feather: 8, context: 2, count: 1, expand: true }, "W7-A save");
+  assert.deepEqual(normalizeTileOptions(), { feather: 8, context: 2, count: 1, expand: true });
+  assert.deepEqual(normalizeTileOptions(null), { feather: 8, context: 2, count: 1, expand: true });
+  // W9: expand on by default (also for saves from before W9), off only when switched off
+  assert.equal(normalizeTileOptions({ expand: false }).expand, false);
+  assert.equal(normalizeTileOptions({ expand: "false" }).expand, false);
+  assert.equal(normalizeTileOptions({ expand: true }).expand, true);
   assert.equal(normalizeTileOptions({ context: 1.5 }).context, 1.5);
   assert.equal(normalizeTileOptions({ context: "3" }).context, 3);
   assert.equal(normalizeTileOptions({ context: 5 }).context, 2);
@@ -322,6 +342,122 @@ test("W8 capture: ONLY the map (background + moinen-maps map layers) and the til
   assert.equal(inc(null), false);
   // no window options for tokens / effects any more (old saves are ignored)
   assert.ok(!("tokens" in normalizeTileOptions({ tokens: true })) && !("effects" in normalizeTileOptions({ effects: true })));
+});
+
+// ---------- W9: tile expanded by the model's changes outside the outline ----------
+
+// synthetic pictures: 240×160, selection 25-75 % (x 60..180, y 40..120), red outline 2 px just outside it
+const EW = 240, EH = 160, ESEL = { x0: 0.25, y0: 0.25, x1: 0.75, y1: 0.75 }, ELW = 2;
+const rnd = (seed) => { let t = seed >>> 0; return () => { t = (t * 1664525 + 1013904223) >>> 0; return t / 2 ** 32; }; };
+/** map-like texture (stone floor with cracks); `outline` = the sent picture with the red outline */
+function mapPicture({ outline = true } = {}) {
+  const r = rnd(7), a = new Uint8ClampedArray(EW * EH * 4);
+  for (let y = 0; y < EH; y++) for (let x = 0; x < EW; x++) {
+    const k = (y * EW + x) * 4, v = 90 + ((x * 7 + y * 13) % 40) + Math.floor(r() * 30) - ((x % 23 === 0 || y % 31 === 0) ? 50 : 0);
+    a[k] = v; a[k + 1] = v - 10; a[k + 2] = v - 25; a[k + 3] = 255;
+  }
+  if (outline) {
+    for (const b of outlineBands(ESEL, EW, EH).bands) for (let y = b.y; y < b.y + b.height; y++) for (let x = b.x; x < b.x + b.width; x++) {
+      const k = (y * EW + x) * 4; a[k] = 255; a[k + 1] = 0; a[k + 2] = 0;
+    }
+  }
+  return a;
+}
+/** the "model result": the clean map with a little noise and a colour shift everywhere, no outline, selection repainted */
+function modelResult({ noise = 6, shift = 3, seed = 11 } = {}) {
+  const r = rnd(seed), b = mapPicture({ outline: false });
+  const inner = outlineBands(ESEL, EW, EH).inner;
+  for (let y = 0; y < EH; y++) for (let x = 0; x < EW; x++) {
+    const k = (y * EW + x) * 4;
+    if (x >= inner.x0 && x < inner.x1 && y >= inner.y0 && y < inner.y1) { b[k] = 40 + r() * 40; b[k + 1] = 120 + r() * 60; b[k + 2] = 200; continue; }
+    for (let c = 0; c < 3; c++) b[k + c] = b[k + c] + shift + Math.round((r() - 0.5) * 2 * noise);
+  }
+  return b;
+}
+const paint = (img, x0, y0, x1, y1, rgb) => {
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const k = (y * EW + x) * 4; img[k] = rgb[0]; img[k + 1] = rgb[1]; img[k + 2] = rgb[2]; }
+};
+const REGION = { x: 1000, y: 1000, width: 2400, height: 1600 };       // 10 scene px per picture px
+const EBBOX = { x: 1600, y: 1400, width: 1200, height: 800 };          // = ESEL in REGION
+
+test("W9 expand: no changes outside the outline (noise, colour shift, outline removed) -> same rectangle", () => {
+  const a = mapPicture();
+  for (const o of [{}, { noise: 14, shift: 0 }, { noise: 4, shift: 25 }]) {
+    const d = expandFromDiff({ a, b: modelResult(o), w: EW, h: EH, sel: ESEL, lw: ELW });
+    assert.equal(d.changed, false, JSON.stringify({ o, t: d.threshold, kept: d.components.filter((c) => c.kept) }));
+    assert.deepEqual(d.rect, ESEL);
+    const e = expandTileRect({ bbox: EBBOX, region: REGION, frac: d.changed ? d.rect : null, pad: 20 });
+    assert.deepEqual(e.rect, EBBOX);
+    assert.equal(e.expanded, false);
+  }
+  assert.equal(expandFromDiff({ a, b: a, w: EW, h: EH, sel: ESEL, lw: ELW }).changed, false, "identical picture");
+});
+
+test("W9 expand: an object straddling the right edge repainted also outside -> rectangle grows to cover it (+pad), other sides stay", () => {
+  const a = mapPicture(), b = modelResult();
+  paint(b, 150, 70, 215, 100, [60, 140, 205]);   // the repainted tank: inside AND 35 px outside the right edge
+  const d = expandFromDiff({ a, b, w: EW, h: EH, sel: ESEL, lw: ELW });
+  assert.equal(d.changed, true);
+  assert.ok(d.rect.x1 * EW >= 214 && d.rect.x1 * EW <= 220, `right edge ${d.rect.x1 * EW}`);
+  assert.deepEqual([d.rect.x0, d.rect.y0, d.rect.y1], [ESEL.x0, ESEL.y0, ESEL.y1], "only the right side moves");
+  // selection edges off the analysis pixel grid stay exact (rounding must not grow the untouched sides; live lane 8 case)
+  const s3 = { ...ESEL, x0: 0.2508, y0: 0.2496 };
+  const d3 = expandFromDiff({ a, b, w: EW, h: EH, sel: s3, lw: ELW });
+  assert.deepEqual([d3.rect.x0, d3.rect.y0, d3.rect.y1], [s3.x0, s3.y0, s3.y1]);
+  const e = expandTileRect({ bbox: EBBOX, region: REGION, frac: d.rect, pad: 20 });
+  assert.equal(e.expanded, true);
+  assert.deepEqual({ ...e.grow, right: 0 }, { left: 0, top: 0, right: 0, bottom: 0 });
+  assert.equal(e.rect.x + e.rect.width, Math.ceil(REGION.x + d.rect.x1 * REGION.width) + 20);
+  assert.ok(e.rect.x + e.rect.width >= 1000 + 215 * 10 + 20);
+  assert.deepEqual([e.rect.x, e.rect.y, e.rect.height], [EBBOX.x, EBBOX.y, EBBOX.height]);
+  // the Tile data follows the expanded rectangle (v14: x/y = the centre anchor)
+  const t = tileData({ bbox: e.rect, src: "t.webp" });
+  assert.deepEqual([t.x - t.width * t.texture.anchorX, t.y - t.height * t.texture.anchorY, t.width, t.height], [e.rect.x, e.rect.y, e.rect.width, e.rect.height]);
+  // left + top too (object over the top-left corner)
+  const b2 = modelResult();
+  paint(b2, 30, 20, 90, 60, [230, 200, 40]);
+  const d2 = expandFromDiff({ a, b: b2, w: EW, h: EH, sel: ESEL, lw: ELW });
+  assert.ok(d2.rect.x0 * EW <= 30 && d2.rect.x0 * EW >= 26 && d2.rect.y0 * EH <= 20 && d2.rect.y0 * EH >= 16, JSON.stringify(d2.rect));
+  assert.deepEqual([d2.rect.x1, d2.rect.y1], [ESEL.x1, ESEL.y1]);
+});
+
+test("W9 expand: unrelated far changes and tiny specks are ignored", () => {
+  const a = mapPicture(), b = modelResult();
+  paint(b, 4, 4, 30, 24, [250, 250, 250]);        // far from the outline (a different object)
+  paint(b, 205, 130, 230, 150, [0, 0, 0]);        // another far blob, bottom right
+  paint(b, 188, 60, 190, 62, [255, 255, 0]);      // 2×2 speck just outside the right edge
+  const d = expandFromDiff({ a, b, w: EW, h: EH, sel: ESEL, lw: ELW });
+  assert.equal(d.changed, false, JSON.stringify(d.components));
+  assert.deepEqual(d.rect, ESEL);
+  assert.ok(d.components.some((c) => !c.touch && c.cells >= EXPAND_DEFAULTS.minCells), "the far blobs were seen and dropped");
+  // a far blob next to a real straddling change does not drag the rectangle to it
+  paint(b, 150, 70, 200, 100, [60, 140, 205]);
+  const d2 = expandFromDiff({ a, b, w: EW, h: EH, sel: ESEL, lw: ELW });
+  assert.equal(d2.changed, true);
+  assert.ok(d2.rect.x1 * EW <= 204 && d2.rect.y1 === ESEL.y1 && d2.rect.y0 === ESEL.y0 && d2.rect.x0 === ESEL.x0, JSON.stringify(d2.rect));
+});
+
+test("W9 expand: clamped to the sent picture and to the scene bounds; never smaller than the selection", () => {
+  const a = mapPicture(), b = modelResult();
+  paint(b, 90, 100, 150, 160, [200, 60, 200]);    // straddles the bottom edge down to the picture's edge
+  const d = expandFromDiff({ a, b, w: EW, h: EH, sel: ESEL, lw: ELW });
+  assert.equal(d.changed, true);
+  assert.equal(d.rect.y1, 1, "picture edge");
+  const e = expandTileRect({ bbox: EBBOX, region: REGION, frac: d.rect, pad: 40 });
+  assert.equal(e.rect.y + e.rect.height, REGION.y + REGION.height, "the sent area, pad clamped");
+  const bounds = { x: 0, y: 0, width: 5000, height: 2500 };
+  const e2 = expandTileRect({ bbox: EBBOX, region: REGION, frac: d.rect, pad: 40, bounds });
+  assert.equal(e2.rect.y + e2.rect.height, 2500, "the scene bounds");
+  assert.deepEqual([e2.rect.x, e2.rect.y, e2.rect.width], [EBBOX.x, EBBOX.y, EBBOX.width]);
+  // out-of-range fractions / fractions inside the selection: never below the selection, never past the region
+  const e3 = expandTileRect({ bbox: EBBOX, region: REGION, frac: { x0: -1, y0: 0.5, x1: 2, y1: 0.5 }, pad: 0 });
+  assert.deepEqual(e3.rect, { x: REGION.x, y: EBBOX.y, width: REGION.width, height: EBBOX.height });
+  assert.deepEqual(expandTileRect({ bbox: EBBOX, region: REGION, frac: null, pad: 50 }).rect, EBBOX);
+  // a growth under minGrow scene px is rounding, not a change
+  assert.equal(expandTileRect({ bbox: EBBOX, region: REGION, frac: { ...ESEL, x1: ESEL.x1 + 1 / REGION.width }, pad: 30 }).expanded, false);
+  // selection at the picture's edge (clipped surroundings): nothing breaks, nothing grows on an identical picture
+  const s2 = { x0: 0, y0: 0.25, x1: 0.5, y1: 0.75 };
+  assert.deepEqual(expandFromDiff({ a, b: a, w: EW, h: EH, sel: s2, lw: ELW }).rect, s2);
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);

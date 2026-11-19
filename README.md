@@ -61,14 +61,20 @@ GM only. Left toolbar → **Moinens AI Gen** → **AI Tile** (square icon).
    same single picture; the tile is pasted on the same scene when the result arrives (several versions: the usual
    "ready to pick" notification opens the versions window).
 
-Known limit: an object lying across the red frame may be changed only partly (the part inside the rectangle), and the
-pasted tile then cuts it at the rectangle's edge; draw the rectangle around whole objects. The size limit of the type
+Objects across the red frame: the prompt tells the model the frame is a hard border (change only the part inside,
+leave everything outside as it is, debris and pixel-art style included). Models still sometimes repaint such an object
+as a whole, also outside the frame. With **Expand tile to cover changes outside the outline** (on by default, Now
+only) the returned picture is compared with the sent one outside the frame (downscaled, the frame itself and the
+model's slight overall noise ignored); changes that continue from the rectangle make the tile larger (still a
+rectangle, at most the sent area and the scene), with the soft edge on the new border, so no seam is left. Unrelated
+changes far from the frame are ignored. The versions window marks such a version "Expanded: W×H px" and previews it at
+its real size. Batch results are not expanded (the sent picture is not kept until the result arrives). The size limit of the type
 caps the sent picture: with the default 2048 px and 2× surroundings, a rectangle wider than about 1000 scene px is sent
 slightly below its native resolution (raise the limit in the type for more pixels, at a higher cost).
 
 Model, quality, size limit (the longer side of the request), the prompt template (fields `{description}`, `{grid}`,
 `{distance}`, `{units}`, `{scene}`, `{pos}`) and output are set in the settings window under the type **AI Tile**. A
-saved template equal to the earlier default (two pictures) is replaced by the new default on load; edited templates
+saved template equal to an earlier default (two pictures, or the first single-picture text) is replaced by the new default on load; edited templates
 are kept. Lighting, fog, weather and overhead tiles never go into the picture. Only rectangles for now. The
 single-picture method was checked by the owner with gpt-image-2.6-flare (medium): framing and scale kept, edit only
 inside the frame, frame removed; Gemini / OpenRouter and Batch have not been checked with real calls.

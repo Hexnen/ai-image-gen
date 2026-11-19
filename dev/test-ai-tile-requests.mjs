@@ -104,6 +104,28 @@ await test("tile flow: Now sends the one picture as editImage, no extra refs, no
   assert.match(tpl, /name="context"/);
 });
 
+await test("W9 tile flow: every result (test seam or provider) goes through the change analysis; file + Tile use the candidate's rectangle", () => {
+  const src = fs.readFileSync(new URL("../scripts/tile/tile-flow.mjs", import.meta.url), "utf8");
+  // the test seam replaces only executeGeneration: its candidates take the same path as real ones
+  assert.match(src, /await \(tileTestHooks\.execute \?\? executeGeneration\)\(/);
+  assert.match(src, /\.\.\.\(await processCandidate\(job, c\.blob\)\)/);
+  assert.match(src, /if \(job\.opts\?\.expand !== false && job\.send\)/);
+  assert.match(src, /measureExpansion\(job\.send, bmp, job\.geom, \{ bounds: job\.bounds \}\)/);
+  assert.match(src, /const rect = expansion\?\.expanded \? expansion\.rect : job\.tileRect;/);
+  assert.match(src, /processResult\(bmp, \{ \.\.\.job\.geom, tileRect: rect \}/, "the saved file is cut to the expanded rectangle");
+  assert.match(src, /createTile\(scene, cand\.rect \?\? job\.tileRect, path/, "the Tile document follows the same rectangle");
+  assert.match(src, /bounds: \{ x: bounds\.x, y: bounds\.y, width: bounds\.width, height: bounds\.height \}/);
+  const app = fs.readFileSync(new URL("../scripts/tile/tile-app.mjs", import.meta.url), "utf8");
+  assert.match(app, /this\.job\.opts = \{ \.\.\.this\.job\.opts, expand: this\.opts\.expand \}/, "the checkbox state reaches the job");
+  assert.match(app, /this\.preview\.setRect\(this\.rect\)/, "the map preview shows the candidate's rectangle");
+  const tpl = fs.readFileSync(new URL("../templates/tile-dialog.hbs", import.meta.url), "utf8");
+  assert.match(tpl, /type="checkbox" name="expand" \{\{#if expand\}\}checked\{\{\/if\}\}/);
+  for (const l of ["en", "pl"]) {
+    const j = JSON.parse(fs.readFileSync(new URL(`../lang/${l}.json`, import.meta.url), "utf8"));
+    for (const k of ["Expand", "ExpandHint", "Expanded", "ExpandedHint"]) assert.ok(j[`AIIMG.Tile.${k}`], `${l} ${k}`);
+  }
+});
+
 await test("batch apply routes tile items to the tile branch; picker routes tile batches to the tile window", () => {
   const a = fs.readFileSync(new URL("../scripts/batch/apply.mjs", import.meta.url), "utf8");
   assert.match(a, /if \(item\.meta\?\.tile\)[\s\S]*applyTileBatchItem\(item, blob, rec, savedPath, \{ candidateDir \}\)/);

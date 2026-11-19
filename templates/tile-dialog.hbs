@@ -24,6 +24,8 @@
       <input type="number" name="feather" min="0" max="256" step="1" value="{{feather}}" {{#if busy}}disabled{{/if}}></label>
     <label data-tooltip="AIIMG.Tile.ContextHint"><span>{{localize "AIIMG.Tile.Context"}}</span>
       <select name="context" {{#if busy}}disabled{{/if}}>{{#each contextOptions}}<option value="{{value}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}</select></label>
+    <label class="aiimg-tile-expand" data-tooltip="AIIMG.Tile.ExpandHint"><input type="checkbox" name="expand" {{#if expand}}checked{{/if}} {{#if busy}}disabled{{/if}}>
+      <span>{{localize "AIIMG.Tile.Expand"}}</span></label>
   </div>
 
   <fieldset class="aiimg-tile-mode">

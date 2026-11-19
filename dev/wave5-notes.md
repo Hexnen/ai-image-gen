@@ -1393,3 +1393,80 @@ Wszystkie obrazy obejrzane. Po teście kafelek testowy i pliki skasowane, karta 
 odświeżył). W tej karcie PIERWSZE wywołanie renderu zaraz po imporcie dało pusty obraz (kolejne poprawne); w produkcji
 `captureRegion` auto wtedy przechodzi na plan B — niezwiązane z tą zmianą, nie badane dalej. Prawdziwa edycja modelu
 po zmianie (płatna) nie była robiona: czy szew zniknie, sprawdzi właściciel.
+
+## W9: AI Tile: edycje poza obrysem (ostrzejszy prompt + kafelek powiększany o zmiany modelu)
+
+**Powód (właściciel, prawdziwy model gpt-image-2.6-flare):** „dlaczego edytuje poza zaznaczeniem”. Model dostaje jeden
+obraz (otoczenie 2× z czerwonym obrysem) i zwraca cały; obiekt przecinający obrys przemalowuje w całości, także poza
+nim, a kafelek był przycinany do zaznaczenia, więc część poza obrysem przepadała i zostawał szew (w środku nowe, obok
+stare). Wersja modułu bez zmian, nic nie wypchnięte.
+
+**(1) Prompt.** `DEFAULT_TILE_PROMPT` (tile-core): obrys = twarda granica („if an object crosses the red line, change
+only the part of it inside the rectangle and leave the part outside exactly as it is, even if that cuts the object”),
+poza obrysem nic nie przerysowywać / czyścić / wyostrzać / przebarwiać ani przesuwać, wprost z gruzem, odłamkami,
+rysami, cieniami i stylem pixel-art; „Make the edit meet the untouched surroundings seamlessly at the red line”. Reszta
+jak w W7-B. Poprzedni domyślny (W7-B) dopisany jako `LEGACY_TILE_PROMPTS[1]`, więc zapisany niezmieniony stary domyślny
+-> nowy przy starcie (`module.mjs`, bez zmian kodu) i w `tilePromptTemplate`; własne szablony (także W7-B z dopiskiem)
+zostają.
+
+**(2) Kafelek powiększany o zmiany poza obrysem (Teraz / Fast).**
+- `tile-core.mjs` (czyste, testowane): `expandFromDiff({a, b, w, h, sel, lw, opts})` = wysłany obraz vs wynik w tym
+  samym kadrze, komórki 4×4 px obrazu analizy (średnia = rozmycie), strefa pominięta = zaznaczenie + obrys + 2× grubość
+  obrysu + 1 px (obrys znika w wyniku), próg = max(20, mediana + 6 × MAD różnic komórek poza strefą; model zmienia
+  wszystko troszkę), domknięcie o 1 komórkę, skupiska 8-spójne; zostają tylko skupiska DOTYKAJĄCE strefy obrysu i
+  ≥ 3 komórek; wynik = zaznaczenie (dokładne ułamki) ∪ ich bbox. `expandTileRect({bbox, region, frac, bounds, pad,
+  minGrow})` = ułamki -> px sceny, na powiększonych bokach + `pad`, przycięte do regionu (wysłany obszar) i `bounds`
+  (płótno), nigdy mniejsze niż zaznaczenie, bok rośnie od `minGrow`. `EXPAND_DEFAULTS`, `EXPAND_ANALYSIS_EDGE` (512).
+- `tile-image.mjs` `measureExpansion(send, result, geom, {bounds})`: oba obrazy zmniejszone do 512 px dłuższego boku
+  (wynik przycięty `resultCrop` jak w `tileRaster`), grubość obrysu z `outlineBands`, `pad` = miękka krawędź + jedna
+  komórka (px sceny), `minGrow` = jedna komórka (zaokrąglenie przy zmniejszeniu to nie zmiana).
+- `tile-flow.mjs`: `processCandidate(job, blob)` (jedna bitmapa: analiza + `processResult` z `tileRect` = prostokąt
+  kandydata); kandydat ma pola `rect` i `expansion` ({expanded, grow, threshold, noise} albo null); `acceptVariant`
+  zapisuje plik i tworzy Tile z `cand.rect ?? job.tileRect`; `job.bounds` = `canvas.dimensions.rect`. Błąd analizy =
+  ostrzeżenie w konsoli, kafelek = zaznaczenie. Test seam `tileTestHooks.execute` nadal zastępuje tylko
+  `executeGeneration`, więc jego wyniki idą tą samą drogą.
+- Opcja okna `expand` (domyślnie wł., także dla zapisów sprzed W9; `normalizeTileOptions`), checkbox „Expand tile to
+  cover changes outside the outline” / „Powiększ kafelek o zmiany poza obrysem” z podpowiedzią; zmiana zapisuje opcje
+  i trafia do zadania bez ponownego przygotowania. Okno wersji: karta „Expanded: W×H px” / „Powiększony: …”, podgląd na
+  mapie i „pan” w prostokącie wybranej wersji (`MapPreview.setRect`). Klucze pl/en: `AIIMG.Tile.Expand`, `ExpandHint`,
+  `Expanded`, `ExpandedHint`. CSS: dwie reguły. README: opis + ograniczenie.
+- `tileData` (znalezione na lane 8): Foundry v14 zaokrągla Tile x/y do całych px (`x.integer`), więc przy NIEPARZYSTYM
+  boku środek (np. 2062,5 -> 2063) przesuwał kafelek o pół piksela (dotyczyło też zwykłych zaznaczeń o nieparzystym
+  boku). Teraz x/y = róg + floor(bok/2), kotwica = floor(bok/2)/bok (0,5 przy parzystym), róg dokładnie w bbox.
+- Batch: bez powiększania (wysłany obraz nie jest przechowywany do przyjścia wyniku); kafelek = zaznaczenie jak dotąd.
+
+**Testy.** `dev/test-ai-tile-core.mjs` 28 (nowe 4 na syntetycznych obrazach 240×160 z teksturą mapy, obrysem, szumem i
+przesunięciem kolorów modelu: brak zmian poza obrysem (3 poziomy szumu/przesunięcia, też obraz identyczny) -> ten sam
+prostokąt; blob przez prawą krawędź -> prawy bok rośnie do bloba + pad, reszta bez zmian, krawędzie zaznaczenia poza
+siatką analizy zostają dokładne (regresja z lane 8), także lewy+górny róg; dalekie bloby i plamka 2×2 przy krawędzi
+ignorowane, daleki blob nie ciągnie prostokąta; przycięcie do obrazu, regionu i `bounds`, nigdy poniżej zaznaczenia,
+`minGrow`, zaznaczenie przy krawędzi obrazu) + zmienione: prompt (twarda granica, gruz/pixel-art), migracja W7-B,
+opcje z `expand`, `tileData` (całkowite x/y, kotwica). `dev/test-ai-tile-requests.mjs` 9 (+ kontrakt: wynik test
+seamu idzie przez `processCandidate`/`measureExpansion`, plik i Tile z prostokąta kandydata, checkbox, klucze lang).
+Wszystkie 37 `dev/test-*.mjs` exit 0.
+
+**Na żywo (lane 8, `http://127.0.0.1:30008`, MG „claude”, The Warehouse, własna karta panelu (panel ukryty), zero
+płatnych wywołań i bez kluczy: test seam `tileTestHooks.execute`).** Zaznaczenie 1400,1750 -> 2450,2450 (1050×700),
+region 871,1400 2109×1401, wysłany obraz 2048×1360 (render). Sztuczny „wynik modelu” = czysta mapa tego obszaru +
+niebieski nalot w zaznaczeniu + elipsa (przemalowany obiekt) od 0,62 do 0,86 szerokości, czyli przez prawy obrys
+(prawa krawędź ok. 2690 px sceny) + magentowe koło daleko w lewym górnym rogu + szum ±5 i +3 jasności, zwrócony jako
+1536×1024. Wynik: próg 20 (szum: mediana 2,8, MAD 0,2), `grow` {right: 275, reszta 0} -> prostokąt 1400,1750
+1325×700 (prawy bok 2725 = elipsa + pad 25 + zaokrąglenie komórki), magenta zignorowana; plik 965×510 (proporcje jak
+prostokąt), Tile x 2062 / y 2100, kotwica 0,4996/0,5 -> róg dokładnie 1400,1750, siatka w tym samym miejscu, `hidden`.
+Z opcją wył.: prostokąt = zaznaczenie, plik 765×510, Tile 1925,2100. Obraz bez zmian poza obrysem (nalot tylko w
+zaznaczeniu): `expanded` false. Pierwsza próba pokazała wzrost lewego/górnego boku o 27/29 px bez żadnej zmiany tam:
+zaokrąglenie krawędzi zaznaczenia do px obrazu analizy (0,2508 -> 0,25) -> poprawione (dokładne ułamki + `minGrow`) i
+sprawdzone ponownie. Obejrzane (Read) PNG: wysłany obraz z obrysem, „wynik modelu”, złożenie po wklejeniu z wył.
+(elipsa ucięta na krawędzi prostokąta = szew) i z wł. (cała elipsa na mapie, za nią mapa, bez szwu, magenty brak),
+zbliżenie obu krawędzi obok siebie. Okno: checkbox z etykietą i podpowiedzią, odznaczenie/zaznaczenie -> `opts`,
+`job.opts` i zapisane `tileOptions` false/true; podgląd promptu = nowy domyślny; okno wersji: karta „#1 Expanded:
+1325×700 px”, podgląd na mapie i `rect` okna = 1325×700. Zapisany szablon typu na lane 8 po starcie = nowy domyślny.
+Po teście: kafelki skasowane, pliki testowe (`_tests/w9`, `tiles/the-warehouse/ai-tile-w9-test-*`) skasowane, karta
+zamknięta, `lane8.ps1 restore`, slot oddany; karty `seed` (30000) nie dotykałem.
+
+**NIESPRAWDZONE.** Prawdziwy model (płatny): czy ostrzejszy prompt zmniejsza edycje poza obrysem i czy progi (20 /
+mediana + 6 MAD / 3 komórki / strefa 2× obrys) pasują do prawdziwego szumu gpt-image (inne kadrowanie, przesunięcie
+całego obrazu o kilka px dałoby wiele zmian przy krawędziach obiektów; wtedy kafelek urośnie bardziej niż trzeba,
+najwyżej do wysłanego obszaru). Gemini / OpenRouter. Batch (bez powiększania z założenia). Okno po polsku (świat po
+angielsku) i wygląd checkboxa / karty na zrzucie (sprawdzone tekstem z DOM). Migracja zapisanego szablonu W7-B przy
+starcie: po starcie szablon na lane 8 był nowym domyślnym, ale nie sprawdziłem, co było zapisane przed startem.

@@ -89,6 +89,7 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       busy: this.busy, error: this.error, preparing: !job && !this.error,
       description: this.description, count, maxVersions: 8, mode: this.mode,
       feather: this.opts.feather,
+      expand: this.opts.expand,
       contextOptions: CONTEXT_FACTORS.map((f) => ({ value: f, label: `${String(f).replace(".", game.i18n.lang === "pl" ? "," : ".")}×`, selected: f === this.opts.context })),
       ready,
       hasKey: ready?.hasKey ?? true,
@@ -124,6 +125,7 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
         clearTimeout(t);
         t = setTimeout(() => { this.job = null; this.render(); this.prepared = this.#prepare(); saveTileOptions(this.opts); }, 150);
       } else if (n === "count") { saveTileOptions(this.opts); this.render(); }
+      else if (n === "expand") { if (this.job) this.job.opts = { ...this.job.opts, expand: this.opts.expand }; saveTileOptions(this.opts); }
     });
     el.querySelector("textarea[name=description]")?.addEventListener("input", (ev) => {
       this.description = ev.target.value;
@@ -139,7 +141,8 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       ...this.opts,
       count: fd.count,
       feather: Number(fd.feather) || 0,
-      context: fd.context === undefined ? this.opts.context : Number(fd.context)
+      context: fd.context === undefined ? this.opts.context : Number(fd.context),
+      expand: fd.expand === undefined ? this.opts.expand : !!fd.expand
     });
     this.mode = fd.mode === "batch" ? "batch" : "fast";
   }
@@ -173,6 +176,7 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     await this.prepared;
     if (!this.job) return;
     this.job.description = this.description;
+    this.job.opts = { ...this.job.opts, expand: this.opts.expand };
     this.job.prompt = buildJobPrompt(this.job, this.description);
     await saveTileOptions(this.opts);
     this.busy = true;
@@ -215,6 +219,13 @@ class MapPreview {
     this.sprite = null;
     this.hook = Hooks.on("canvasPan", () => this.#frame());
     this.#frame();
+  }
+  /** W9: wariant może mieć inny (powiększony) prostokąt niż zaznaczenie. */
+  setRect(rect) {
+    if (!rect) return;
+    this.rect = rect;
+    this.#frame();
+    if (this.sprite) { this.sprite.position.set(rect.x, rect.y); this.sprite.width = rect.width; this.sprite.height = rect.height; }
   }
   #frame() {
     const z = canvas.stage.scale.x || 1, r = this.rect;
@@ -305,14 +316,19 @@ export class TileReviewApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   #select(c) {
     this.active = c;
+    if (c.rect) this.rect = c.rect;
     if (!this.preview) return;
+    this.preview.setRect(this.rect);
     this.preview.show(c.tile ?? c.src);
     this.preview.visible = !this.original;
   }
 
   async _prepareContext() {
     return {
-      cands: this.cands.map((c) => ({ uid: c.uid, n: c.n, src: c.src, cost: c.cost > 0 ? money(c.cost) : "", active: c === this.active })),
+      cands: this.cands.map((c) => ({
+        uid: c.uid, n: c.n, src: c.src, cost: c.cost > 0 ? money(c.cost) : "", active: c === this.active,
+        expanded: c.expansion?.expanded ? F("AIIMG.Tile.Expanded", { w: c.rect.width, h: c.rect.height }) : ""
+      })),
       busy: this.busy, error: this.error, original: this.original,
       canRetry: !!this.job, onScene: !!this.preview,
       offScene: F("AIIMG.Tile.OffScene", { scene: foundry.utils.escapeHTML(game.scenes.get(this.sceneId)?.name ?? "?") }),

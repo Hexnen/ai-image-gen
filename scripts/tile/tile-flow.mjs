@@ -14,7 +14,7 @@ import {
   TILE_TYPE_KEY, INPUT_IMAGES, planRegion, positionText, inputEstimate, tileData, renderTilePrompt, tilePromptTemplate,
   gridInEdit, packGeometry, unpackGeometry, validShape, normalizeTileOptions
 } from "./tile-core.mjs";
-import { captureRegion, outlinedImage, processResult, canvasToBlob } from "./tile-image.mjs";
+import { captureRegion, outlinedImage, processResult, canvasToBlob, measureExpansion } from "./tile-image.mjs";
 
 import { TILE_FLAG } from "./tile-fade.mjs";
 export { TILE_FLAG };
@@ -76,6 +76,7 @@ export async function prepareJob({ scene = canvas.scene, points, opts = tileOpti
     sceneId: scene.id, sceneUuid: scene.uuid, sceneName: scene.name,
     points: points.map((p) => ({ x: p.x, y: p.y })),
     opts: o, mode, plan, cfg, tileRect,
+    bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
     geom: { points, region: plan.region, tileRect, ratio: plan.ratio, feather: o.feather },
     send: sendCanvas, sendBlob: await canvasToBlob(sendCanvas, "image/png"), captureMethod: cap.method,
     input: inputEstimate(cfg, plan.edit),
@@ -136,13 +137,36 @@ export async function generateTileVariants(job, { count = 1, signal } = {}) {
   const failed = [...res.failed];
   for (const c of res.candidates) {
     try {
-      const { canvas: tile } = await processResult(c.blob, job.geom, { maxEdge: outEdge(job.cfg) });
-      out.push({ index: c.index, blob: c.blob, tile, cost: c.cost, logId: c.logId });
+      out.push({ index: c.index, blob: c.blob, cost: c.cost, logId: c.logId, ...(await processCandidate(job, c.blob)) });
     } catch (e) {
       failed.push({ index: c.index, error: `Could not process the image: ${e.message}` });
     }
   }
   return { candidates: out, failed, cost: res.cost };
+}
+
+/**
+ * Jeden wynik modelu -> kanwa kafelka + prostokąt (px sceny). W9: przy `opts.expand` (domyślnie wł.) prostokąt rośnie
+ * o zmiany modelu poza obrysem (`measureExpansion`), plik i Tile odpowiadają powiększonemu obszarowi.
+ * @returns {Promise<{tile:HTMLCanvasElement, rect:{x,y,width,height}, expansion:object|null}>}
+ */
+export async function processCandidate(job, blob) {
+  const bmp = await createImageBitmap(blob);
+  try {
+    let expansion = null;
+    if (job.opts?.expand !== false && job.send) {
+      try { expansion = measureExpansion(job.send, bmp, job.geom, { bounds: job.bounds }); }
+      catch (e) { console.warn(`${MODULE_ID} | AI Tile: change analysis failed, tile = selection`, e); }
+    }
+    const rect = expansion?.expanded ? expansion.rect : job.tileRect;
+    const { canvas: tile } = await processResult(bmp, { ...job.geom, tileRect: rect }, { maxEdge: outEdge(job.cfg) });
+    return {
+      tile, rect,
+      expansion: expansion ? { expanded: expansion.expanded, grow: expansion.grow, threshold: expansion.diff.threshold, noise: expansion.diff.noise } : null
+    };
+  } finally {
+    bmp.close?.();
+  }
 }
 
 const outEdge = (cfg) => (Number(cfg?.outMaxEdge) > 0 ? Math.min(Number(cfg.outMaxEdge), 8192) : TILE_OUT_EDGE);
@@ -179,7 +203,7 @@ export async function acceptVariant(job, cand) {
   const blob = cand.tileBlob ?? (cand.tileBlob = await canvasToBlob(cand.tile, "image/png"));
   const { path, stats } = await saveImageBlobEx(blob, { dir: tileDir(scene), name: `ai-tile-${slug(job.description || "tile", "tile").slice(0, 32)}`, optimize: tileSaveOpts(job.cfg) });
   if (cand.logId) await updateCall(cand.logId, statsPatch(stats)).catch(() => {});
-  const tile = await createTile(scene, job.tileRect, path, {
+  const tile = await createTile(scene, cand.rect ?? job.tileRect, path, {
     key: `${job.id}-${cand.index}`, prompt: String(job.description ?? "").slice(0, 500), provider: job.cfg.provider, model: job.cfg.model
   });
   return { path, tile };

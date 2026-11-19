@@ -24,6 +24,7 @@
     <button type="button" class="aiimg-tile-rev-card {{#if active}}active{{/if}}" data-action="select" data-uid="{{uid}}" aria-pressed="{{#if active}}true{{else}}false{{/if}}">
       <img src="{{src}}" alt="#{{n}}">
       <span>#{{n}}{{#if cost}} · {{cost}}{{/if}}</span>
+      {{#if expanded}}<small class="aiimg-tile-expanded" data-tooltip="AIIMG.Tile.ExpandedHint"><i class="fa-solid fa-up-right-and-down-left-from-center"></i> {{expanded}}</small>{{/if}}
     </button>
     {{/each}}
   </div>
