@@ -1137,3 +1137,53 @@ Zweryfikowane: renderami jak wyżej (portrety i tokeny, przed/po, trzy kierunki)
 
 ### Niezweryfikowane
 - Prawdziwa karta aktora z `portrait.mjs` i prawdziwy token na płótnie z `TokenDepthFilter` (render przez te same shadery i te same wzory uniformów w harnessie, nie przez widoki modułu). Ruch na oko (tylko klatki statyczne; zanik światła i sprężyny nietknięte). Okno paralaksy W6-L z nowym cieniowaniem i starym boxem G (nie otwierane). Inne portrety niż dwa testowe, mapy z maską, DPR 2, słabszy GPU. Zapisane w świecie wartości siły tokenów (bez migracji).
+
+## W6-X: paralaksa tokenów: licznik `animated`, limit w trybie camera, filtr włączany klatkę wcześniej, A/B walki (poprawki z W6-W)
+
+Pliki: `scripts/parallax/token-core.mjs`, `scripts/parallax/token-parallax.mjs`, nowy `dev/test-token-parallax-w6x.mjs` (5 testów), `dev/test-parallax-fx.mjs` i `dev/test-token-parallax-w6u.mjs` (asercje starego warunku `filter.enabled` w trybie camera). Bez tekstów UI, wersja i `module.json` bez zmian.
+
+### Zmiany
+1. `status().animated`: zmienna `animatedCount` usunięta; liczby (`animated`, nowe `cameraSelected`, `enabled`) liczone z żywych widoków (`countViews`). Po `detachAll()` widoków nie ma, więc 0. Także `tick`, `stepNow`, `pick` używają `animatedNow()`.
+2. Tryb `camera` z limitem `MAX_CAMERA_TOKENS` = 12 (jak `MAX_ANIMATED_TOKENS`): `pickCamera` (czyste, token-core) wybiera tokeny NA EKRANIE najbliższe środka, odległość liczona do KRAWĘDZI tokenu (duży token blisko środka wygrywa), histereza (wybrany liczy odległość × 0,8 − 24 px: bez przeskoków przy granicy w czasie przesuwania). Każdy widok ma ilość kamery `ampC` 0..1 na sprężynie W6-U (`stepAmp`, `CAMERA_OMEGA` 6, ok. 1 s): wejście do zbioru = narastanie przechyłu od płaskiego, wyjście = wygaszanie, potem filtr wyłączony. Spojrzenie w `apply` = `cameraLook × ampC`, potem oddech (`cameraEffLook`); po ustaleniu (ampC = 1) dokładnie jak przed W6-X, więc dla ≤ 12 tokenów na ekranie wygląd w spoczynku bez zmian. W camera oddech/pył dostaje TEN SAM zbiór (wcześniej najbliżsi kursora), więc filtrów nigdy nie ma więcej niż limit + wygasające. Token, który zszedł z ekranu, zeruje od razu ampC/oddech/pył (niewidoczny) i wraca od zera (płynne narastanie zamiast pełnego przechyłu przy krawędzi). Pozycja na ekranie liczona ze ŚWIEŻEJ transformacji sceny (`stageClient`: `stage.transform.updateLocalTransform()`, bo `worldTransform` odświeża dopiero render), od razu w `canvasPan`; ponowny wybór co 250 ms, gdy `pickDue` (pan, resize, ruch tokenu, zmiana ustawień). Kroki w camera tylko dla widoków nieustalonych lub animowanych (wcześniej wszystkie co klatkę przy dodatkach).
+3. Filtr włączany klatkę WCZEŚNIEJ: gdy krok sprężyny włączyłby wyłączony filtr, widok zostaje w tej klatce w poprzednim stanie spoczynku (`motionState`/`setMotionState`, `shouldArm`), filtr jest już włączony (obraz identyczny jak bez filtra: przesunięcie 0, bez światła/pyłu), ruch rusza od następnej klatki. Flaga `arming` trzyma filtr włączony do następnego kroku: bez niej `sync()` z `canvasPan` wyłączał go z powrotem i w camera token przy przesuwaniu nie ruszał (złapane na żywo: 5783 „uzbrojeń” w jednej serii, po poprawce 71-79). Przyczyna z W6-W: pierwszy krok sprężyny przy celu ok. 1 to ok. 0,017 spojrzenia (55 kl./s; przy dłuższej klatce do 0,06), a w camera filtr włączał się od razu z pełnym spojrzeniem pozycji (do 1,0).
+4. Zmiana tury i pierwszy ruch w walce: zmierzone A/B (wł./wył.), NIE nasze (niżej). Bez zmian w kodzie.
+
+### Liczby (lane 8, `http://127.0.0.1:30008`, własna karta, MG, The Warehouse, 30 tokenów: 24 z mapą (18 obrazów, 6 dzielonych), 6 bez; mapy syntetyczne gray8 (elipsa × alfa), `tokenParallax` sceny wł., dodatki domyślne)
+Metryka włączeń: klatka, w której filtr widoku został NARYSOWANY (licznik `applied` wzrósł), a w poprzedniej nie; |spojrzenie| = |uOff| / (siła × MAX_SHIFT) z uniformu, czyli to, co faktycznie narysowano.
+
+a) Prawdziwe klatki (rAF 166/s, ticker ok. 55 kl./s, tylko NOWY kod; potem okno aplikacji przestało być widoczne, rAF spadł do 1-3/s):
+- spoczynek pointer, zoom 0,28: filtry 12/12, GPU kl. mediana 3,03 ms; wył. efekt: 2,90 ms.
+- camera spoczynek (0,28, 24 tokeny z mapą na ekranie): filtry 12/12 (W6-W: 24/24), GPU 3,10 ms (W6-W: 3,57, przy pointer ok. 3,2).
+- camera przesuwanie 0,28: filtry med./maks. 15/20 (W6-W 24/24), GPU 3,23 (W6-W 4,06); zoom ×0,6-1,4: 10/12 (W6-W camera 24/24), GPU 3,17 (W6-W 4,12); przesuwanie 0,6: 6/12, GPU 3,12 (W6-W 3,33, 9/16).
+- włączenia przy |spojrzenie| > 0,01: camera przesuwanie 0/20, przy 0,6: 0/28, zoom 0/5; kursor przemiata 0/24 i 0/10. Maks. zmiana spojrzenia na klatkę: camera 0,042 (przesuwanie/zoom), pointer 0,086-0,115 (przemiatanie; W6-W 0,105).
+- pkt 1: `animated` 12 → wył. ustawienia → `animated` 0, `cameraSelected` 0, widoki 0, `loop` false; wł. → 12 i 24 widoki.
+- CPU klatki 1,7-1,9 ms, odstęp 18,2/18,3 ms, 0 klatek > 33 ms we wszystkich seriach.
+
+b) Stary (4f0867b) vs nowy w TEJ SAMEJ sesji, klatki pompowane ręcznie (`canvas.app.ticker.update` co 18,2 ms, bo okno nie było widoczne; logika klatek i rysowanie prawdziwe, czasy GPU/odstępy z tych serii NIEWAŻNE):
+
+| seria | filtry med./maks. stary → nowy | włączenia > 0,01 stary → nowy |
+|---|---|---|
+| camera spoczynek | 24/24 → 12/12 | 0/0 → 0/0 |
+| camera przesuwanie 0,28 | 20/24 → 15/20 | 12/12 (wszystkie 1,0) → 0/21 |
+| camera zoom | 10/24 → 10/12 | 16/16 → 0/5 |
+| camera przesuwanie 0,6 | 6/12 → 6/12 | 28/28 → 0/30 |
+| pointer przemiatanie ×2 | 19/21, 22/24 → 19/22, 22/24 | 0/24, 0/16 → 0/24, 0/16 |
+
+- W trybie pointer stara wersja tą metryką NIE pokazała włączeń > 0,01 (W6-W: 2/20, mierzone stanem `look`, nie narysowanym uOff); poprawka 3 zamyka to z definicji (test: pierwszy krok przy dt 1/55, 0,036 i 0,1 dawał 1 włączenie > 0,01 na starym schemacie, teraz 0).
+
+c) Pkt 4, A/B wł./wył. (nowy kod, klatki pompowane ręcznie, walka 30 uczestników, plus-ultra 0.20.2 + moinen-maps 0.7.1):
+- 6× `nextTurn`: wł. long taski [67, 78] ms, maks. praca klatki na turę 14-74 ms, wywołanie 11-24 ms; wył. long taski [101, 68, 76, 87] ms, 16-53 ms, 12-33 ms. Skoki są tak samo przy wyłączonym efekcie: NIE nasz kod (przypuszczalnie pasek/HUD taktyki lub moinen-maps; nie profilowane).
+- Pierwszy ruch aktywnego tokenu po przeładowaniu (2 × wł., 2 × wył., naprzemiennie): maks. praca klatki wł. 62,5 / 26,5 ms (long task brak / 75 ms), wył. 45,4 / 68,5 ms (brak). To samo bez efektu: NIE nasz kod.
+
+### Testy
+- `dev/test-token-parallax-w6x.mjs` (5): liczniki z widoków (statycznie + model), `pickCamera` (tylko na ekranie, najbliżsi środka do krawędzi, limit, histereza), model trybu camera 30 i 60 tokenów (spoczynek dokładnie 12 filtrów; przesuwanie średnio 14,5, maks. 19 = 12 + wygasające, nie rośnie z liczbą tokenów; 0 włączeń > 0,01; maks. zmiana na klatkę 0,046), ≤ 12 tokenów = wygląd jak przed (`cameraEffLook` przy ampC 1 = `cameraLook`, oddech jak `withBreath`), włączanie klatkę wcześniej w pointer, okablowanie (`arming`, świeża transformacja, zrzut przy zejściu z ekranu, `effLook` w `apply`).
+- Wszystkie 34 `dev/test-*.mjs` exit 0.
+
+### Uwagi z testu (nie błędy modułu)
+- Foundry v14 przy `FilePicker.upload` PNG zapisał `.webp` (konwersja przy wysyłce); wpis indeksu wskazujący `.png` dostał 404 i `reportMissing` słusznie usunął wpisy. Mapy testowe = webp (stratne), tylko do pomiaru.
+- Po teście: wpisy indeksu usunięte (`forget`), walka usunięta, pliki `ai-image-gen/_tests/tokens30x` skasowane z danych lane 8, `lane8.ps1 restore`, karta zamknięta, slot oddany. Stary kod tylko chwilowo na dysku (`git show 4f0867b:…`), przywrócony `git checkout`.
+
+### Niezweryfikowane
+- Porównanie GPU stary vs nowy w jednej sesji na prawdziwych klatkach (okno aplikacji niewidoczne po pierwszej serii: rAF 1-3/s, czekane ok. 15 min); liczby GPU „przed” z W6-W (inna sesja, szum GPU do 2×). Pkt 4 A/B na klatkach pompowanych ręcznie (porównanie wł./wył., nie bezwzględne ms prawdziwej strony).
+- Wygląd i płynność na oko (nic nie nagrane): narastanie przechyłu tokenu wchodzącego na ekran w camera (ok. 1 s) to zmiana zachowania przy krawędzi ekranu także dla ≤ 12 tokenów (wcześniej wchodził od razu przechylony: to był ten skok); wymiana zbioru przy przesuwaniu (wygaszanie ponad 12) nie oglądana.
+- Gracz, DPR 2, słabszy GPU, prawdziwe mapy modułu, Electron/serwer właściciela, prawdziwa mysz.
