@@ -1047,3 +1047,58 @@ Widok używa okna `<img>` (`img.ownerDocument.defaultView`): obszar widoku (`inn
 
 ### Niezweryfikowane
 Okno odczepione na żywo (patrz 5), porównanie wł./wył. strażnika na żywo (timer GPU był dostępny), wyciek sterty (patrz 6), DPR 2, prawdziwe ruchy myszy (zdarzenia syntetyczne, klatki prawdziwe), prawdziwy portret właściciela (użyty syntetyczny obraz), Electron / serwer właściciela, teksty pl na żywo. Zmierzona pamięć GPU (podana wyliczona).
+
+## W6-W: paralaksa tokenów przy 30 tokenach i w prawdziwej walce (tylko test i pomiar, kod modułu nietknięty)
+
+Warunki: lane 8, `http://127.0.0.1:30008`, własna karta panelu przeglądarki na pierwszym planie (rAF 165-166/s), DPR 1, okno 1233×1265, WebGL2, `EXT_disjoint_timer_query_webgl2` dostępne; świat invincible (plus-ultra 0.20.2 z taktyką wł., moinen-maps 0.7.1), scena The Warehouse (5102×6650, siatka 350, deszcz/strefy moinen-maps). Moduł włączony w konfiguracji świata. Ticker Foundry ograniczony ustawieniem rdzenia maxFPS 60 = ok. 55 kl./s (odstęp 18,2 ms) we WSZYSTKICH scenariuszach. Kod: HEAD fa97a88 + NIEZACOMMITOWANE zmiany równoległego agenta od światła (m.in. `token-core.mjs`, `token-parallax.mjs`, `parallax-fx.mjs`, zmienione ok. 01:20, strona MG przeładowana po nich; np. siła światła tokenów u gracza 0,8 zamiast 0,6 przy pierwszym wczytaniu MG). Po teście: wpisy indeksu usunięte, pliki skasowane, `lane8.ps1 restore`, karta zamknięta, slot oddany.
+
+Ustawienie: 11 tokenów sceny usunięte, 30 nowych tokenów (niepołączonych) z 24 aktorów `superhero`: 24 z mapą głębi (18 obrazów, 6 obrazów na dwóch tokenach = wspólna tekstura), 6 bez mapy. Mapy syntetyczne (elipsa × alfa obrazu, 500×500): 12 `gray8`, 6 `png16` (własny koder PNG 16-bit), w `ai-image-gen/_tests/tokens30/`, wpisane przez `api.depthMaps.remember`. Flaga sceny `tokenParallax` wł., dodatki domyślne (oddech 0,5, światło, pył 0,4), napęd `pointer`, siła 0,5.
+
+Metoda: czas klatki = `ticker.elapsedMS`; CPU klatki = od callbacku tickera o priorytecie 100 do callbacku −100; GPU klatki = zapytanie TIME_ELAPSED obejmujące całą klatkę tickera (pierwsza próba z `prerender/postrender` łapała też małe rendery do tekstur: odrzucona); przebiegi filtrów = licznik `FilterSystem.applyFilter`; nasze = `counters.applies` / klatkę; pamięć tekstur = suma `managedTextures` (szacunek); long taski = PerformanceObserver. Czas GPU skacze między seriami (np. „wł. w spoczynku” 3,15 i 5,99 ms w dwóch seriach), więc koszt modułu podany z serii przeplatanych wył./wł. (2-3 powtórzenia po 4 s, mediana). Wył. = ustawienie świata `tokenParallax` false.
+
+### Liczby (zweryfikowane na żywo)
+| Scenariusz | widoczne tokeny z mapą | filtry wł. (med/maks) | nasze przebiegi/kl. | GPU kl. wył. → wł. (ms, med) | CPU kl. (ms, med/p95) | kl./s, maks. odstęp | long taski |
+|---|---|---|---|---|---|---|---|
+| Spoczynek, przegląd (zoom 0,28, 30/30 na ekranie), kursor poza planszą | 24 | 12/12 (animowane 12) | 12 | 2,59 → 3,20 (+0,6) | 1,6 → 1,8 | 55, 18,3 | 0 |
+| Spoczynek, zoom 0,6 | 9 | 9 | 9 | 2,27 → 2,78 (+0,5) | 1,5 → 1,6 | 55, 18,3 | 0 |
+| Spoczynek, zoom 1,0 | 4 | 4 | 4 | 2,15 → 2,62 (+0,5) | 1,5 → 1,5 | 55, 18,3 | 0 |
+| Kursor stoi nad tokenem (0,28) | 24 | 12/18 | 12,8 | (jedna seria) 3,01 | 1,9/2,3 | 55, 18,3 | 0 |
+| Kursor przemiata tokeny (0,28, 8 s) | 24 | 24/24 | 23 | 1,34 → 2,18 (pojedyncze serie, szum); p95 5,9 → 6,1 | 1,7/2,9 → 2,1/3,4 | 54,9, 24,3 | 0 |
+| Zoom oscylacja ×0,6-1,4 (canvas.pan co klatkę) | 24 | 17/22 | 17 | 2,58 → 3,28 | 1,7 → 2,0 | 55, 18,3 | 0 |
+| Przesuwanie widoku (canvas.pan co klatkę) | 24 | 16/17 | 16 | 2,92 → 3,24 | 1,7 → 2,0 | 55, 18,3 | 0 |
+| Camera, spoczynek (0,28) | 24 | 24/24 | 24 | 3,57 (wobec wył. ok. 2,6) | 1,8/2,2 | 55, 18,3 | 0 |
+| Camera, przesuwanie / zoom (0,28) | 24 | 24/24 | 23 | 4,06 / 4,12 | 2,0 | 55, 24,2 | 0 |
+| Camera, przesuwanie (0,6) | ok. 9 | 9/16 | 10 | 3,33 | 1,8 | 55, 18,3 | 0 |
+| Walka: 6× `nextTurn` (30 uczestników) | 24 | 12/12 | 12 | 2,85 | 1,8/2,4 | 54,4, 36,4 (4 kl. > 33 ms) | 0 |
+| Walka: ruch aktywnego tokenu 3× (animacja, kursor na nim, `control`) | 24 | 12/18 | 13,3 | 3,03 | 1,9/4,6 | 54,3, 121 | 1 (120 ms) |
+| To samo A/B ×2 (wył./wł./wył./wł.) | 24 | - | - | - | p95 4,0 / 4,2 / 3,8 / 4,2 | maks. odstęp 24,3 / 24,2 / 18,3 / 24,2 | 0 |
+| 12 tokenów rusza naraz ×2, A/B ×2 | 24 | 12-13 | 12,5-15,6 | 2,64 → 2,97; 2,63 → 2,83 | 1,8 → 2,0 | 54,9, maks. 30,2 (wył.) / 24,3 (wł.) | 0 |
+| Gracz (Test Gracz 1), spoczynek 0,28 | 24 | 12 | 12,1 | 3,33 | 1,9 | 54,9, 18,3 | 0 |
+| Gracz, przemiatanie kursorem | 24 | 23 | 23,6 | 3,12 (p95 4,64) | 2,3 | 54,5, 30,2 | 0 |
+
+- Własny CPU modułu (`ownCpuMs`, średnia w `apply`): 0,067-0,106 ms/klatkę we wszystkich scenariuszach. Strażnik: `last: "ok"`, mediana 18,2 ms, `lastVerdict` null przez cały test (żadnej próby A/B, żadnego wyłączenia, `disabled` = "").
+- Pozostałe przebiegi filtrów sceny bez nas: 12-16/kl. (Foundry/moinen-maps); nasze dochodzą 1:1 (przebieg void pomijany: `voidSkips` = `applies`).
+- Limit 12 w trybie `pointer` działa: 24 tokeny z mapą na ekranie → dokładnie 12 animowanych i 12 filtrów w spoczynku; filtry ponad 12 tylko wokół kursora (do 18 przy kursorze stojącym, do 24 przy przemiataniu, potem wygasają).
+- Tekstury głębi: 18 wpisów (refs 1-2, suma 24 = liczba widoków), każda 500×500 RGBA16F bez mipmap ≈ 1,9 MiB → ok. 34 MiB GPU (wyliczone z wymiarów, nie zmierzone). Pamięć tekstur Foundry na tej scenie 330-620 MB (rośnie z moinen-maps przy zoomie/przesuwaniu także przy wył. efekcie: 565-585 MB wył. wobec 580-600 MB wł.).
+- Gładkość (próbki `look`/amplitud co klatkę tickera, 24 widoki): przemiatanie kursorem maks. zmiana spojrzenia 0,105/kl. (przeliczone na 16,7 ms), maks. |Δ²| 0,039, amplitudy oddech/pył/światło ≤ 0,036/kl.; przesuwanie widoku w trybie `pointer` 0,076 / 0,017; zmiana tury 0,0055 / 0,0014 (amplitudy 0, brak przełączeń filtrów); ruch tokenu pod kursorem 0,071-0,077/kl., |Δ²| 0,017, filtr ruszanego tokenu włączony przez wszystkie 454 klatki. Camera: `look` w raporcie widoku = 0 (spojrzenie camera liczone w `apply`, nie raportowane), amplitudy ≤ 0,027/kl.
+- Wyciek (liczniki `status()` przed / po walce, ruchach i 8 przełączeniach wył./wł.): widoki 24 → 24, tekstury głębi 18 → 18, `attached − detached` = 24, `depthLoads − depthDestroyed` = 18; wył. na 11,5 s: 0 widoków, 0 filtrów na meshach, 0 żywych tekstur głębi; przełączenie wył./wł. w ciągu < 10 s używa tych samych tekstur (`depthDestroyed` 0, `depthLoads` 18 po 4 przełączeniach). Sterta JS 210 → 318 MB po ok. 15 min pomiarów (bez wymuszonego GC: nic nie wnioskuje).
+- Konsola: 0 błędów, 0 odrzuceń obietnic, 0 ostrzeżeń modułu u MG i gracza przez cały test (przechwycone `console.error`, `console.warn` z „parallax|ai-gen”, `error`, `unhandledrejection`).
+- Walka z UI taktyki plus-ultra: 30 uczestników, `rollAll` + `startCombat` bez błędów, pasek inicjatywy u góry i dock widoczne (zrzut), 10 zmian tury (`nextTurn` 6-12 ms), bez przesuwania kamery przez zmianę tury, bez błędów. Gracz widzi pasek inicjatywy i stan walki (runda 1, tura 6).
+- Gracz (Test Gracz 1, 3 aktorzy z uprawnieniem właściciela, osobne logowanie w tej samej karcie po wylogowaniu MG): `active`, 24 widoki gotowe, 18 tekstur, 12 animowanych, efekt działa jak u MG, 0 błędów.
+
+### Znalezione problemy (nic nie naprawiane)
+1. `status().animated` nieaktualne po wyłączeniu: ustawienie `tokenParallax` wył. → po 11,5 s `views` 0, `loop` false, a `animated` nadal 12. Powtarzalne (3/3). Hipoteza: `detachAll()` / ścieżka wyłączenia nie zeruje `animatedCount` (zeruje go tylko `repick()` i onChange dodatków). Tylko raport API, bez wpływu na obraz.
+2. Tryb `camera` nie ma limitu: wszystkie tokeny z mapą na ekranie mają filtr stale włączony (24/24 przy przeglądzie; spoczynek GPU 3,57 ms wobec ok. 3,2 w `pointer` i ok. 2,6 wył.; przy przesuwaniu/zoomie 4,1 ms). Koszt rośnie liniowo z liczbą tokenów na ekranie (ok. 0,04-0,06 ms GPU na filtr przy zoomie 0,28 na tej maszynie). Zgodne z W6-U 7c (limit 12 dotyczy tylko oddechu/pyłu), ale przy 30+ tokenach z mapą to największy stały koszt. Do decyzji, nie błąd.
+3. Włączenie filtru przy niezerowym spojrzeniu: w przemiataniu kursorem 2 z 20 włączeń filtru nastąpiły w klatce, w której |look| > 0,01 (w camera 2 z 48, tam `look` z oddechem). Możliwy mikroskok o ≥ 0,01 spojrzenia w chwili włączenia. Nie oglądane, wielkości skoku nie zmierzono. Hipoteza: filtr włączany w `sync()` o klatkę później niż krok sprężyny.
+4. Jedno długie zadanie 120 ms (klatka 121 ms) przy pierwszym ruchu + `control` aktywnego tokenu w walce. Nie powtórzone w 4 kolejnych seriach A/B (wył./wł.): 0 long tasków, maks. odstęp 18-24 ms w obu stanach. Źródła nie ustalono (przypuszczalnie pierwsze otwarcie docka/HUD taktyki plus-ultra albo pierwsze rysowanie czegoś w moinen-maps; atrybucja longtask w Chrome nie wskazuje skryptu). Nie przypisane modułowi.
+5. Zmiana tury: 4 klatki > 33 ms (maks. 36,4 ms) na 6 `nextTurn` z efektem wł.; serii wył. dla zmian tury nie robiono, więc udziału modułu nie rozdzielono (CPU modułu 0,08 ms, przełączeń filtrów 0, więc mało prawdopodobny).
+6. Pomiarowe (nie błąd modułu): czas GPU tej maszyny zmienia się między seriami do ok. 2× (taktowanie GPU); pojedyncze serie wł. vs wył. bywają odwrócone (przemiatanie wył. 1,34 vs wł. 2,18 ms przy p95 5,9 / 6,1). Liczby kosztu tylko z serii przeplatanych.
+
+### Niezweryfikowane
+- Wygląd i płynność na oko (nic nie nagrane; jeden zrzut przy zoomie 1,0 zdominowany przez czerwoną strefę i deszcz moinen-maps); mikroskok z pkt 3 nie oglądany.
+- Prawdziwe ruchy myszy (zdarzenia `pointermove` syntetyczne na płótnie, klatki prawdziwe); prawdziwe przeciąganie tokenu myszą (ruch przez `update` z animacją); ruch tokenu przez gracza.
+- Gracz i MG jednocześnie (jedna przeglądarka naraz: lane lekki); zmiana tury widziana u gracza na żywo w chwili zmiany.
+- Dock / pasek taktyki: tylko obserwacja (zrzut + brak błędów), bez klikania w dock.
+- Pamięć GPU tekstur głębi wyliczona z wymiarów, nie zmierzona; sterta bez GC.
+- Prawdziwe mapy modułu (tylko syntetyczne), DPR 2, słabszy GPU, Electron / serwer właściciela, `prefers-reduced-motion`.
+- Wynik dotyczy kodu z niezacommitowanymi zmianami agenta od światła (patrz wyżej); po jego commicie liczby mogą się nieco zmienić.
