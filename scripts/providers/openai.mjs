@@ -21,7 +21,8 @@ function requestTimeout(quality, size, n) {
   return scaledTimeout(GPT_IMAGE_TIMEOUT_MS, { n, factor: (TIME_FACTOR[quality] ?? 1) * area, max: 600_000 });
 }
 
-export async function generate({ apiKey, model, prompt, refs = [], width, height, aspectRatio, quality = "medium", n = 1, transparent = false, signal }) {
+// W7-A: `mask` (Blob PNG, wymiary jak PIERWSZA referencja; przezroczyste = wolno zmieniać) idzie tylko z refs (images/edits).
+export async function generate({ apiKey, model, prompt, refs = [], mask, width, height, aspectRatio, quality = "medium", n = 1, transparent = false, signal }) {
   // `background: "transparent"` only for models that take it; it needs PNG (or WebP) output, so we ask for PNG.
   const alpha = !!transparent && supportsTransparent("openai", model);
   quality = fitOpenAIQuality(model, quality);
@@ -47,6 +48,7 @@ export async function generate({ apiKey, model, prompt, refs = [], width, height
       const ext = mime === "image/webp" ? "webp" : mime === "image/jpeg" ? "jpg" : "png";
       form.append("image[]", new Blob([blob], { type: mime }), `ref${++i}.${ext}`);
     }
+    if (mask) form.set("mask", new Blob([mask], { type: "image/png" }), "mask.png");
     res = await fetch(`${OPENAI_BASE}/images/edits`, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}` },

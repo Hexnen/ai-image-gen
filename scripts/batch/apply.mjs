@@ -21,6 +21,11 @@ export const isPermanentApplyError = (e) => /Document not found/i.test(String(e?
  * @returns {Promise<{ok:boolean, error?:string, path?:string, candidate?:boolean, permanent?:boolean}>}
  */
 export async function applyBatchItem(item, blob, rec, savedPath) {
+  // W7-A AI Tile: the result is cut to the drawn shape and pasted as a Tile on the scene saved in the record
+  if (item.meta?.tile) {
+    const { applyTileBatchItem } = await import("../tile/tile-flow.mjs");
+    return applyTileBatchItem(item, blob, rec, savedPath, { candidateDir });
+  }
   let path = savedPath, stats = null;
   try {
     if (!path) {

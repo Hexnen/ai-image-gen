@@ -273,9 +273,13 @@ export async function generateCandidates(document, description, { count = 1, ext
 }
 
 /** Wspólny rdzeń generacji (dokument albo próba z szuflady testu): limity, wywołanie providera, log, koszt. */
-export async function executeGeneration({ doc: document, description, key, cfg, prompt, meta, count, extraRefs, extraRefPurposes = [], signal, runKind, caller }) {
+/**
+ * W7-A: `editImage` (Blob) = obraz do edycji, wysyłany jako PIERWSZY i bez zmniejszania (ref-convert by go zmniejszył,
+ * a OpenAI wymaga maski o wymiarach tego obrazu); `mask` (Blob PNG) idzie tylko do OpenAI images/edits.
+ */
+export async function executeGeneration({ doc: document, description, key, cfg, prompt, meta, count, extraRefs, extraRefPurposes = [], signal, runKind, caller, editImage, mask }) {
   const ts = new Date().toISOString();
-  let refsTotal = (cfg.refs?.length ?? 0) + extraRefs.length;
+  let refsTotal = (cfg.refs?.length ?? 0) + extraRefs.length + (editImage ? 1 : 0);
   const base = logBase(document, description, key, cfg, prompt, runKind, refsTotal);
   if (caller) base.caller = String(caller).slice(0, 64); // module that asked (API), shown in the log
   const preFail = async (e, kind = runKind, status = "error", cost = 0, costKind = "actual") => {
@@ -287,7 +291,7 @@ export async function executeGeneration({ doc: document, description, key, cfg, 
   const apiKey = getKey(cfg.provider);
   if (!apiKey) throw await preFail(new Error(`No API key for ${providers.PROVIDERS[cfg.provider]?.label ?? cfg.provider}.`));
   try {
-    refsTotal = validateRun(cfg, count, extraRefs);
+    refsTotal = validateRun(cfg, count, extraRefs) + (editImage ? 1 : 0);
   } catch (e) { throw await preFail(e); }
   const one = estimateFast(cfg, refsTotal);
   const est = one * count;
@@ -298,13 +302,13 @@ export async function executeGeneration({ doc: document, description, key, cfg, 
     release = reserveBudget(est, { count, perRequest: cfg.provider === "openai" ? est : one });
   } catch (e) { throw await preFail(e, "limit-blocked", "blocked", est, "estimated"); }
   try {
-    return await runGeneration({ document, description, key, cfg, prompt, meta, count, extraRefs, extraRefPurposes, signal, ts, base, est, apiKey });
+    return await runGeneration({ document, description, key, cfg, prompt, meta, count, extraRefs, extraRefPurposes, signal, ts, base, est, apiKey, editImage, mask });
   } finally {
     release();
   }
 }
 
-async function runGeneration({ document, description, key, cfg, prompt, meta, count, extraRefs, extraRefPurposes, signal, ts, base, est, apiKey }) {
+async function runGeneration({ document, description, key, cfg, prompt, meta, count, extraRefs, extraRefPurposes, signal, ts, base, est, apiKey, editImage, mask }) {
   const cancelledEarly = () => Object.assign(new Error("Cancelled."), { name: "AbortError", aiimgLogged: true });
   if (signal?.aborted) throw cancelledEarly(); // nic jeszcze nie poszło do API: koszt 0, bez wpisu w logu
   const normalizedExtra = [];
@@ -318,8 +322,9 @@ async function runGeneration({ document, description, key, cfg, prompt, meta, co
   }
   // Anulowano podczas ładowania referencji: żądanie nie wyszło, więc nie księgujemy szacunku (jak przy timeoucie w locie).
   if (signal?.aborted) throw cancelledEarly();
+  if (editImage) refs = [editImage, ...refs];
   const common = {
-    provider: cfg.provider, apiKey, model: cfg.model, prompt, refs,
+    provider: cfg.provider, apiKey, model: cfg.model, prompt, refs, ...(mask && cfg.provider === "openai" ? { mask } : {}),
     width: cfg.width, height: cfg.height, quality: cfg.quality, transparent: !!cfg.transparent,
     imageSize: cfg.imageSize, thinkingLevel: cfg.thinkingLevel, signal
   };

@@ -120,6 +120,10 @@ export function registerSettings() {
   game.settings.register(MODULE_ID, "imageTypes", {
     scope: "world", config: false, type: new ObjectField({ initial: {} })
   });
+  // W7-A: last options of the AI Tile window (margin, feather, tokens, mask, versions, shape); GM writes, harmless to read
+  game.settings.register(MODULE_ID, "tileOptions", {
+    scope: "world", config: false, type: new ObjectField({ initial: {} })
+  });
   // Dawna mapa wszystkich batchy: tylko do jednorazowej migracji do slotów `batch.<n>` (migrate.mjs).
   game.settings.register(MODULE_ID, "batches", {
     scope: "world", config: false, type: new ObjectField({ initial: {} })

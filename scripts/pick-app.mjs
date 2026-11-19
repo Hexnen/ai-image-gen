@@ -269,6 +269,11 @@ export async function openPickForBatch(batchId) {
     return null;
   }
   const first = rec.items?.[0];
+  // W7-A AI Tile: variants are previewed on the map and pasted as a Tile (own window)
+  if (first?.meta?.tile) {
+    const { openTileBatchPick } = await import("./tile/tile-app.mjs");
+    return openTileBatchPick(rec);
+  }
   const doc = await fromUuid(first?.target?.uuid);
   if (!doc) {
     ui.notifications.error(t("AIIMG.Pick.DocMissing"));
