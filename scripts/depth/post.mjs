@@ -406,18 +406,73 @@ export function encodeGray8(M, w, h, deflate) {
 
 // ---------- file names ----------
 
+/** cyrb53: a fast 53-bit string hash (sync, no crypto needed: names only, the sidecar `source` is the real proof). */
+export function hashKey(str) {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36).padStart(11, "0").slice(-10);
+}
+
+const SYSTEM_DIRS = /^(icons|systems|modules|ui|cards|sounds|fonts|scripts|css|lang|common|dist)(\/|$)/;
+const safeName = (s) => s.replace(/[^\p{L}\p{N}._-]+/gu, "-");
+const safeTag = (s) => String(s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 16);
+
 /**
- * Where the depth files of an image go: next to it, `<name>_depth.png` (+ `_mask.png`, `_depth.json`).
- * `writable` = the path is a plain relative Data path we may upload into (no URL, no `..`, not core folders).
+ * Where the depth files of an image go.
+ *
+ * `src` is the image KEY (depth-index normalizeImagePath: already decoded exactly once). It is NOT decoded again here
+ * (W6-R: a file literally named `a%20b.webp` keeps its own names; a stray `%` never throws).
+ *
+ * W6-R names (one set of files per run, never overwritten, sidecar always next to its own map):
+ *   `<dir>/<stem>.<engine>-<run>_depth.png`, `..._mask.png`, `..._depth.json`
+ *   stem = `<readable base>-<extension>-<hash of the full key>`
+ * so `a/hero.webp` and `a/hero.png`, and `modules/x/actors/hero.webp` vs `modules/x/tokens/hero.webp` (both under the
+ * fallback folder) never share a file. `<dir>` = next to the image when `writable`, else DEPTH_FALLBACK_DIR.
+ *
+ * Without `engine` + `run` the returned depth / mask / meta are the OLD (pre-W6-R) names `<base>_depth.png`, which
+ * readers still accept under the rules in depth-index (sidecar source must match, nobody else claims the file).
+ * `legacy` always holds the old names, `prefix` the start of every new-form name of this image.
  */
-export function depthPathsFor(src, { fallbackDir = DEPTH_FALLBACK_DIR } = {}) {
-  const clean = decodeURIComponent(String(src ?? "").split(/[?#]/)[0]).replace(/\\/g, "/").replace(/^\/+/, "");
+export function depthPathsFor(src, { fallbackDir = DEPTH_FALLBACK_DIR, engine = "", run = "" } = {}) {
+  const raw = String(src ?? "");
+  const external = /^[a-z][a-z0-9+.-]*:/i.test(raw);
+  const clean = (external ? raw : raw.split(/[?#]/)[0]).replace(/\\/g, "/").replace(/^\/+/, "");
+  const pathPart = external ? clean.replace(/^[a-z][a-z0-9+.-]*:\/*[^/]*/i, "").split(/[?#]/)[0] : clean;
   const slash = clean.lastIndexOf("/");
   const dir = slash >= 0 ? clean.slice(0, slash) : "";
-  const file = clean.slice(slash + 1);
-  const base = (file.replace(/\.[^.]+$/, "") || "image").replace(/[^\p{L}\p{N}._-]+/gu, "-");
-  const external = /^[a-z][a-z0-9+.-]*:/i.test(String(src ?? "")) || /^(blob|data):/i.test(clean);
-  const writable = !external && !!dir && !dir.split("/").includes("..") && !/^(icons|systems|modules|ui|cards|sounds|fonts|scripts|css|lang|common|dist)(\/|$)/.test(dir);
+  const file = pathPart.slice(pathPart.lastIndexOf("/") + 1);
+  const m = /\.([^./]+)$/.exec(file);
+  const base = safeName(file.replace(/\.[^.]+$/, "") || "image") || "image";
+  const ext = safeTag(m?.[1]) || "img";
+  const writable = !external && !!dir && !dir.split("/").includes("..") && !SYSTEM_DIRS.test(dir);
   const d = writable ? dir : fallbackDir;
-  return { dir: d, base, writable, depth: `${d}/${base}_depth.png`, mask: `${d}/${base}_mask.png`, meta: `${d}/${base}_depth.json` };
+  const hash = hashKey(raw);
+  const stem = `${base}-${ext}-${hash}`;
+  const legacy = { depth: `${d}/${base}_depth.png`, mask: `${d}/${base}_mask.png`, meta: `${d}/${base}_depth.json` };
+  const out = { dir: d, base, ext, hash, stem, writable, prefix: `${d}/${stem}.`, legacy, ...legacy };
+  const eng = safeTag(engine), rid = String(run ?? "").toLowerCase().replace(/[^a-z0-9-]+/g, "");
+  if (eng && rid) {
+    const name = `${d}/${stem}.${eng}-${rid}`;
+    Object.assign(out, { engine: eng, run: rid, depth: `${name}_depth.png`, mask: `${name}_mask.png`, meta: `${name}_depth.json` });
+  }
+  return out;
+}
+
+/**
+ * A listed file name -> {kind: "depth"|"mask"|"meta", engine, run, rev} when it is a W6-R file of the image with this
+ * `prefix` (depthPathsFor(...).prefix), else null. `rev` = the run time (base36 ms in the name), 0 when unreadable.
+ */
+export function parseRunFile(path, prefix) {
+  const s = String(path ?? "");
+  if (!prefix || !s.startsWith(prefix)) return null;
+  const m = /^([a-z0-9]+)-([0-9a-z]+)(?:-(\d+))?_(depth\.png|mask\.png|depth\.json)$/.exec(s.slice(prefix.length));
+  if (!m) return null;
+  const rev = parseInt(m[2], 36);
+  return { kind: m[4] === "depth.png" ? "depth" : m[4] === "mask.png" ? "mask" : "meta", engine: m[1], run: m[3] ? `${m[2]}-${m[3]}` : m[2], rev: Number.isFinite(rev) ? rev : 0, n: m[3] ? Number(m[3]) : 0 };
 }

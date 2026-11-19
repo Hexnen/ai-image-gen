@@ -108,17 +108,26 @@ export function genEstimate(cfg, src, tableUSD, { inPrice = EST.inPrice, outPric
   };
 }
 
+const cancelled = () => Object.assign(new Error("Cancelled."), { name: "AbortError", cancelled: true });
+
 /**
  * Run the generative engine.
  * @param {{depth:object, typeKey?:string, name:string, img:{w:number,h:number,blob:Blob}, style?:{w:number,h:number,blob:Blob,path?:string}|null}} o
  *   style = the loaded style-example depth map (W6-M, optional): sent as the SECOND reference with GEN_STYLE_PREFIX
  * @param {{estimate:(cfg:object, refCount:number)=>{display:number,source:string,n:number}, execute:(args:object)=>Promise<{candidates:{blob:Blob,cost:number}[],cost:number}>,
- *   confirm:(est:object)=>Promise<boolean>, decode:(blob:Blob)=>Promise<{rgba:Uint8ClampedArray,w:number,h:number}>, prices?:object, signal?:AbortSignal}} deps
- * @returns {Promise<{D:Float32Array, cost:number, estimate:object, returned:{w:number,h:number}, ms:number}>}
+ *   confirm:(est:object)=>Promise<boolean>, decode:(blob:Blob)=>Promise<{rgba:Uint8ClampedArray,w:number,h:number}>, prices?:object, signal?:AbortSignal,
+ *   keep?:(blob:Blob)=>Promise<string|null>}} deps
+ *   W6-R: `signal` (the window) cancels BEFORE the paid call (checked before and after the confirmation); once the request
+ *   is sent it is not aborted (the picture is paid for). `keep(blob)` stores the returned picture (e.g. under
+ *   `_candidates/`) BEFORE anything else touches it; every error after the paid call carries `e.recover`
+ *   ({blob, candidatePath, cost, estimate, returned?}) so the caller can save it again without paying. A window closed
+ *   during the call -> the picture is kept, then AbortError (with `recover`), no post-processing.
+ * @returns {Promise<{D:Float32Array, cost:number, estimate:object, returned:{w:number,h:number}, ms:number, blob:Blob, candidatePath:string|null, keepError:string|null}>}
  */
 export async function runGenerativeDepth({ depth, typeKey = "", name = "image", img, style = null }, deps) {
   if (!img?.blob || !(img.w > 0) || !(img.h > 0)) throw new Error("No source image.");
   if (style && (!style.blob || !(style.w > 0) || !(style.h > 0))) throw new Error("The style example image could not be read.");
+  if (deps.signal?.aborted) throw cancelled();
   const cfg = genDepthConfig(depth, { width: img.w, height: img.h });
   const refs = style ? [img.blob, style.blob] : [img.blob];
   const purposes = style ? [GEN_REF_PURPOSE, GEN_STYLE_PURPOSE] : [GEN_REF_PURPOSE];
@@ -129,18 +138,34 @@ export async function runGenerativeDepth({ depth, typeKey = "", name = "image", 
   estimate.samples = info?.n ?? 0;
   // ALWAYS ask: a paid call never starts without the GM's yes for this exact estimate
   const ok = await deps.confirm(estimate);
-  if (ok !== true) throw Object.assign(new Error("Cancelled."), { name: "AbortError", cancelled: true });
+  if (ok !== true) throw cancelled();
+  if (deps.signal?.aborted) throw cancelled();   // W6-R: window closed while the confirmation was open: nothing sent
   const t0 = Date.now();
   const res = await deps.execute({
     doc: { name: `${name} (depth)`, type: "depth", documentName: "", uuid: undefined },
     description: "depth map", key: typeKey || "depth.generative", cfg, prompt: genPrompt(depth, { style: !!style }),
     meta: { system: "depth", docType: "depth", name, typeKey },
-    count: 1, extraRefs: refs, extraRefPurposes: purposes, signal: deps.signal, runKind: "fast", caller: "depth"
+    // W6-R: no signal here: an aborted fetch after the request left would lose a picture that is already paid for
+    count: 1, extraRefs: refs, extraRefPurposes: purposes, runKind: "fast", caller: "depth"
   });
   const cand = res?.candidates?.[0];
   if (!cand?.blob) throw new Error("The image model returned no picture.");
-  const pic = await deps.decode(cand.blob);
-  if (!(pic?.w > 0 && pic?.h > 0) || pic.rgba?.length < pic.w * pic.h * 4) throw new Error("The returned picture could not be read.");
-  const D = imageToDepth(pic.rgba, pic.w, pic.h, img.w, img.h);
-  return { D, cost: res.cost ?? cand.cost ?? 0, estimate, returned: { w: pic.w, h: pic.h }, ms: Date.now() - t0 };
+  const cost = res.cost ?? cand.cost ?? 0;
+  const ms = Date.now() - t0;
+  // W6-R: the paid picture is stored before anything can fail
+  let candidatePath = null, keepError = null;
+  if (deps.keep) {
+    try { candidatePath = (await deps.keep(cand.blob)) ?? null; }
+    catch (e) { keepError = String(e?.message ?? e); }
+  }
+  const recover = { blob: cand.blob, candidatePath, keepError, cost, estimate };
+  const fail = (e) => Object.assign(e instanceof Error ? e : new Error(String(e)), { recover });
+  if (deps.signal?.aborted) throw fail(cancelled());
+  let pic;
+  try { pic = await deps.decode(cand.blob); } catch (e) { throw fail(e); }
+  if (!(pic?.w > 0 && pic?.h > 0) || pic.rgba?.length < pic.w * pic.h * 4) throw fail(new Error("The returned picture could not be read."));
+  recover.returned = { w: pic.w, h: pic.h };
+  let D;
+  try { D = imageToDepth(pic.rgba, pic.w, pic.h, img.w, img.h); } catch (e) { throw fail(e); }
+  return { D, cost, estimate, returned: { w: pic.w, h: pic.h }, ms, blob: cand.blob, candidatePath, keepError };
 }

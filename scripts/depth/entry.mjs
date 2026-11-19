@@ -39,14 +39,18 @@ export function registerDepth() {
     api.depth = {
       /** Open the window, optionally on an image path and with a type's depth settings. */
       open: ({ path = "", typeKey = "" } = {}) => openApp({ path, typeKey }),
-      /** Run without the window; `depth` = cfg.depth (defaults when omitted). Paid / download confirmations are still asked. */
-      run: async ({ path, typeKey = "", depth } = {}) => {
+      /**
+       * Run without the window; `depth` = cfg.depth (defaults when omitted). Paid / download confirmations are still asked.
+       * W6-R: `signal` cancels before the paid call; `recover` = the `e.recover` of a failed generative run (or
+       * {candidatePath}) saves that paid picture again without a new call.
+       */
+      run: async ({ path, typeKey = "", depth, signal = null, recover = null } = {}) => {
         const [{ runDepth }, { normalizeDepth }] = await Promise.all([import("./run.mjs"), import("../depth-settings.mjs")]);
         const d = normalizeDepth(depth ?? (typeKey ? getConfig(typeKey).depth : {}), { webgpu: !!navigator.gpu });
         const { DialogV2 } = foundry.applications.api;
         const ask = (title, text) => DialogV2.confirm({ window: { title }, content: `<p>${foundry.utils.escapeHTML(text)}</p>`, rejectClose: false, modal: true });
         return runDepth({
-          path, depth: d, typeKey,
+          path, depth: d, typeKey, signal, recover,
           ui: {
             confirmDownload: (items) => ask(game.i18n.localize("AIIMG.DepthRun.DlTitle"), items.map((i) => `${i.repo} ${i.dtype} ${i.sizeMB} MB`).join(", ")),
             confirmPaid: (est) => ask(game.i18n.localize("AIIMG.DepthRun.PaidTitle"), `${est.modelLabel}: ~$${(est.usd ?? 0).toFixed(3)}`)

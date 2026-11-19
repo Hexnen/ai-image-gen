@@ -136,7 +136,7 @@ await test("player without file browsing: only the index, never a directory list
   assert.ok(heard >= 1, "the player's listeners heard the change");
   assert.equal(p.peek("worlds/x/a.webp"), undefined, "cache dropped");
   const info = await p.lookup("/worlds/x/a.webp?v=2");
-  assert.deepEqual({ ...info }, { image: "worlds/x/a.webp", depth: "worlds/x/a_depth.png", format: "png16", mask: null, sidecar: true, source: "index" });
+  assert.deepEqual({ ...info }, { image: "worlds/x/a.webp", depth: "worlds/x/a_depth.png", format: "png16", mask: null, sidecar: true, source: "index", rev: w.t });
   assert.equal(w.listings.length, 0);
 });
 
@@ -208,7 +208,7 @@ await test("remember: immediate write, normalised, listeners; refuses icons / sv
   assert.equal(w.writes, 0);
   assert.equal(await gm.remember("/worlds/x/a.webp?v=1", { depth: "/worlds/x/a_depth.png", format: "png-rg16", mask: "worlds/x/a_mask.png" }), true);
   assert.equal(w.writes, 1, "written at once");
-  assert.deepEqual(w.maps()["worlds/x/a.webp"], { d: "worlds/x/a_depth.png", f: "png-rg16", m: "worlds/x/a_mask.png", s: 0, t: w.t });
+  assert.deepEqual(w.maps()["worlds/x/a.webp"], { d: "worlds/x/a_depth.png", f: "png-rg16", m: "worlds/x/a_mask.png", s: 0, t: w.t, r: w.t });
   assert.ok(heard.length >= 1);
   assert.equal((await gm.lookup("worlds/x/a.webp")).format, "png-rg16");
   // the same again: no second write
@@ -435,10 +435,10 @@ await test("wiring: settings, hooks, run.mjs records the map, renderer shares on
   assert.match(settings, /registerDepthIndexSetting\(\);/);
   assert.match(read("scripts/sheet-button.mjs"), /registerPortraitParallax\(\);/);
   const run = read("scripts/depth/run.mjs");
-  const iDepth = run.indexOf("res.depthPath = await upload(paths.depth");
-  const iRemember = run.indexOf("depthIndex.remember(path");
+  const iDepth = run.indexOf("res.depthPath = await uploadWithRetry(io, paths.depth");
+  const iRemember = run.indexOf("index.remember(key");
   assert.ok(iDepth > 0 && iRemember > iDepth, "remembered after the map is saved");
-  assert.match(run, /try \{\s*res\.metaPath = await upload\(paths\.meta/, "a refused sidecar overwrite does not fail the run");
+  assert.match(run, /try \{\s*res\.metaPath = await uploadWithRetry\(io, paths\.meta/, "a failed sidecar does not fail the run");
   assert.match(run, /notify: false, skipOptimize: true/, "Media Optimizer must not turn the 16-bit PNG into an 8-bit _depth.webp (seen live)");
   const portrait = read("scripts/parallax/portrait.mjs");
   assert.match(portrait, /closeApplicationV2/);
@@ -457,7 +457,12 @@ await test("wiring: settings, hooks, run.mjs records the map, renderer shares on
     for (const k of ["AIIMG.PortraitParallax.Setting.Name", "AIIMG.PortraitParallax.Setting.Hint", "AIIMG.PortraitParallax.Generate", "AIIMG.PortraitParallax.Slow", "AIIMG.DepthRun.Note.metaKept"]) assert.ok(j[k], `${l}: ${k}`);
   }
   for (const f of ["scripts/parallax/portrait.mjs", "scripts/parallax/portrait-core.mjs", "scripts/depth/depth-index.mjs"]) {
-    const src = read(f);
+    let src = read(f);
+    // W6-R: the only request of depth-index: an old-form `_depth.json` sidecar (GM / browsing users, only when listed)
+    if (f.endsWith("depth-index.mjs")) {
+      assert.equal(src.match(/\bfetch\(/g)?.length ?? 0, 1, "depth-index: one fetch");
+      src = src.replace(/async function readDataJson[\s\S]*?\r?\n\}\r?\n/, "");
+    }
     assert.doesNotMatch(src, /\bfetch\(|XMLHttpRequest|WebSocket|sendBeacon/, `${f}: no own network calls`);
     assert.doesNotMatch(src, /https?:\/\//, `${f}: no hosts`);
   }

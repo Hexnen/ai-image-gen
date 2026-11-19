@@ -273,7 +273,10 @@ await test("8-bit grey PNG (mask / preview) and the writer's size guard", async 
 await test("file names: <name>_depth.png next to the image; URLs and core folders go to the data fallback", () => {
   const p = depthPathsFor("ai-image-gen/invincible/Actor/hero-ab12.webp?v=3");
   assert.deepEqual([p.dir, p.base, p.depth, p.mask, p.meta, p.writable], ["ai-image-gen/invincible/Actor", "hero-ab12", "ai-image-gen/invincible/Actor/hero-ab12_depth.png", "ai-image-gen/invincible/Actor/hero-ab12_mask.png", "ai-image-gen/invincible/Actor/hero-ab12_depth.json", true]);
-  assert.equal(depthPathsFor("worlds/x/portraits/Pani%20Z.png").depth, "worlds/x/portraits/Pani-Z_depth.png");
+  // W6-R: depthPathsFor takes the KEY (decoded once by normalizeImagePath) and never decodes again
+  assert.equal(depthPathsFor("worlds/x/portraits/Pani Z.png").depth, "worlds/x/portraits/Pani-Z_depth.png");
+  assert.equal(depthPathsFor("worlds/x/portraits/Pani%20Z.png").depth, "worlds/x/portraits/Pani-20Z_depth.png", "a literal %20 stays");
+  assert.doesNotThrow(() => depthPathsFor("worlds/x/100%.webp"));
   for (const s of ["https://example.com/a.png", "icons/svg/mystery-man.svg", "systems/invincible/art/a.webp", "modules/x/a.png", "../etc/a.png", "a.png", "blob:abc"]) {
     const q = depthPathsFor(s);
     assert.equal(q.writable, false, s);
@@ -331,6 +334,7 @@ await test("depth code: the only absolute URL is huggingface.co; fetch only for 
     assert.ok(!/api\.openai\.com|generativelanguage|openrouter\.ai|anthropic|jsdelivr|unpkg/.test(code), `${f}: external API host`);
     const fetches = code.match(/\bfetch\(/g)?.length ?? 0;
     if (f === "run.mjs") assert.equal(fetches, 1, "run.mjs: one fetch (the source image)");
+    else if (f === "depth-index.mjs") assert.equal(fetches, 1, "depth-index.mjs: one fetch (an old-form sidecar listed in the Data folder)");
     else assert.equal(fetches, 0, `${f}: no fetch`);
     assert.ok(!/XMLHttpRequest|WebSocket|sendBeacon|EventSource/.test(code), `${f}: other transport`);
   }

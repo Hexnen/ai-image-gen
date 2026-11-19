@@ -4,12 +4,31 @@ import { MODULE_ID } from "../constants.mjs";
 import { getConfig } from "../config-store.mjs";
 import { normalizeDepth, fmtMB } from "../depth-settings.mjs";
 import { runDepth, previewUrl } from "./run.mjs";
+import { normalizeImagePath } from "./depth-index.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin, DialogV2 } = foundry.applications.api;
 const L = (k) => game.i18n.localize(k);
 const F = (k, d) => game.i18n.format(k, d);
 const esc = (s) => foundry.utils.escapeHTML(String(s ?? ""));
 const ms = (v) => (v == null ? "" : v >= 1000 ? `${(v / 1000).toFixed(1)} s` : `${Math.round(v)} ms`);
+/**
+ * W6-R: text of a run error. A known `code` with a localized text -> that text; anything else (DOMException codes are
+ * numbers, unknown codes) -> the error's own message. `has` = game.i18n.has (injected for tests).
+ */
+export function depthErrorText(e, { has, localize } = {}) {
+  const k = typeof e?.code === "string" && e.code ? `AIIMG.DepthRun.Err.${e.code}` : "";
+  if (k && has?.(k)) return localize(k);
+  return String(e?.message ?? e ?? "");
+}
+
+/**
+ * W6-R: may a finished run's result be shown for the window's current state? Only for the same image (key) and the
+ * engine it was run with; otherwise it is dropped (the map is saved and indexed anyway).
+ */
+export function resultMatches(result, { key, engine }) {
+  return !!result && result.key === key && (!engine || result.engine === engine);
+}
+
 const usd = (v) => (v == null ? "?" : `$${v < 0.01 ? v.toFixed(4) : v.toFixed(3)}`);
 
 export class DepthApp extends HandlebarsApplicationMixin(ApplicationV2) {
@@ -23,7 +42,8 @@ export class DepthApp extends HandlebarsApplicationMixin(ApplicationV2) {
       pick: DepthApp.#onPick,
       run: DepthApp.#onRun,
       view: DepthApp.#onView,
-      parallax: DepthApp.#onParallax
+      parallax: DepthApp.#onParallax,
+      retrySave: DepthApp.#onRetrySave
     }
   };
 
@@ -35,6 +55,12 @@ export class DepthApp extends HandlebarsApplicationMixin(ApplicationV2) {
   static open({ path = "", typeKey = "", depth = null } = {}) {
     if (!game.user.isGM) return null;
     const app = (this.#instance ??= new this());
+    // W6-R: while a run is busy the image / engine / settings stay as they are (the result belongs to them)
+    if (app.busy) {
+      if (path && path !== app.path) ui.notifications?.warn(L("AIIMG.DepthRun.BusyWait"));
+      app.render({ force: true });
+      return app;
+    }
     if (path && path !== app.path) { app.#clear(); app.path = path; }
     if (typeKey) app.typeKey = typeKey;
     app.depthOverride = depth;
@@ -53,7 +79,10 @@ export class DepthApp extends HandlebarsApplicationMixin(ApplicationV2) {
   view = "after";
   /** results per engine for the current source: {browser?, generative?} */
   results = {};
+  /** W6-R: a paid generative picture whose map was not saved ({blob, candidatePath, cost, estimate, model, key}) */
+  recover = null;
   #urls = [];
+  #abort = null;
 
   settings() {
     const base = this.depthOverride ?? (this.typeKey ? getConfig(this.typeKey).depth : null);
@@ -65,10 +94,17 @@ export class DepthApp extends HandlebarsApplicationMixin(ApplicationV2) {
     this.#urls = [];
     this.results = {};
     this.error = "";
+    this.recover = null;
     this.view = "after";
   }
 
+  /** Normalised key of the current path. */
+  get key() { return normalizeImagePath(this.path, { origin: globalThis.location?.origin ?? "" }); }
+
   _onClose(options) {
+    // W6-R: closing cancels a run before its paid call and stops post-processing after it (the paid picture is kept)
+    this.#abort?.abort();
+    this.#abort = null;
     this.#clear();
     import("./engine.mjs").then((E) => E.releaseAll()).catch(() => {});
     return super._onClose?.(options);
@@ -102,8 +138,11 @@ export class DepthApp extends HandlebarsApplicationMixin(ApplicationV2) {
           + (d.gen.styleRef ? ` · ${F("AIIMG.DepthRun.SetGenStyle", { file: d.gen.styleRef.split("/").pop() })}` : "")
         : F("AIIMG.DepthRun.SetBrowser", { model: d.model, precision: d.precision, res: d.resolution, mask: d.mask.enabled ? d.mask.model : L("AIIMG.DepthRun.NoMask") }),
       typeKey: this.typeKey,
+      recover: this.recover && !this.busy && this.recover.key === this.key ? {
+        candidatePath: this.recover.candidatePath ?? "", cost: this.recover.cost != null ? usd(this.recover.cost) : ""
+      } : null,
       result: r ? {
-        url: r.url, maskUrl: r.maskUrl, model: r.model, device: r.device, dtype: r.dtype, depthPath: r.depthPath, maskPath: r.maskPath, metaPath: r.metaPath,
+        url: r.url, maskUrl: r.maskUrl, model: r.model, device: r.device, dtype: r.dtype, depthPath: r.depthPath, maskPath: r.maskPath, metaPath: r.metaPath, candidatePath: r.candidatePath ?? "",
         size: `${r.w}×${r.h}`, bytes: fmtMB(Math.round(r.bytes / 1e4) / 100), cost: r.cost != null ? usd(r.cost) : "",
         maskLine: r.mask ? (r.mask.ok ? F("AIIMG.DepthRun.MaskOk", { model: r.mask.model, device: r.mask.device, dtype: r.mask.dtype }) : F("AIIMG.DepthRun.MaskFailed", { error: r.mask.error ?? "" })) : "",
         gpuLine: r.gpu?.ok ? F("AIIMG.DepthRun.GpuYes", { desc: [r.gpu.vendor, r.gpu.architecture, r.gpu.description].filter(Boolean).join(" ") || "?", f16: r.gpu.f16 ? "shader-f16" : "no shader-f16" }) : F("AIIMG.DepthRun.GpuNo", { reason: r.gpu?.reason ?? "" }),
@@ -117,8 +156,9 @@ export class DepthApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   _onRender() {
     const el = this.element;
-    el.querySelector("input[name=path]")?.addEventListener("change", (ev) => { const v = ev.target.value.trim(); if (v !== this.path) { this.#clear(); this.path = v; this.render(); } });
-    el.querySelector("select[name=engine]")?.addEventListener("change", (ev) => { this.engine = ev.target.value; this.view = "after"; this.render(); });
+    // W6-R: no path / engine change while a run is busy (the controls are disabled too)
+    el.querySelector("input[name=path]")?.addEventListener("change", (ev) => { if (this.busy) { ev.target.value = this.path; return; } const v = ev.target.value.trim(); if (v !== this.path) { this.#clear(); this.path = v; this.render(); } });
+    el.querySelector("select[name=engine]")?.addEventListener("change", (ev) => { if (this.busy) { ev.target.value = this.engine; return; } this.engine = ev.target.value; this.view = "after"; this.render(); });
   }
 
   #setStatus(text) {
@@ -136,9 +176,10 @@ export class DepthApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   static #onPick() {
+    if (this.busy) return;
     const fp = new (foundry.applications.apps.FilePicker.implementation)({
       type: "image", current: this.path,
-      callback: (p) => { this.#clear(); this.path = p; this.render(); }
+      callback: (p) => { if (this.busy) return; this.#clear(); this.path = p; this.render(); }
     });
     return fp.browse();
   }
@@ -156,15 +197,24 @@ export class DepthApp extends HandlebarsApplicationMixin(ApplicationV2) {
     import("../parallax/entry.mjs").then((m) => m.openParallax({ image: this.path, depths, parallax: p }));
   }
 
-  static async #onRun() {
+  static async #onRun() { return this.#run(null); }
+
+  /** W6-R: save the kept paid picture again (no new paid call). */
+  static async #onRetrySave() { if (this.recover && this.recover.key === this.key) return this.#run(this.recover); }
+
+  async #run(recover) {
     if (this.busy || !this.path) return;
     this.busy = true;
     this.error = "";
+    const ac = new AbortController();
+    this.#abort = ac;
     await this.render();
-    const depth = { ...this.settings(), engine: this.engine };
+    const engine = recover ? "generative" : this.engine;
+    const key = this.key;
+    const depth = { ...this.settings(), engine };
     try {
       const r = await runDepth({
-        path: this.path, depth, typeKey: this.typeKey,
+        path: this.path, depth, typeKey: this.typeKey, signal: ac.signal, recover,
         ui: {
           status: (code, d) => this.#setStatus(F(`AIIMG.DepthRun.S.${code}`, { model: d?.label ?? "", device: d?.device ?? "", dtype: d?.dtype ?? "" })),
           progress: (p) => this.#progress(p),
@@ -172,27 +222,37 @@ export class DepthApp extends HandlebarsApplicationMixin(ApplicationV2) {
           confirmPaid: (est) => confirmPaid(est)
         }
       });
+      import("../parallax/entry.mjs").then((m) => m.forgetDepthChecks()).catch(() => {});
+      ui.notifications.info(F("AIIMG.DepthRun.Saved", { path: esc(r.depthPath) }));
+      if (recover) this.recover = null;
+      // W6-R: shown only for the image and engine it was made for (closed window / other image: dropped, map is saved)
+      if (ac.signal.aborted || !resultMatches(r, { key: this.key, engine })) return;
       r.url = await previewUrl(r.depth, r.w, r.h);
       this.#urls.push(r.url);
       if (r.maskA) { r.maskUrl = await previewUrl(r.maskA, r.w, r.h); this.#urls.push(r.maskUrl); }
       delete r.raw; delete r.depth; delete r.maskA;
-      const old = this.results[this.engine];
+      const old = this.results[engine];
       if (old?.url) URL.revokeObjectURL(old.url);
-      this.results[this.engine] = r;
-      r.format = depth.output.format === "png-rg16" ? "png-rg16" : "png16";
-      import("../parallax/entry.mjs").then((m) => m.forgetDepthChecks()).catch(() => {});
+      this.results[engine] = r;
+      r.format ??= depth.output.format === "png-rg16" ? "png-rg16" : "png16";
+      this.engine = engine;
       this.view = "after";
       console.log(`${MODULE_ID} | depth`, { model: r.model, device: r.device, dtype: r.dtype, timings: r.timings, depth: r.depthPath });
-      ui.notifications.info(F("AIIMG.DepthRun.Saved", { path: esc(r.depthPath) }));
     } catch (e) {
+      // W6-R: a paid picture that did not become a map is kept for "Save again" (no new call)
+      if (e?.recover) {
+        this.recover = { ...e.recover, key };
+        if (e.recover.candidatePath) ui.notifications.warn(F("AIIMG.DepthRun.Kept", { path: esc(e.recover.candidatePath) }));
+      }
       if (!e?.cancelled) {
         console.error(`${MODULE_ID} | depth failed`, e);
-        this.error = e?.code ? L(`AIIMG.DepthRun.Err.${e.code}`) : String(e?.message ?? e);
+        this.error = depthErrorText(e, { has: (k) => game.i18n.has(k), localize: L });
       }
     } finally {
+      if (this.#abort === ac) this.#abort = null;
       this.busy = false;
       this.statusText = "";
-      this.render();
+      if (!ac.signal.aborted) this.render();
     }
   }
 }

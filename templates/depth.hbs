@@ -26,6 +26,13 @@
   <progress data-role="progress" hidden></progress>
 
   {{#if error}}<p class="aiimg-error" role="alert"><i class="fa-solid fa-circle-xmark" aria-hidden="true"></i> {{error}}</p>{{/if}}
+  {{#if recover}}
+  <div class="aiimg-depthrun-recover aiimg-warn" role="status">
+    <p>{{localize "AIIMG.DepthRun.RecoverText"}}{{#if recover.cost}} ({{recover.cost}}){{/if}}</p>
+    {{#if recover.candidatePath}}<p><code>{{recover.candidatePath}}</code></p>{{/if}}
+    <button type="button" data-action="retrySave"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i> {{localize "AIIMG.DepthRun.RetrySave"}}</button>
+  </div>
+  {{/if}}
 
   {{#if result}}
   <div class="aiimg-depthrun-views" role="group" aria-label="{{localize 'AIIMG.DepthRun.Views'}}">
@@ -48,7 +55,8 @@
     <dt>{{localize "AIIMG.DepthRun.Model"}}</dt><dd>{{result.model}} · {{result.device}} · {{result.dtype}}{{#if result.cost}} · {{result.cost}}{{/if}}</dd>
     {{#if result.maskLine}}<dt>{{localize "AIIMG.DepthRun.Mask"}}</dt><dd>{{result.maskLine}}</dd>{{/if}}
     <dt>WebGPU</dt><dd>{{result.gpuLine}}</dd>
-    <dt>{{localize "AIIMG.DepthRun.File"}}</dt><dd><code>{{result.depthPath}}</code> · {{result.size}} · {{result.bytes}}{{#if result.maskPath}}<br><code>{{result.maskPath}}</code>{{/if}}<br><code>{{result.metaPath}}</code></dd>
+    <dt>{{localize "AIIMG.DepthRun.File"}}</dt><dd><code>{{result.depthPath}}</code> · {{result.size}} · {{result.bytes}}{{#if result.maskPath}}<br><code>{{result.maskPath}}</code>{{/if}}{{#if result.metaPath}}<br><code>{{result.metaPath}}</code>{{/if}}</dd>
+    {{#if result.candidatePath}}<dt>{{localize "AIIMG.DepthRun.Candidate"}}</dt><dd><code>{{result.candidatePath}}</code></dd>{{/if}}
     <dt>{{localize "AIIMG.DepthRun.Timings"}}</dt><dd>{{#each timings}}<span class="aiimg-depthrun-t">{{label}} {{value}}</span>{{/each}}</dd>
     {{#each result.notes}}<dt></dt><dd class="hint">{{this}}</dd>{{/each}}
   </dl>

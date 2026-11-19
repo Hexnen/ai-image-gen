@@ -263,8 +263,8 @@ await test("without a style example: one reference, no prefix, refCount 1; with 
 await test("run.mjs loads the style example from cfg.depth.gen.styleRef before the estimate and passes the reference count", () => {
   const run = readFileSync(new URL("../scripts/depth/run.mjs", import.meta.url), "utf8");
   assert.match(run, /depth\.gen\?\.styleRef/);
-  assert.match(run, /loadImage\(stylePath\)/);
-  assert.match(run, /runGenerativeDepth\(\{ depth, typeKey, name, img, style \}/);
+  assert.match(run, /load\(normalizeImagePath\(stylePath\) \|\| stylePath\)/);
+  assert.match(run, /runGenerativeDepth\(\{ depth, typeKey, name: depthPathsFor\(key\)\.base, img, style \}/);
   assert.match(run, /estimate: \(cfg, refCount = 1\) => F\.estimateInfo\(cfg, refCount, "sync"\)/);
   assert.match(run, /code: "styleRef"/);
   // nothing bundled: no style-example image ships with the module
