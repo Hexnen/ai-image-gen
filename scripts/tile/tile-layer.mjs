@@ -65,21 +65,33 @@ export function applyTileLayer(obj) {
   return layer;
 }
 
-/** Przelicz wszystkie kafelki AI na scenie (po dodaniu / zmianie / usunięciu dowolnego kafelka). */
+/** Przelicz wszystkie kafelki AI na scenie (po dodaniu / zmianie / usunięciu dowolnego kafelka): od razu i po refreshState. */
 function reflowAll() {
   for (const t of canvas?.tiles?.placeables ?? []) {
-    if (isAiTileDoc(t.document)) { try { t.renderFlags.set({ refreshState: true }); } catch { /* best effort */ } }
+    if (!isAiTileDoc(t.document)) continue;
+    safeApply(t);
+    try { t.renderFlags.set({ refreshState: true }); } catch { /* best effort */ }
   }
 }
 
-/** Hooki (raz, przy init). */
+const safeApply = (obj) => { try { applyTileLayer(obj); } catch (e) { console.warn(`${MODULE_ID} | AI Tile layer`, e); } };
+
+/**
+ * Hooki (raz, przy init).
+ * Kolejność w Foundry v14: Tile#_draw tworzy siatkę (PrimarySpriteMesh, sortLayer 0), a flagi odświeżenia (`refresh` ->
+ * `refreshState` -> 500) stosuje dopiero ticker kanwy przed następną klatką. W karcie, która nie rysuje (tło, ukryty
+ * panel: requestAnimationFrame stoi), flagi czekają, więc siatka zostaje na 0 do pierwszej klatki; ręczne
+ * `renderer.render` / przechwycenie obrazu w tym czasie widziałoby ją na tle. Dlatego: (1) `drawTile` ustawia warstwę
+ * od razu po narysowaniu (także po przerysowaniu sceny / zmianie tekstury), (2) `refreshTile` z `refreshState`
+ * przywraca ją po każdym wpisaniu 500 w tym samym przebiegu flag (bez klatki pomiędzy), (3) `canvasReady` dla
+ * pewności przelicza wszystkie kafelki AI sceny.
+ */
 export function installTileLayer() {
   if (installed) return;
   installed = true;
-  Hooks.on("refreshTile", (obj, flags) => {
-    if (!flags?.refreshState) return;
-    try { applyTileLayer(obj); } catch (e) { console.warn(`${MODULE_ID} | AI Tile layer`, e); }
-  });
+  Hooks.on("drawTile", (obj) => safeApply(obj));
+  Hooks.on("refreshTile", (obj, flags) => { if (flags?.refreshState) safeApply(obj); });
+  Hooks.on("canvasReady", () => { for (const t of canvas?.tiles?.placeables ?? []) if (isAiTileDoc(t.document)) safeApply(t); });
   const onScene = (doc) => doc?.parent?.id === canvas?.scene?.id;
   Hooks.on("createTile", (doc) => { if (onScene(doc)) reflowAll(); });
   Hooks.on("updateTile", (doc) => { if (onScene(doc)) reflowAll(); });

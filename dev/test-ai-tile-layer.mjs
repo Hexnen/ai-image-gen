@@ -71,9 +71,84 @@ test("wiring: module.mjs installs the hooks at init; the runtime re-applies afte
   assert.match(mod, /installTileLayer\(\);/);
   const src = fs.readFileSync(new URL("../scripts/tile/tile-layer.mjs", import.meta.url), "utf8");
   assert.match(src, /Hooks\.on\("refreshTile"[\s\S]*?refreshState/);
+  assert.match(src, /Hooks\.on\("drawTile"/);
+  assert.match(src, /Hooks\.on\("canvasReady"/);
   for (const h of ["createTile", "updateTile", "deleteTile"]) assert.match(src, new RegExp(`Hooks\\.on\\("${h}"`));
   // the document is never written (client-side mesh placement only)
   assert.doesNotMatch(src, /\.update\(|updateEmbeddedDocuments|setFlag/);
 });
+
+// ---- runtime with a fake Foundry v14: Tile#_draw makes a mesh at sortLayer 0; the render flags (refresh -> refreshState
+// -> 500, then the refreshTile hook) are applied only when the canvas ticker runs (a background / hidden tab does not run it).
+{
+  const { installTileLayer, applyTileLayer } = await import("../scripts/tile/tile-layer.mjs");
+  const hooks = {};
+  globalThis.Hooks = { on: (n, f) => (hooks[n] ??= []).push(f), callAll: (n, ...a) => (hooks[n] ?? []).forEach((f) => f(...a)) };
+  const placeables = [];
+  globalThis.canvas = { scene: { id: "S" }, tiles: { placeables } };
+  const pending = new Set();
+  class FakeTile {
+    constructor(doc) { this.document = doc; this.renderFlags = { set: (f) => { Object.assign(this._flags, f); pending.add(this); } }; this._flags = {}; }
+    get bounds() { const d = this.document; return { x: d.x, y: d.y, width: d.width, height: d.height }; }
+    draw() {   // Tile#_draw + PlaceableObject#draw: new mesh at 0, "refresh" flags queued, drawTile hook
+      this.mesh = { sortLayer: 0, destroyed: false };
+      this.renderFlags.set({ refreshState: true });
+      Hooks.callAll("drawTile", this);
+    }
+    tick() {   // PlaceableObject#applyRenderFlags
+      const flags = this._flags; this._flags = {};
+      if (flags.refreshState) this.mesh.sortLayer = TILES_SORT_LAYER;   // Tile#_refreshState
+      Hooks.callAll("refreshTile", this, flags);
+    }
+  }
+  const ticker = () => { for (const t of [...pending]) { pending.delete(t); t.tick(); } };
+  const doc = (id, o = {}) => ({ id, parent: { id: "S" }, x: 100, y: 100, width: 200, height: 100, elevation: 0, sort: 3,
+    flags: o.ai === false ? {} : { [MODULE_ID]: { [TILE_FLAG]: { key: id } } }, ...o });
+  installTileLayer();
+  installTileLayer();   // idempotent
+  const ai = new FakeTile(doc("ai")); placeables.push(ai);
+  const plain = new FakeTile(doc("plain", { ai: false, x: 900 })); placeables.push(plain);
+
+  test("runtime: the AI tile mesh is on 247.5 right after draw, before any ticker frame (background tab / manual render)", () => {
+    assert.equal(hooks.drawTile?.length, 1, "one drawTile hook");
+    ai.draw(); plain.draw();
+    assert.equal(ai.mesh.sortLayer, AI_TILE_SORT_LAYER);
+    assert.equal(plain.mesh.sortLayer, 0, "ordinary tile untouched (Foundry sets 500 on its refresh)");
+  });
+
+  test("runtime: after Foundry's refreshState wrote 500 the hook puts it back in the same pass", () => {
+    ticker();
+    assert.equal(ai.mesh.sortLayer, AI_TILE_SORT_LAYER);
+    assert.equal(plain.mesh.sortLayer, TILES_SORT_LAYER);
+    ai.renderFlags.set({ refreshState: true }); ticker();   // hover / hidden toggle / fade end
+    assert.equal(ai.mesh.sortLayer, AI_TILE_SORT_LAYER);
+    ai.renderFlags.set({ refreshMesh: true }); ticker();    // other flags never touch the layer
+    assert.equal(ai.mesh.sortLayer, AI_TILE_SORT_LAYER);
+  });
+
+  test("runtime: scene redraw / texture change (new mesh at 0) and canvasReady", () => {
+    ai.draw();
+    assert.equal(ai.mesh.sortLayer, AI_TILE_SORT_LAYER);
+    ai.mesh.sortLayer = 0; Hooks.callAll("canvasReady", canvas);
+    assert.equal(ai.mesh.sortLayer, AI_TILE_SORT_LAYER);
+    ticker();
+    assert.equal(ai.mesh.sortLayer, AI_TILE_SORT_LAYER);
+  });
+
+  test("runtime: an ordinary tile moved under it -> 500 at once (updateTile), back -> 247.5; destroyed mesh ignored", () => {
+    plain.document.x = 150; plain.document.sort = 1;
+    Hooks.callAll("updateTile", plain.document, { x: 150 });
+    assert.equal(ai.mesh.sortLayer, TILES_SORT_LAYER, "applied immediately, without a ticker frame");
+    ticker(); assert.equal(ai.mesh.sortLayer, TILES_SORT_LAYER);
+    plain.document.x = 900;
+    Hooks.callAll("updateTile", plain.document, { x: 900 });
+    assert.equal(ai.mesh.sortLayer, AI_TILE_SORT_LAYER);
+    ticker();
+    ai.mesh.destroyed = true;
+    assert.equal(applyTileLayer(ai), null);
+    Hooks.callAll("updateTile", { parent: { id: "other" } }, {});   // another scene: nothing
+  });
+  delete globalThis.Hooks; delete globalThis.canvas;
+}
 
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);

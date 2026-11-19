@@ -1536,3 +1536,56 @@ zwykłym kafelkiem (wyjątek) nadal zakrywa nakładki. Ogień/dym moinen-maps (2
 było ognia na scenie, sprawdzone tylko kolejnością sortLayer. Widok gracza (hook jest u wszystkich, bez warunku MG) nie
 oglądany na żywo. Panel ukryty: płynność w pierwszoplanowej karcie nie oglądana. Prawdziwy wynik modelu (płatny) nie
 robiony: jeśli model sam zmieni jasność/kolor w środku, tego W10 nie wyrówna.
+
+## W10b: AI Tile na 247,5 także u gracza (i w karcie, która nie rysuje)
+
+**Objaw.** Gracz (Test Gracz 1) na tej samej scenie: siatka kafelka AI na sortLayer 0, nawet po
+`renderFlags.set({refreshState:true})`; ręczne `applyTileLayer(tile)` dawało 247,5 i zostawało.
+
+**Przyczyna (zmierzona na lane 8, nie zależy od roli MG/gracz).** Foundry v14: `Tile#_draw` -> `canvas.primary.addTile`
+tworzy `PrimarySpriteMesh` z domyślnym sortLayer 0; 500 wpisuje dopiero `Tile#_refreshState`, a flagi odświeżenia
+(`refresh` z `PlaceableObject#draw`, potem `refreshState`) stosuje ticker kanwy (`applyRenderFlags` przed klatką). Hook
+`refreshTile` (a w nim 247,5) idzie w tym samym przebiegu. Karta w tle / ukryty panel przeglądarki nie dostaje
+`requestAnimationFrame` (zmierzone: rAF nie odpalił, `ticker.lastTime` stoi, `renderFlags.size` = 9 czeka), więc siatka
+świeżo narysowanego kafelka zostaje na 0, dopóki karta nie narysuje klatki; `refreshState` tylko dopisuje się do
+czekających flag. To samo stało się na żywo u MG w karcie w tle (kafelek utworzony: sortLayer 0, 9 flag czeka; jedno
+`canvas.app.ticker.update()` -> 247,5). Odczyt u gracza był więc odczytem przed pierwszą klatką. W zwykłej grze klatka
+z siatką na 0 nie jest rysowana, ale ręczne `renderer.render` / przechwycenie obrazu / pomiar w tym oknie widziały
+kafelek na tle (pod wszystkimi warstwami moinen-maps).
+
+**Zmiana (`scripts/tile/tile-layer.mjs`).** (1) hook `drawTile`: warstwa ustawiana od razu po narysowaniu siatki (nowy
+kafelek, przerysowanie sceny, zmiana tekstury), bez czekania na ticker; (2) `refreshTile` z `refreshState` jak dotąd
+(przywraca po każdym wpisaniu 500 w tym samym przebiegu flag, bez klatki pomiędzy); (3) `canvasReady`: przelicza
+wszystkie kafelki AI; (4) `reflowAll` (create/update/delete dowolnego kafelka) stosuje warstwę od razu, potem
+`refreshState`. Bez strażnika właściwości i bez własnego tickera: Foundry wpisuje sortLayer tylko w `_refreshState`.
+
+**Testy.** `dev/test-ai-tile-layer.mjs` 5 -> 9: atrapa Foundry (siatka na 0 po draw, flagi stosowane tylko przez
+„ticker”): warstwa 247,5 zaraz po draw przed klatką, powrót po 500 z `refreshState`, inne flagi nie ruszają warstwy,
+przerysowanie (nowa siatka na 0), `canvasReady`, zwykły kafelek pod spodem -> 500 od razu i z powrotem, zniszczona
+siatka, inna scena; okablowanie `drawTile` / `canvasReady`. Ze starym kodem 5 z 9 nie przechodzi. Wszystkie 38
+`dev/test-*.mjs` exit 0.
+
+**Na żywo (lane 8, slot `ai-tile-player`, MG `claude` na `http://127.0.0.1:30008`, gracz Test Gracz 1 na
+`http://127.0.0.2:30008`, The Warehouse aktywna, ciemność 0,9, strefy, deszcz, ogień/dym; panel przeglądarki ukryty, więc
+ticker pompowany ręcznie; zero płatnych wywołań, bez kluczy).** moinens-ai-gen włączony w świecie lane na czas testu.
+- Stary kod: u MG (karta w tle) nowy kafelek AI sortLayer 0 z 9 czekającymi flagami; po jednym `ticker.update` 247,5.
+  U gracza (po wczytaniu, z klatkami) 247,5; dziennik `refreshTile` u gracza: każdy `refreshState` kończy na 247,5.
+- Nowy kod, gracz: ticker zatrzymany, MG tworzy kafelek AI -> u gracza `drawTile` już z 247,5, przed jakąkolwiek klatką
+  (9 flag czeka); po klatce 247,5. `canvas.draw()` (przerysowanie sceny) przy zatrzymanym tickerze: 247,5 od razu i po
+  klatce. Ukrycie / odkrycie przez MG z fade: u gracza po fade alpha 1, 247,5; sąsiedzi w `canvas.primary`: 245, 247,
+  [kafelek], 248, 249; żaden obiekt elewacji 0 o warstwie > 247,5 przed nim ani < 247,5 za nim.
+- Piksele u gracza (render + `readPixels` tej samej klatki, bez postępu animacji, szum 0; kafelek = kopia czystej mapy
+  900×600 przy 1500,2250, pogoda 990+ ukryta tylko na czas próbek): różnica z / bez kafelka w prostokącie 1,1 przy
+  247,5 wobec 3,9 przy 500; przy ukrytych nakładkach > 247,5 z / bez 3,76 (gruz 247 zakryty), niebieski tint kafelka
+  zmienia środek o 5,94 (kafelek rysowany nad mapą), a ta sama siatka przeniesiona pod tło: 0; z nakładkami tint tylko
+  1,83 (strefa / deszcz / ciemność nad kafelkiem jak nad mapą). Ogień / dym (256/750/800/801, 4 obiekty) zmienia
+  prostokąt z kafelkiem o 1,99, czyli rysuje się nad nim. Skoki jasności na krawędziach (L/P/G/D): 247,5 3,71/0,54/0,3/0,9,
+  bez kafelka 3,45/0,54/0,51/0,9, przy 500 4,45/0,54/0,19/0,9. Zrzut próbki obejrzany (jedna ciągła mapa ze strefą,
+  dymem i deszczem).
+- MG (nowy kod): po `canvas.draw()` od razu 247,5; ukrycie -> 247,5; odkrycie z fade -> alpha 1, 247,5; ta sama kolejność.
+- Po teście: kafelki i plik `_tests/blend/zz-player-copy.png` usunięte, karty zamknięte, `lane8.ps1 restore`, slot oddany;
+  karty `seed` (30000) nie dotykałem.
+
+**NIESPRAWDZONE.** Pierwszoplanowa karta z prawdziwym rAF (panel był ukryty; klatki pompowane ręcznie tym samym
+`ticker.update`, którego używa Foundry). Wyjątek 500 nie sprawdzany ponownie na żywo (tylko test jednostkowy z atrapą).
+Gracz bez widoku sceny (nieaktywna scena) nie dotyczy.
