@@ -36,19 +36,17 @@ const GEMINI_ORDER = ["0.5K", "1K", "2K", "4K"];
  */
 export const DEFAULT_TILE_OPTS = Object.freeze({
   feather: 8,       // px sceny: miękka krawędź DO ŚRODKA prostokąta; 0 = ostra krawędź
-  tokens: false,    // tokeny na wysyłanym obrazie
   context: CONTEXT_FACTOR,
   count: 1
 });
 
-/** Opcje okna z zapisu `tileOptions` (albo z formularza) + domyślne; nieznane klucze (np. dawne `mask`) pomijane. */
+/** Opcje okna z zapisu `tileOptions` (albo z formularza) + domyślne; nieznane klucze (dawne `mask`, `tokens`) pomijane. */
 export function normalizeTileOptions(saved = {}) {
   const s = saved && typeof saved === "object" ? saved : {};
   const d = DEFAULT_TILE_OPTS;
   const f = Number(s.context);
   return {
     feather: s.feather != null && Number.isFinite(Number(s.feather)) ? Math.min(256, Math.max(0, Math.round(Number(s.feather)))) : d.feather,
-    tokens: typeof s.tokens === "boolean" ? s.tokens : d.tokens,
     context: CONTEXT_FACTORS.includes(f) ? f : d.context,
     count: Math.min(8, Math.max(1, Math.floor(Number(s.count)) || d.count))
   };
@@ -370,6 +368,36 @@ export function pointsIn(points, rect, scale = 1, scaleY = scale) {
   return points.map((p) => ({ x: (p.x - rect.x) * scale, y: (p.y - rect.y) * scaleY }));
 }
 
+// ---------- co trafia na wysyłany obraz (render canvas.primary) ----------
+
+/**
+ * W8: warstwy moinen-maps w canvas.primary, które SĄ mapą (zostają na obrazie): 240 malowana woda, 245 drogi,
+ * 247 ruiny (obiekty zniszczeń + ich statyczny cache). Reszta tej grupy to efekty / znaczniki / interfejs:
+ * 248 odbicia w wodzie i odłamki, 249 cząstki zniszczeń, 250 dzielnice (nakładka), 251 poświaty świateł, 252/253,
+ * 255 auta i zmarszczki wody, 256/750/800 ogień i dym, 258 strefy (numery, ikony, podświetlenia), 705 zanurzenie,
+ * 801 para, 819-825 presety (rakiety, błyskawice...), 990-1000 pogoda, 100 życie sceny Orbita (gwiazdy, chmury),
+ * a także rysunki, Sequencer / pixel-vfx i wszystko z innych modułów.
+ */
+export const CAPTURE_MAP_LAYERS = Object.freeze([240, 245, 247]);
+
+/**
+ * Czy dziecko canvas.primary narysować na wysyłanym obrazie. Właściciel (W8): do modelu idzie WYŁĄCZNIE mapa (tło sceny
+ * + warstwy mapy moinen-maps) i kafelki w rejonie. Kafelki: wszystkie poniżej „overhead” (elewacja < foregroundElevation),
+ * także UKRYTE przed graczami (MG je widzi i buduje z nich mapę; nowy AI Tile jest ukryty), w swojej kolejności
+ * (elewacja, sort) i z alfą dokumentu. Nigdy: pierwszy plan / dachy, tokeny, pogoda, efekty, VFX, ogień, dym, znaczniki
+ * stref, pinezki, rysunki, światła i wszystko nieznane.
+ * @param {{kind:"background"|"foreground"|"tile"|"token"|"weather"|"other", sortLayer?:number, elevation?:number,
+ *          overhead?:boolean}} c
+ */
+export function captureInclude(c) {
+  switch (c?.kind) {
+    case "background": return true;
+    case "tile": return !c.overhead;
+    case "foreground": case "token": case "weather": return false;
+    default: return CAPTURE_MAP_LAYERS.includes(num(c?.sortLayer, NaN)) && num(c?.elevation, 0) === 0;
+  }
+}
+
 // ---------- Tile ----------
 
 /**
@@ -377,14 +405,15 @@ export function pointsIn(points, rect, scale = 1, scaleY = scale) {
  * v14: x/y Tile to punkt KOTWICY kształtu (`texture.anchorX/Y`, domyślnie 0.5 = środek), nie lewy górny róg
  * (sprawdzone na żywo, lane 8: x/y = róg dało kafelek przesunięty o pół rozmiaru). Kotwica 0.5 podana jawnie.
  * @param {{x,y,width,height}} bbox
+ * W8: `hidden` (domyślnie true): nowy kafelek widzi tylko MG (półprzezroczysty), gracze dopiero po odkryciu.
  * @param {{elevation?:number, sort?:number}[]} existing  kafelki sceny
  */
-export function tileData({ bbox, src, existing = [], elevation = 0, flags }) {
+export function tileData({ bbox, src, existing = [], elevation = 0, hidden = true, flags }) {
   const same = existing.filter((t) => num(t.elevation, 0) === elevation).map((t) => num(t.sort, 0));
   const sort = same.length ? Math.max(...same) + 1 : 0;
   return {
     x: bbox.x + bbox.width / 2, y: bbox.y + bbox.height / 2, width: bbox.width, height: bbox.height,
-    rotation: 0, elevation, sort,
+    rotation: 0, elevation, sort, hidden: !!hidden,
     texture: { src, anchorX: 0.5, anchorY: 0.5 },
     ...(flags ? { flags } : {})
   };

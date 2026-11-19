@@ -88,7 +88,7 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       id: this.id,
       busy: this.busy, error: this.error, preparing: !job && !this.error,
       description: this.description, count, maxVersions: 8, mode: this.mode,
-      feather: this.opts.feather, tokens: this.opts.tokens,
+      feather: this.opts.feather,
       contextOptions: CONTEXT_FACTORS.map((f) => ({ value: f, label: `${String(f).replace(".", game.i18n.lang === "pl" ? "," : ".")}×`, selected: f === this.opts.context })),
       ready,
       hasKey: ready?.hasKey ?? true,
@@ -120,7 +120,7 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       const n = ev.target?.name;
       if (!n) return;
       this.#readForm();
-      if (["tokens", "feather", "context", "mode"].includes(n)) {
+      if (["feather", "context", "mode"].includes(n)) {
         clearTimeout(t);
         t = setTimeout(() => { this.job = null; this.render(); this.prepared = this.#prepare(); saveTileOptions(this.opts); }, 150);
       } else if (n === "count") { saveTileOptions(this.opts); this.render(); }
@@ -139,7 +139,6 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       ...this.opts,
       count: fd.count,
       feather: Number(fd.feather) || 0,
-      tokens: !!fd.tokens,
       context: fd.context === undefined ? this.opts.context : Number(fd.context)
     });
     this.mode = fd.mode === "batch" ? "batch" : "fast";
@@ -254,7 +253,9 @@ export class TileReviewApp extends HandlebarsApplicationMixin(ApplicationV2) {
       discard: TileReviewApp.#onDiscard,
       retry: TileReviewApp.#onRetry,
       toggle: TileReviewApp.#onToggle,
-      pan: TileReviewApp.#onPan
+      pan: TileReviewApp.#onPan,
+      reveal: TileReviewApp.#onReveal,
+      done: TileReviewApp.#onDone
     }
   };
 
@@ -284,6 +285,7 @@ export class TileReviewApp extends HandlebarsApplicationMixin(ApplicationV2) {
     this.busy = false;
     this.error = "";
     this.decided = false;
+    this.pasted = null;   // W8: {tileId, sceneId, revealed} po wklejeniu (kafelek ukryty przed graczami)
     this.rect = job?.tileRect ?? batch?.geom?.tileRect;
     this.sceneId = job?.sceneId ?? batch?.geom?.sceneId;
     this.preview = this.#onScene() ? new MapPreview(this.rect) : null;
@@ -314,7 +316,8 @@ export class TileReviewApp extends HandlebarsApplicationMixin(ApplicationV2) {
       busy: this.busy, error: this.error, original: this.original,
       canRetry: !!this.job, onScene: !!this.preview,
       offScene: F("AIIMG.Tile.OffScene", { scene: foundry.utils.escapeHTML(game.scenes.get(this.sceneId)?.name ?? "?") }),
-      hasActive: !!this.active
+      hasActive: !!this.active,
+      pasted: this.pasted ? { revealed: !!this.pasted.revealed, gone: !this.#pastedDoc() } : null
     };
   }
 
@@ -355,24 +358,29 @@ export class TileReviewApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   static async #onAccept() {
-    if (this.busy || !this.active) return;
+    if (this.busy || !this.active || this.pasted) return;
     this.busy = true; this.error = "";
     await this.render();
+    let tile = null;
     try {
       if (this.job) {
-        const { tile } = await acceptVariant(this.job, this.active);
-        ui.notifications.info(F("AIIMG.Tile.Pasted", { id: tile?.id ?? "" }));
+        ({ tile } = await acceptVariant(this.job, this.active));
+        ui.notifications.info(F("AIIMG.Tile.PastedHidden", { id: tile?.id ?? "" }));
       } else {
         const { rec, geom } = this.batch;
         if (getBatch(rec.id)?.status !== "awaiting-pick") throw new Error(L("AIIMG.Pick.AlreadyDecided"));
         const scene = game.scenes.get(geom.sceneId);
-        const tile = await createTile(scene, geom.tileRect, this.active.path, { key: `${rec.id}-pick`, batchId: rec.id, prompt: String(rec.items?.[0]?.meta?.description ?? "").slice(0, 500), provider: rec.provider, model: rec.model });
+        tile = await createTile(scene, geom.tileRect, this.active.path, { key: `${rec.id}-pick`, batchId: rec.id, prompt: String(rec.items?.[0]?.meta?.description ?? "").slice(0, 500), provider: rec.provider, model: rec.model });
         await patchBatch(rec.id, { candidates: undefined, status: "done", picked: this.active.path }, { onlyStatus: "awaiting-pick" });
-        ui.notifications.info(F("AIIMG.Tile.Pasted", { id: tile?.id ?? "" }));
+        ui.notifications.info(F("AIIMG.Tile.PastedHidden", { id: tile?.id ?? "" }));
       }
       this.decided = true;
       this.busy = false;
-      return this.close({ force: true });
+      // W8: okno zostaje z informacją, że kafelek widzi tylko MG, i przyciskiem „Pokaż graczom”
+      this.pasted = { tileId: tile?.id ?? null, sceneId: tile?.parent?.id ?? this.sceneId, revealed: false };
+      this.preview?.destroy();
+      this.preview = null;
+      return this.render();
     } catch (e) {
       console.error(`${MODULE_ID} | AI Tile accept`, e);
       this.error = safeMessage(e?.message ?? String(e));
@@ -380,6 +388,29 @@ export class TileReviewApp extends HandlebarsApplicationMixin(ApplicationV2) {
       return this.render();
     }
   }
+
+  #pastedDoc() {
+    const p = this.pasted;
+    return p?.tileId ? game.scenes.get(p.sceneId)?.tiles.get(p.tileId) ?? null : null;
+  }
+
+  /** W8: odkryj wklejony kafelek graczom (u wszystkich zagra fade-in, tile-fade.mjs). */
+  static async #onReveal() {
+    const doc = this.#pastedDoc();
+    if (!doc || this.busy) return;
+    this.busy = true;
+    try {
+      await doc.update({ hidden: false });
+      this.pasted.revealed = true;
+      ui.notifications.info(L("AIIMG.Tile.Revealed"));
+    } catch (e) {
+      this.error = safeMessage(e?.message ?? String(e));
+    }
+    this.busy = false;
+    return this.render();
+  }
+
+  static #onDone() { return this.close({ force: true }); }
 
   static async #onDiscard() {
     if (this.busy) return;

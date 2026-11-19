@@ -22,7 +22,6 @@
       <input type="number" name="count" min="1" max="{{maxVersions}}" step="1" value="{{count}}" {{#if busy}}disabled{{/if}}></label>
     <label data-tooltip="AIIMG.Tile.FeatherHint"><span>{{localize "AIIMG.Tile.Feather"}}</span>
       <input type="number" name="feather" min="0" max="256" step="1" value="{{feather}}" {{#if busy}}disabled{{/if}}></label>
-    <label class="aiimg-tile-check"><input type="checkbox" name="tokens" {{#if tokens}}checked{{/if}} {{#if busy}}disabled{{/if}}> {{localize "AIIMG.Tile.Tokens"}}</label>
     <label data-tooltip="AIIMG.Tile.ContextHint"><span>{{localize "AIIMG.Tile.Context"}}</span>
       <select name="context" {{#if busy}}disabled{{/if}}>{{#each contextOptions}}<option value="{{value}}" {{#if selected}}selected{{/if}}>{{label}}</option>{{/each}}</select></label>
   </div>

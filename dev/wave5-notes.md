@@ -1286,3 +1286,76 @@ wyłączony (w `core.moduleConfiguration` został tylko stary id `ai-image-gen`)
 `images/edits` z jednym obrazem) z prawdziwym batchem; wybór Otoczenie w oknie klikany myszą (sprawdzone
 programowo przez `prepareJob`); okno w języku polskim (użytkownik testowy ma EN); migracja przy prawdziwym starcie
 modułu (sprawdzona wywołaniem tej samej funkcji).
+## W8: AI Tile na scenach moinen-maps: widoczność, ukryty przy wklejeniu + fade-in, obraz tylko z mapą
+
+Zlecenia (koordynator, w trakcie trzy dopiski właściciela): (1) wklejony Tile „niewidoczny nawet na elewacji 5” na
+scenie moinen-maps (The Warehouse); (2) fade-in ok. 5 s u wszystkich klientów; (3) nowy Tile UKRYTY przed graczami,
+fade u MG po wklejeniu i u wszystkich przy odkryciu, informacja + przycisk „Pokaż graczom”; (4) do modelu WYŁĄCZNIE
+mapa i kafelki w rejonie (bez tokenów, pogody, efektów, znaczników, bez opcji „efekty”). Wersja bez zmian, nic nie
+wypchnięte.
+
+**(1) Widoczność: przyczyny NIE odtworzono.** Lane 8 = ten sam commit moinen-maps (2b7de5c) co u właściciela, scena
+The Warehouse z tymi samymi kluczami flag, ta sama ciemność 0,9, te same moduły (oprócz invincible-splash). Kod
+moinen-maps nie ukrywa kafelków ani tła i nie zmienia sortowania `canvas.primary` (Foundry v14: elewacja, sortLayer,
+sort). Jego warstwy mapy i efektów pod kafelkami: sortLayer 240-258 na elewacji 0 (kafelki 500); nad kafelkami tylko
+tokeny, ogień/dym (750/800), para 801, presety 819-825, pogoda 990-1000 i pojemnik „Unlit” stref w grupie efektów
+(podświetlenia stref nad wszystkim, wycięte są tylko TOKENY; półprzezroczyste). Na lane 8 kafelek wklejony całym
+przepływem (prepareJob -> test seam -> acceptVariant) i przez `createTile` był widoczny: piksel w środku zmienia się
+przy włączeniu/wyłączeniu siatki przy zoomie 0,17 / 0,25 / 0,5 / 1 / 1,17, na elewacji 0 i 5, także przy aktywnej
+warstwie Kafelków. Plik właściciela (`ai-image-gen/tiles/the-warehouse/…mwnm4wovg8l.webp`) jest nieprzezroczysty.
+Log serwera właściciela: Tile `ugbtQhWwcBFAeCNs` istniał 24 s, drugi (`xGs2pQYcCyvUNZae`) 14 s. Pułapka pomiaru: w
+ukrytej karcie Foundry odświeża siatkę (alfa, elewacja, sortLayer) dopiero w następnej klatce, a ticker chodzi ok.
+1/s, więc odczyt `mesh.elevation`/`sortLayer` zaraz po zmianie jest nieaktualny (pierwszy odczyt: sortLayer 0 zamiast
+500). Zmiana w moinen-maps niepotrzebna. Gdy objaw wróci: zrzut `canvas.primary.children` (sortLayer, elevation,
+visible) oraz `tile.mesh` (visible, alpha, texture.valid) w karcie właściciela, bez przełączania kart.
+
+**(2)+(3) Ukryty przy wklejeniu, fade-in.**
+- `tile-core.mjs` `tileData`: `hidden: true` domyślnie (każdy AI Tile: Fast, wybór wersji, batch).
+- nowy `scripts/tile/tile-fade.mjs`: czyste `fadeSeconds` (0-30, domyślnie 5), `fadeFactor` (smoothstep), `fadeOnCreate`
+  (kafelek AI, tylko u użytkownika, który go utworzył), `fadeOnUpdate` (kafelek AI, `hidden` -> false, u wszystkich),
+  `stopOnUpdate` (ponowne ukrycie kończy fade); runtime: hooki `createTile`, `updateTile`, `deleteTile`, `drawTile`,
+  `refreshTile`, `canvasTearDown` + ticker. Zmienia się WYŁĄCZNIE `mesh.alpha` na danym kliencie (cel = alfa, którą
+  liczy Foundry: 0,5 dla ukrytego u MG, 1 u graczy); dokument nigdy nie jest zapisywany, więc błąd / zamknięcie sceny
+  nie zostawia kafelka z alfą < 1 (koniec, błąd i teardown oddają alfę i ustawiają `refreshState`). `drawTile` gasi
+  świeżą siatkę, zanim zobaczy ją klatka; zegar rusza, gdy tekstura jest wczytana (limit 15 s).
+- ustawienie świata `tileFadeSeconds` („AI Tile: fade-in (seconds)”, 0-30, domyślnie 5); hooki instalowane w `init`.
+- okno wersji po „Akceptuj i wklej” zostaje otwarte: „Kafelek jest ukryty przed graczami” + jak odkryć (HUD, oko) +
+  przyciski „Pokaż graczom” (update `hidden: false`) i „Zamknij”; powiadomienie `PastedHidden`. Klucze pl/en, CSS.
+
+**(4) Obraz do modelu: tylko mapa + kafelki.** `tile-core.mjs` `CAPTURE_MAP_LAYERS` [240 woda, 245 drogi, 247 ruiny]
+i `captureInclude`: tło tak; kafelki poniżej `foregroundElevation` tak (TAKŻE ukryte: MG z nich buduje mapę, a nowy AI
+Tile jest ukryty; w ich kolejności elewacja/sort, z alfą dokumentu); pierwszy plan/dachy, tokeny, pogoda i każde inne
+dziecko `canvas.primary` nie (248 odbicia/odłamki, 249 cząstki zniszczeń, 250 dzielnice, 251 poświaty świateł, 255 auta
+i zmarszczki, 256/750/800 ogień i dym, 258 strefy, 600 rysunki, 705, 801, 819-825, 990-1000, 100 życie Orbity,
+Sequencer/pixel-vfx, nieznane). Siatka, ściany, notatki/pinezki i UI nie są w `canvas.primary`. `renderRegion`
+pomija dzieci zamiast je ukrywać; jedyna zmiana stanu (siatki kafelków na czas renderu: alfa 1, `hidden` false,
+visible/renderable, czyli wygląd „jak u graczy”, bez półprzezroczystości MG i bez trwającego fade) wraca w `finally`.
+Plan B (złożenie z plików) też bierze ukryte kafelki. Opcja „Tokeny na obrazie” usunięta (okno, opcje, klucz lang;
+stary zapis `tokens` pomijany); opcji „efekty” nie ma. README zaktualizowane.
+
+**Testy.** Nowy `dev/test-ai-tile-fade.mjs` (5: ustawienie, krzywa/timing, czas 0, decyzje create/update/stop);
+`dev/test-ai-tile-core.mjs` 24 (+ `hidden` w `tileData`, `captureInclude` dla wszystkich znanych warstw, opcje bez
+`tokens`). Wszystkie 37 `dev/test-*.mjs` exit 0; `node --check` zmienionych skryptów OK.
+
+**Na żywo (lane 8, `http://127.0.0.1:30008`, MG Gamemaster + Test Gracz 1, The Warehouse; zero płatnych wywołań: test
+seam `tileTestHooks.execute` i pliki rdzenia Foundry; panel przeglądarki UKRYTY = ticker ok. 1/s; karta `seed` z
+127.0.0.1:30000 w tym samym panelu nadpisywała ciasteczko sesji, więc przed uploadem ponowny /join).**
+- Obraz: przechwycenie 2100×1400 wokół 1925,2100: „tylko mapa” bez deszczu, tokenów, zabarwienia/obrysów/plakietek
+  stref („7”, ogień 6), ruiny (ślady pazurów, gruz) są; dla porównania stara reguła (wszystko) miała je wszystkie (oba
+  obrazy obejrzane). Z kafelkami: widoczny A (pergamin), ukryty B nad A (sort 1, pełne krycie), C nad
+  `foregroundElevation` pominięty, D (elewacja 2, alfa 0,5) półprzezroczysty — obraz obejrzany. Stan `canvas.primary`
+  (visible, renderable, alpha, hidden, sortLayer, liczba dzieci) identyczny przed/po i po wymuszonym błędzie w środku
+  renderu (`extract.canvas` rzuca).
+- MG po wklejeniu: dokument `hidden: true`; alfa siatki 0 od pierwszej klatki, potem 0,05 / 0,18 / 0,33 / 0,45 ->
+  0,5 po ok. 5 s; zrzuty po ok. 2-3 s (słaby zielony prostokąt) i po ok. 7 s (pełne 0,5).
+- Gracz (Test Gracz 1): ukryty kafelek `isVisible` false, piksel w środku ten sam z siatką i bez. Po odkryciu przez
+  MG: alfa u gracza 0 -> 0,12 (2,2 s) -> 0,38 -> 0,67 -> 0,91 -> 1 (5,2 s); zrzuty gracza w trakcie i po.
+- Okno: stan „hidden from the players” z tekstem i przyciskami; prawdziwy klik „Show to players” -> `hidden` false,
+  tekst „visible to the players now”, u MG ponowny fade do 1. Teardown w trakcie fade (`canvas.draw()`): stan
+  wyczyszczony, alfa siatki 1, alfa dokumentu 1.
+- Po teście: kafelki i pliki testowe na lane 8 skasowane, karty zamknięte, slot oddany.
+
+**NIESPRAWDZONE.** Przyczyna „niewidocznego” kafelka u właściciela (nieodtworzona). Płynność fade w pierwszoplanowej
+karcie z pełnym rAF (tu panel ukryty: sprawdzone tylko wartości alfy w czasie). Okno po polsku (świat lane po
+angielsku). Batch: kafelek z batcha też jest ukryty, ale bez okna (MG odkrywa go przez HUD). Kafelek nad strefami
+moinen-maps zakrywa ich obrysy/plakietki w swoim prostokącie (strefy 258 < kafelki 500): zachowanie Foundry, bez zmian.

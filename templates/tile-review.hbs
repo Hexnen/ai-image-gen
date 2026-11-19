@@ -1,4 +1,23 @@
 <section class="aiimg-tile-rev">
+  {{#if pasted}}
+  <div class="aiimg-tile-pasted" role="status">
+    {{#if pasted.gone}}
+    <p><i class="fa-solid fa-circle-info"></i> {{localize "AIIMG.Tile.PastedGone"}}</p>
+    {{else if pasted.revealed}}
+    <p><i class="fa-solid fa-eye"></i> {{localize "AIIMG.Tile.RevealedInfo"}}</p>
+    {{else}}
+    <p><i class="fa-solid fa-eye-slash"></i> <strong>{{localize "AIIMG.Tile.HiddenTitle"}}</strong></p>
+    <p>{{localize "AIIMG.Tile.HiddenInfo"}}</p>
+    {{/if}}
+  </div>
+  {{#if error}}<p class="aiimg-error"><i class="fa-solid fa-circle-xmark"></i> {{error}}</p>{{/if}}
+  <footer class="aiimg-footer">
+    {{#unless pasted.gone}}{{#unless pasted.revealed}}
+    <button type="button" class="primary" data-action="reveal" {{#if busy}}disabled{{/if}}><i class="fa-solid fa-eye"></i> {{localize "AIIMG.Tile.Reveal"}}</button>
+    {{/unless}}{{/unless}}
+    <button type="button" data-action="done"><i class="fa-solid fa-check"></i> {{localize "AIIMG.Tile.Done"}}</button>
+  </footer>
+  {{else}}
   <p class="aiimg-pick-hint">{{#if onScene}}{{localize "AIIMG.Tile.ReviewHint"}}{{else}}{{offScene}}{{/if}}</p>
   <div class="aiimg-tile-rev-grid">
     {{#each cands}}
@@ -22,4 +41,5 @@
     {{/if}}
     <button type="button" class="primary" data-action="accept" {{#if busy}}disabled{{/if}} {{#unless hasActive}}disabled{{/unless}}><i class="fa-solid fa-check"></i> {{localize "AIIMG.Tile.Accept"}}</button>
   </footer>
+  {{/if}}
 </section>

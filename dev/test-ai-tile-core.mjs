@@ -8,7 +8,7 @@ import {
   geminiSizeFor, planRegion, contextRect, selIn, outlineBands, positionText, inputEstimate, resultCrop, tileRaster, alphaRect,
   pointsIn, tileData, renderTilePrompt, gridInEdit, packGeometry, unpackGeometry, DEFAULT_TILE_PROMPT, TILE_TYPE_KEY, SHAPES,
   CONTEXT_FACTOR, CONTEXT_FACTORS, INPUT_IMAGES, OUTLINE_COLOR, OUTLINE_FRAC, OUTLINE_MIN, DEFAULT_TILE_OPTS,
-  normalizeTileOptions, LEGACY_TILE_PROMPTS, isLegacyTilePrompt, tilePromptTemplate
+  normalizeTileOptions, LEGACY_TILE_PROMPTS, isLegacyTilePrompt, tilePromptTemplate, captureInclude, CAPTURE_MAP_LAYERS
 } from "../scripts/tile/tile-core.mjs";
 import { normalizeOpenAISize } from "../scripts/providers/models.mjs";
 import { openaiInputTokens } from "../scripts/image-cost.mjs";
@@ -237,6 +237,9 @@ test("tileData: v14 x/y = centre (anchor 0.5), rotation 0, sort above tiles of t
   const e = tileData({ bbox: { x: 1400, y: 1750, width: 1050, height: 700 }, src: "c" });
   assert.deepEqual([e.x - e.width * e.texture.anchorX, e.y - e.height * e.texture.anchorY], [1400, 1750], "top-left back at the selection");
   assert.equal(tileData({ bbox: { x: 0, y: 0, width: 1, height: 1 }, src: "b" }).sort, 0);
+  // W8: a new AI tile starts hidden from the players (GM only) unless asked otherwise
+  assert.equal(d.hidden, true);
+  assert.equal(tileData({ bbox: { x: 0, y: 0, width: 1, height: 1 }, src: "b", hidden: false }).hidden, false);
 });
 
 test("prompt: one picture, edit only inside the red rectangle, keep framing, remove the outline; no mask, no second image", () => {
@@ -272,11 +275,11 @@ test("prompt migration: the earlier default (W7-A, two images) becomes the new d
 });
 
 test("window options: defaults, context factor choices, old `mask` key ignored, clamping", () => {
-  assert.deepEqual({ ...DEFAULT_TILE_OPTS }, { feather: 8, tokens: false, context: 2, count: 1 });
+  assert.deepEqual({ ...DEFAULT_TILE_OPTS }, { feather: 8, context: 2, count: 1 });
   assert.ok(!("mask" in DEFAULT_TILE_OPTS) && !("sendMask" in DEFAULT_TILE_OPTS));
-  assert.deepEqual(normalizeTileOptions({ feather: 8, tokens: false, mask: true, count: 1 }), { feather: 8, tokens: false, context: 2, count: 1 }, "W7-A save");
-  assert.deepEqual(normalizeTileOptions(), { feather: 8, tokens: false, context: 2, count: 1 });
-  assert.deepEqual(normalizeTileOptions(null), { feather: 8, tokens: false, context: 2, count: 1 });
+  assert.deepEqual(normalizeTileOptions({ feather: 8, tokens: false, mask: true, count: 1 }), { feather: 8, context: 2, count: 1 }, "W7-A save");
+  assert.deepEqual(normalizeTileOptions(), { feather: 8, context: 2, count: 1 });
+  assert.deepEqual(normalizeTileOptions(null), { feather: 8, context: 2, count: 1 });
   assert.equal(normalizeTileOptions({ context: 1.5 }).context, 1.5);
   assert.equal(normalizeTileOptions({ context: "3" }).context, 3);
   assert.equal(normalizeTileOptions({ context: 5 }).context, 2);
@@ -284,7 +287,6 @@ test("window options: defaults, context factor choices, old `mask` key ignored, 
   assert.equal(normalizeTileOptions({ feather: 999 }).feather, 256);
   assert.equal(normalizeTileOptions({ count: 20 }).count, 8);
   assert.equal(normalizeTileOptions({ count: "x" }).count, 1);
-  assert.equal(normalizeTileOptions({ tokens: true }).tokens, true);
 });
 
 test("geometry pack/unpack round trip (batch record)", () => {
@@ -294,6 +296,30 @@ test("geometry pack/unpack round trip (batch record)", () => {
   const u = unpackGeometry(JSON.parse(JSON.stringify(g)));
   assert.deepEqual(u.points, pts);
   assert.equal(u.feather, 8);
+});
+
+test("W8 capture: ONLY the map (background + moinen-maps map layers) and the tiles under overhead (hidden too); nothing else", () => {
+  const inc = captureInclude;
+  // Foundry objects
+  assert.equal(inc({ kind: "background", sortLayer: 0 }), true);
+  assert.equal(inc({ kind: "foreground", sortLayer: 0, elevation: 20 }), false);
+  assert.equal(inc({ kind: "tile", sortLayer: 500 }), true);
+  assert.equal(inc({ kind: "tile", sortLayer: 500, hidden: true }), true, "a hidden tile is part of the map the GM builds (a new AI tile starts hidden)");
+  assert.equal(inc({ kind: "tile", sortLayer: 500, overhead: true }), false, "roofs / overhead tiles are not the floor");
+  assert.equal(inc({ kind: "token", sortLayer: 700 }), false);
+  assert.equal(inc({ kind: "weather", sortLayer: 1000 }), false);
+  // moinen-maps map layers stay: painted water, roads, ruins
+  assert.deepEqual([...CAPTURE_MAP_LAYERS], [240, 245, 247]);
+  for (const L of [240, 245, 247]) assert.equal(inc({ kind: "other", sortLayer: L, elevation: 0 }), true, `map layer ${L}`);
+  // effects / marks / overlays go: reflections+shards 248, debris 249, districts 250, light glows 251, cars+ripples 255,
+  // fire 256/750/800, zones 258, drawings 600, submerge 705, steam 801, presets 819-825, weather 990/995, orbit life 100, unknown
+  for (const L of [100, 248, 249, 250, 251, 252, 253, 255, 256, 258, 600, 705, 750, 800, 801, 819, 820, 821, 825, 990, 995, 1100, undefined]) {
+    assert.equal(inc({ kind: "other", sortLayer: L, elevation: 0 }), false, `effect layer ${L}`);
+  }
+  assert.equal(inc({ kind: "other", sortLayer: 247, elevation: 5 }), false, "a map layer number at another elevation is not the map");
+  assert.equal(inc(null), false);
+  // no window options for tokens / effects any more (old saves are ignored)
+  assert.ok(!("tokens" in normalizeTileOptions({ tokens: true })) && !("effects" in normalizeTileOptions({ effects: true })));
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ", SOME FAILED" : ""}`);

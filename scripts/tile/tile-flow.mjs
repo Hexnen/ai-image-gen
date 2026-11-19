@@ -16,7 +16,8 @@ import {
 } from "./tile-core.mjs";
 import { captureRegion, outlinedImage, processResult, canvasToBlob } from "./tile-image.mjs";
 
-export const TILE_FLAG = "aiTile";
+import { TILE_FLAG } from "./tile-fade.mjs";
+export { TILE_FLAG };
 /**
  * Test seam (dev/live checks only): `execute` replaces executeGeneration with the same arguments and result shape, so a
  * live run can check what would be sent and feed a test image without any API key or paid call. null in normal use.
@@ -54,7 +55,7 @@ export function requestConfig(plan, base = getConfig(TILE_TYPE_KEY)) {
  * @param {object} p
  * @param {Scene} p.scene
  * @param {{x,y}[]} p.points  prostokąt w px sceny (4 punkty)
- * @param {object} [p.opts]   opcje okna (feather, tokens, context, count)
+ * @param {object} [p.opts]   opcje okna (feather, context, count)
  * @param {string} [p.description]
  * @param {"fast"|"batch"} [p.mode]
  */
@@ -68,7 +69,7 @@ export async function prepareJob({ scene = canvas.scene, points, opts = tileOpti
   const plan = planRegion({ points, bounds, cfg: base, factor: o.context });
   const cfg = requestConfig(plan, base);
   const tileRect = plan.bbox;
-  const cap = await captureRegion(plan.region, plan.edit.width, plan.edit.height, { tokens: o.tokens, method });
+  const cap = await captureRegion(plan.region, plan.edit.width, plan.edit.height, { method });
   const sendCanvas = outlinedImage(cap.canvas, plan.sel, scene.backgroundColor ?? "#000000");
   const job = {
     id: foundry.utils.randomID(),

@@ -787,7 +787,6 @@
   "AIIMG.Tile.PromptPlaceholder": "e.g. the wall is collapsed, rubble and dust on the floor",
   "AIIMG.Tile.Feather": "Soft edge (px)",
   "AIIMG.Tile.FeatherHint": "Fade of the tile's edge towards the inside, in scene pixels; 0 = sharp edge.",
-  "AIIMG.Tile.Tokens": "Include tokens in the picture",
   "AIIMG.Tile.SendLabel": "Sent image: the map around the rectangle; the red frame marks what changes (removed by the model)",
   "AIIMG.Tile.Context": "Surroundings",
   "AIIMG.Tile.ContextHint": "How much map around the rectangle is sent (width and height). More = better fit, but the rectangle gets fewer pixels once the size limit is reached.",
@@ -814,5 +813,15 @@
   "AIIMG.Tile.Accept": "Accept and paste",
   "AIIMG.Tile.DiscardTitle": "Discard the versions?",
   "AIIMG.Tile.DiscardBody": "{n} paid version(s) will be lost (nothing was saved).",
-  "AIIMG.Tile.Pasted": "AI Tile pasted ({id})."
+  "AIIMG.Tile.Pasted": "AI Tile pasted ({id}).",
+  "AIIMG.Settings.TileFade.Name": "AI Tile: fade-in (seconds)",
+  "AIIMG.Settings.TileFade.Hint": "How long a pasted AI Tile takes to fade in for the GM, and for every player when the GM reveals it. 0 = appears at once. Only the picture on screen fades; the tile itself is not changed.",
+  "AIIMG.Tile.PastedHidden": "AI Tile pasted ({id}). It is HIDDEN from the players: only you see it (half transparent) until you reveal it.",
+  "AIIMG.Tile.HiddenTitle": "The tile is hidden from the players.",
+  "AIIMG.Tile.HiddenInfo": "Only the GM sees it (half transparent). To show it to the players, use \"Show to players\" below, or later on the Tiles layer: right-click the tile and use the visibility toggle (eye) in its HUD. It fades in for everyone.",
+  "AIIMG.Tile.Reveal": "Show to players",
+  "AIIMG.Tile.Revealed": "AI Tile revealed to the players.",
+  "AIIMG.Tile.RevealedInfo": "The tile is visible to the players now (it fades in on their screens).",
+  "AIIMG.Tile.PastedGone": "The pasted tile is no longer on its scene.",
+  "AIIMG.Tile.Done": "Close"
 }

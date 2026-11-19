@@ -124,6 +124,13 @@ export function registerSettings() {
   game.settings.register(MODULE_ID, "tileOptions", {
     scope: "world", config: false, type: new ObjectField({ initial: {} })
   });
+  // W8: fade-in nowego / odkrytego AI Tile (sekundy, 0 = bez animacji); czyta tile/tile-fade.mjs
+  game.settings.register(MODULE_ID, "tileFadeSeconds", {
+    name: "AIIMG.Settings.TileFade.Name",
+    hint: "AIIMG.Settings.TileFade.Hint",
+    scope: "world", config: true, restricted: true,
+    type: new NumberField({ initial: 5, min: 0, max: 30, step: 0.5, nullable: false })
+  });
   // Dawna mapa wszystkich batchy: tylko do jednorazowej migracji do slotów `batch.<n>` (migrate.mjs).
   game.settings.register(MODULE_ID, "batches", {
     scope: "world", config: false, type: new ObjectField({ initial: {} })

@@ -1,6 +1,6 @@
 // W7-A/W7-B AI Tile: obrazy w przeglądarce (wycinek otoczenia, obrys zaznaczenia, wynik -> plik kafelka).
 // Geometria w tile-core.mjs (czysta); tu tylko canvas 2D i PIXI.
-import { tileRaster, alphaRect, outlineBands, OUTLINE_COLOR } from "./tile-core.mjs";
+import { tileRaster, alphaRect, outlineBands, OUTLINE_COLOR, captureInclude } from "./tile-core.mjs";
 
 export function newCanvas(w, h) {
   return Object.assign(document.createElement("canvas"), { width: Math.max(1, Math.round(w)), height: Math.max(1, Math.round(h)) });
@@ -28,30 +28,35 @@ export function imageStats(c) {
 // ---------- wycinek sceny ----------
 
 /**
- * Render grupy `canvas.primary` (tło, kafelki, tokeny; bez oświetlenia, mgły i interfejsu) do RenderTexture z macierzą
- * region -> [0,w]x[0,h]. Tokeny (opcjonalnie) i kafelki „overhead” są ukryte na czas renderu.
+ * Render grupy `canvas.primary` do RenderTexture z macierzą region -> [0,w]x[0,h]. W8 (właściciel): WYŁĄCZNIE mapa
+ * (tło, warstwy mapy moinen-maps: woda, drogi, ruiny) i kafelki poniżej „overhead”, także ukryte, z alfą dokumentu
+ * (`captureInclude` w tile-core). Bez tokenów, pogody, efektów, ognia/dymu, VFX, znaczników stref, pinezek, rysunków,
+ * świateł, siatki, ścian i interfejsu (nie są w tej grupie albo są pomijane). Pominięte dzieci po prostu nie są
+ * renderowane; jedyna zmiana stanu (alfa / `hidden` siatek kafelków na czas renderu) wraca w `finally`, także po błędzie.
  * @returns {HTMLCanvasElement}
  */
-export function renderRegion(region, w, h, { tokens = false } = {}) {
+export function renderRegion(region, w, h) {
   const renderer = canvas.app.renderer;
   const rt = PIXI.RenderTexture.create({ width: w, height: h, resolution: 1 });
-  const hidden = [];
-  const hide = (o) => { if (o && o.visible) { o.visible = false; hidden.push(o); } };
+  const restore = [];
   try {
-    if (!tokens) for (const t of canvas.tokens?.placeables ?? []) hide(t.mesh);
-    const fg = canvas.scene?.foregroundElevation ?? Infinity;
-    for (const t of canvas.tiles?.placeables ?? []) if ((t.document.elevation ?? 0) >= fg || t.document.hidden) hide(t.mesh);
+    const kinds = captureKinds();
     const sx = w / region.width, sy = h / region.height;
     const m = new PIXI.Matrix(sx, 0, 0, sy, -region.x * sx, -region.y * sy);
     // v14: canvas.primary is a cached group that is not displayed itself (the environment group composites its texture),
     // so rendering the group draws nothing: render its children one by one, in its own sorted order (live check, lane 8).
-    // Weather is skipped (rain streaks are not part of the map).
-    const WE = foundry.canvas?.layers?.WeatherEffects ?? globalThis.WeatherEffects;
     renderer.renderTexture.bind(rt);
     renderer.renderTexture.clear([0, 0, 0, 0]);
     for (const c of canvas.primary.children) {
-      if (!c.visible || !c.renderable || c.worldAlpha === 0) continue;
-      if (c === canvas.weather || (WE && c instanceof WE) || c.constructor?.name === "WeatherEffects") continue;
+      const k = kinds.get(c) ?? { kind: "other" };
+      if (!captureInclude({ sortLayer: c.sortLayer, elevation: c.elevation, ...k })) continue;
+      if (k.kind === "tile") {
+        // a tile as the players see it: mesh alpha 1 (not the GM's half-transparent hidden look, not a fade in progress);
+        // the document alpha is applied by the mesh itself (unoccludedAlpha, Tile#_refreshMesh)
+        if (!c.texture?.valid || !(k.alpha > 0)) continue;
+        restore.push([c, c.alpha, c.hidden, c.visible, c.renderable]);
+        c.alpha = 1; c.hidden = false; c.visible = true; c.renderable = true;
+      } else if (!c.visible || !c.renderable || c.worldAlpha === 0) continue;
       renderer.render(c, { renderTexture: rt, transform: m, clear: false });
     }
     const out = newCanvas(w, h);
@@ -59,11 +64,32 @@ export function renderRegion(region, w, h, { tokens = false } = {}) {
     out.getContext("2d").drawImage(src, 0, 0);
     return out;
   } finally {
-    for (const o of hidden) o.visible = true;
+    for (const [c, alpha, hidden, visible, renderable] of restore) {
+      if (c.destroyed) continue;
+      c.alpha = alpha; c.hidden = hidden; c.visible = visible; c.renderable = renderable;
+    }
     rt.destroy(true);
     // przywróć zwykły render ekranu (render do RT zmienia stan renderera)
     try { canvas.app.renderer.render(canvas.app.stage); } catch { /* następna klatka i tak narysuje */ }
   }
+}
+
+/** Dzieci canvas.primary rozpoznane po obiektach Foundry: tło, pierwszy plan, kafelki, tokeny, pogoda. */
+function captureKinds() {
+  const P = canvas.primary, map = new Map();
+  if (P.background) map.set(P.background, { kind: "background" });
+  if (P.foreground) map.set(P.foreground, { kind: "foreground" });
+  const fg = canvas.scene?.foregroundElevation ?? Infinity;
+  for (const t of canvas.tiles?.placeables ?? []) {
+    if (t.mesh) map.set(t.mesh, { kind: "tile", overhead: (t.document.elevation ?? 0) >= fg, alpha: t.document.alpha ?? 1 });
+  }
+  for (const t of canvas.tokens?.placeables ?? []) if (t.mesh) map.set(t.mesh, { kind: "token" });
+  const WE = foundry.canvas?.layers?.WeatherEffects ?? globalThis.WeatherEffects;
+  for (const c of P.children) {
+    if (map.has(c)) continue;
+    if (c === canvas.weather || (WE && c instanceof WE) || c.constructor?.name === "WeatherEffects") map.set(c, { kind: "weather" });
+  }
+  return map;
 }
 
 const loadImg = (src) => new Promise((res, rej) => {
@@ -75,7 +101,7 @@ const loadImg = (src) => new Promise((res, rej) => {
 });
 
 /**
- * Plan B: złożenie 2D z plików: kolor tła płótna, obraz tła sceny w sceneRect, kafelki (bez ukrytych i „overhead”)
+ * Plan B: złożenie 2D z plików: kolor tła płótna, obraz tła sceny w sceneRect, kafelki (także ukryte, bez „overhead”)
  * wg elewacji i sort, z rotacją, alfą i odbiciem. Bez tokenów, rysunków i efektów.
  */
 export async function composeRegion(region, w, h) {
@@ -93,7 +119,7 @@ export async function composeRegion(region, w, h) {
     catch (e) { console.warn("moinens-ai-gen | AI Tile: background", e); }
   }
   const fg = scene.foregroundElevation ?? Infinity;
-  const tiles = scene.tiles.contents.filter((t) => !t.hidden && t.texture?.src && (t.elevation ?? 0) < fg)
+  const tiles = scene.tiles.contents.filter((t) => t.texture?.src && (t.elevation ?? 0) < fg)   // W8: ukryte też (jak w renderRegion)
     .sort((a, b) => (a.elevation - b.elevation) || (a.sort - b.sort));
   for (const t of tiles) {
     try {
@@ -116,10 +142,10 @@ export async function composeRegion(region, w, h) {
  * Wycinek regionu w rozmiarze w×h: render płótna, a gdy wyjdzie pusty / jednolity albo rzuci, złożenie z plików.
  * @returns {Promise<{canvas:HTMLCanvasElement, method:"render"|"compose"}>}
  */
-export async function captureRegion(region, w, h, { tokens = false, method = "auto" } = {}) {
+export async function captureRegion(region, w, h, { method = "auto" } = {}) {
   if (method !== "compose") {
     try {
-      const c = renderRegion(region, w, h, { tokens });
+      const c = renderRegion(region, w, h);
       const st = imageStats(c);
       if (method === "render" || (st.opaque > 0.5 && st.std > 1)) return { canvas: c, method: "render", stats: st };
       console.warn("moinens-ai-gen | AI Tile: canvas render looks empty, composing from files", st);

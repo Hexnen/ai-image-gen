@@ -787,7 +787,6 @@
   "AIIMG.Tile.PromptPlaceholder": "np. ściana jest zawalona, gruz i pył na podłodze",
   "AIIMG.Tile.Feather": "Miękka krawędź (px)",
   "AIIMG.Tile.FeatherHint": "Wygaszanie krawędzi kafelka do środka, w pikselach sceny; 0 = ostra krawędź.",
-  "AIIMG.Tile.Tokens": "Tokeny na obrazie",
   "AIIMG.Tile.SendLabel": "Wysyłany obraz: mapa wokół prostokąta; czerwona ramka = co się zmienia (model ją usuwa)",
   "AIIMG.Tile.Context": "Otoczenie",
   "AIIMG.Tile.ContextHint": "Ile mapy wokół prostokąta jest wysyłane (szerokość i wysokość). Więcej = lepsze dopasowanie, ale po dojściu do limitu rozmiaru prostokąt dostaje mniej pikseli.",
@@ -814,5 +813,15 @@
   "AIIMG.Tile.Accept": "Akceptuj i wklej",
   "AIIMG.Tile.DiscardTitle": "Odrzucić wersje?",
   "AIIMG.Tile.DiscardBody": "Opłacone wersje ({n}) przepadną (nic nie zostało zapisane).",
-  "AIIMG.Tile.Pasted": "AI Tile wklejony ({id})."
+  "AIIMG.Tile.Pasted": "AI Tile wklejony ({id}).",
+  "AIIMG.Settings.TileFade.Name": "AI Tile: pojawianie się (sekundy)",
+  "AIIMG.Settings.TileFade.Hint": "Ile trwa płynne pojawienie się wklejonego AI Tile u MG oraz u wszystkich graczy, gdy MG go odkryje. 0 = od razu. Zmienia się tylko obraz na ekranie, sam kafelek nie.",
+  "AIIMG.Tile.PastedHidden": "AI Tile wklejony ({id}). Jest UKRYTY przed graczami: widzisz go tylko ty (półprzezroczysty), dopóki go nie odkryjesz.",
+  "AIIMG.Tile.HiddenTitle": "Kafelek jest ukryty przed graczami.",
+  "AIIMG.Tile.HiddenInfo": "Widzi go tylko MG (półprzezroczysty). Aby pokazać go graczom, użyj „Pokaż graczom” poniżej albo później na warstwie Kafelków: prawy klik na kafelku i przełącznik widoczności (oko) w jego HUD. U wszystkich pojawi się płynnie.",
+  "AIIMG.Tile.Reveal": "Pokaż graczom",
+  "AIIMG.Tile.Revealed": "AI Tile odkryty dla graczy.",
+  "AIIMG.Tile.RevealedInfo": "Kafelek jest teraz widoczny dla graczy (pojawia się płynnie na ich ekranach).",
+  "AIIMG.Tile.PastedGone": "Wklejonego kafelka nie ma już na jego scenie.",
+  "AIIMG.Tile.Done": "Zamknij"
 }

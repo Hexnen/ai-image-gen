@@ -43,13 +43,20 @@ GM only. Left toolbar → **Moinens AI Gen** → **AI Tile** (square icon).
    high around the same centre, **Surroundings** 1.5× / 2× / 3×; cut at the canvas edge, so there the rectangle is not
    in the middle), fitted to a size the model returns, with a red frame drawn just outside the rectangle. No mask and
    no second picture are sent. Write what should change, pick the number of versions, Now or Batch, the soft edge (px,
-   fades the tile's border inwards) and whether tokens appear in the picture. The window shows the sent size, the
+   fades the tile's border inwards). The picture shows ONLY the map: the scene background, the map layers of
+   moinen-maps (painted water, roads, ruins) and the tiles in the area (hidden ones too, at their own opacity; not the
+   overhead ones). Tokens, weather, fire and smoke, VFX, zone marks, pins, drawings, light glows, grid, walls and the
+   interface are never in it, so the model cannot copy them into the tile. The window shows the sent size, the
    estimated input tokens (OpenAI) and the estimated cost.
 3. The model is asked to edit only inside the red frame, keep everything else and the framing, and remove the frame.
    From the whole returned picture exactly the rectangle is cut out (its position in the picture is known), scaled to
    the tile and given the soft edge. **Now**: the versions appear in a window and the selected one is previewed on the
    map in place of the rectangle; **Accept and paste** saves it to `ai-image-gen/tiles/<scene>/` and creates a Tile
    exactly over the rectangle (rotation 0, elevation 0, above the other tiles of that elevation, below tokens).
+   The new tile is HIDDEN from the players: only the GM sees it (half transparent) and it fades in over ~5 s. The window
+   then says so and offers **Show to players** (or later: Tiles layer, the tile's HUD, the eye toggle); on reveal it
+   fades in on every player's screen. The fade time is the world setting *AI Tile: fade-in (seconds)* (0 = at once);
+   only the picture on screen fades, the tile document is never changed by it.
    **Again** asks for more versions with the same picture, **Discard** drops them (nothing saved). **Batch** sends the
    same single picture; the tile is pasted on the same scene when the result arrives (several versions: the usual
    "ready to pick" notification opens the versions window).
