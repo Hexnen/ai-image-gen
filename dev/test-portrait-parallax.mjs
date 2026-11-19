@@ -451,7 +451,7 @@ await test("wiring: settings, hooks, run.mjs records the map, renderer shares on
   assert.match(gl, /outColor = vec4\(c, mix\(1\.0, src\.a, uAlphaOut\)\)/);
   assert.match(gl, /gl\.uniform1f\(U\.uAlphaOut, u\.alphaOut \? 1 : 0\)/, "the window passes no alphaOut: opaque as before");
   assert.ok(!/alphaOut/.test(read("scripts/parallax/parallax-app.mjs")));
-  assert.match(read("scripts/parallax/parallax-load.mjs"), /sidecar !== false \? await sidecarOf\(path\)/);
+  assert.match(read("scripts/parallax/parallax-load.mjs"), /sidecar !== false \? await sidecarOf\(path, rev\)/);
   for (const l of ["en", "pl"]) {
     const j = JSON.parse(read(`lang/${l}.json`));
     for (const k of ["AIIMG.PortraitParallax.Setting.Name", "AIIMG.PortraitParallax.Setting.Hint", "AIIMG.PortraitParallax.Generate", "AIIMG.PortraitParallax.Slow", "AIIMG.DepthRun.Note.metaKept"]) assert.ok(j[k], `${l}: ${k}`);

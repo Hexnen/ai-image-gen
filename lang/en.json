@@ -680,7 +680,7 @@
   "AIIMG.PortraitParallax.Setting.Name": "Depth parallax on actor portraits",
   "AIIMG.PortraitParallax.Setting.Hint": "When an actor's image has a depth map, its portrait in the actor sheet moves in 3D with the mouse. Players see it too (the map is a plain file). Off: portraits stay flat. Respects the reduced-motion setting of the system and switches itself off on a computer where it slows frames down.",
   "AIIMG.PortraitParallax.Generate": "Generate depth (portrait)",
-  "AIIMG.PortraitParallax.Slow": "Portrait parallax switched off on this computer for now: frames were too slow. It comes back after reloading the page.",
+  "AIIMG.PortraitParallax.Slow": "Portrait parallax switched off on this computer for now: drawing it took too much time per frame. It comes back after reloading the page.",
   "AIIMG.TokenParallax.Setting.Name": "Depth parallax on tokens",
   "AIIMG.TokenParallax.Setting.Hint": "When a token's image has a depth map, the picture inside the token shifts slightly in 3D. Only on scenes where it is switched on (scene settings) or on tokens set to On. The token's outline, size and clickable area never change. Off: no token anywhere gets the effect. Respects the reduced-motion setting of the system and switches itself off on a computer where it slows frames down.",
   "AIIMG.TokenParallax.Drive.Name": "Token parallax: what moves it",

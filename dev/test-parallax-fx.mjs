@@ -238,14 +238,16 @@ await test("wiring: W6-Q world settings (GM) + one device opt-out next to the pa
   assert.ok(portrait.indexOf('registerFxSettings("portrait"') > portrait.indexOf("game.settings.register(MODULE_ID, SETTING"), "after the portrait switch");
   assert.match(portrait, /effectiveFx\(normalizeFx\(raw, "portrait"\), \{ reducedMotion:/);
   assert.match(token, /effectiveFx\(normalizeFx\(raw, "token"\), \{ reducedMotion: reducedMotion\(\), deviceOff: fxDeviceOff\(\) \}\)/);
-  assert.match(portrait, /if \(idle && t - this\.lastDrawT < IDLE_FRAME_MS\)/, "portrait idle draws capped");
-  assert.match(token, /if \(now - lastIdleT >= IDLE_FRAME_MS\) \{ lastIdleT = now; fxTimeMs = now; \}/, "token idle clock capped");
+  // W6-T: portrait draws ~60 / s while easing, ~30 / s (IDLE_DRAW_MS = IDLE_FRAME_MS) for idle breathing / dust only
+  assert.match(portrait, /const minGap = m\.idle && !layout && !this\.dirty \? IDLE_DRAW_MS : MOVE_FRAME_MS;/, "portrait idle draws capped");
+  assert.match(token, /fxTimeMs = now;/, "token idle clock (W6-U)");
   assert.match(token, /cap: MAX_ANIMATED_TOKENS/);
-  assert.match(portrait, /if \(drew && \(host\.lastDrew \|\| host\.idleRun\) && guard\.push\(gap, drawMs\) === "bad"\)/, "guard also during idle runs");
-  assert.match(token, /\(moving \|\| panning \|\| animating\) && enabled > 0/, "token guard also while animating at rest");
+  // W6-T: the portrait guard samples every drawn frame (idle runs included) from the module's own cost
+  assert.match(portrait, /if \(drew\) host\.prev = \{ cpu, gpu: host\.gl\.timerSupported \? host\.gpuMs : null \};/, "guard also during idle runs");
+  assert.match(token, /\(moving \|\| panning \|\| animating\) && enabled > 0 && guardFrame\(gap, now\)/, "token guard also while animating at rest");
   // all switches off: nothing new runs (no extra loop, filter enabled exactly as before)
-  assert.match(token, /this\.filter\.enabled = this\.drive === "camera" \? true : !lookIsRest\(this\.look\) \|\| \(this\.animated && tokenFx\(\)\.dust\);/);
-  assert.match(portrait, /const busy = !done \|\| layout \|\| fx\.animates;/);
+  assert.match(token, /this\.filter\.enabled = this\.drive === "camera" \? this\.onScreen\s+: !\(this\.settled && lookIsRest\(this\.look\)\) \|\| this\.ampD > 0\.001;/);
+  assert.match(portrait, /const busy = !m\.settled \|\| layout \|\| fx\.animates;/);
   for (const f of ["scripts/parallax/parallax-fx.mjs"]) {
     const src = read(f);
     assert.doesNotMatch(src, /\bfetch\(|XMLHttpRequest|WebSocket|sendBeacon|https?:\/\//, `${f}: no network`);

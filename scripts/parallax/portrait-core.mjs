@@ -190,6 +190,152 @@ export function overlayOpacity(look, animates = false, fadeAt = FADE_AT) {
   return m <= 1e-4 ? 0 : clamp(m / fadeAt, 0, 1);
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// W6-T: smooth motion. Everything that changes on screen (tilt, light, dust, breathing amplitude, overlay opacity) is a
+// critically damped spring stepped by the real elapsed time: no velocity jump when the target jumps (pointer enter /
+// leave), the same curve at 30, 60 or 166 frames per second, exact for any dt (closed form, no overshoot).
+// ---------------------------------------------------------------------------------------------------------------
+
+/**
+ * One step of a critically damped spring (x'' = -2ω x' - ω² (x - target)), exact for any dt.
+ * @returns {[number, number]} new position and velocity
+ */
+export function springStep(x, v, target, dt, omega) {
+  if (!(dt > 0)) return [x, v];
+  if (!(omega > 0)) return [target, 0];
+  const d = x - target, e = Math.exp(-omega * dt), tmp = (v + omega * d) * dt;
+  return [target + (d + tmp) * e, (v - omega * tmp) * e];
+}
+
+/** Spring rates (ω, 1/s). follow = while the pointer is on the picture; rest = the return; amp = light / dust / breath
+ *  amplitudes; fade = overlay opacity. Peak speed of a unit step = ω / e (rest: 0.049 per 16.7 ms frame). */
+export const MOTION = Object.freeze({ follow: 12, rest: 8, amp: 6, fade: 8, eps: 0.002, vEps: 0.02, hideBelow: 0.004 });
+
+/** Pointer-beyond-the-picture falloff: the tilt fades out over this fraction of the picture's half size outside it. */
+export const POINTER_MARGIN = 0.3;
+
+/**
+ * W6-T: look target from the pointer. Inside the picture as lookFromPointer (centre 0, edge 1); outside it the tilt
+ * keeps its direction but fades smoothly to 0 over `margin` (× the half size) beyond the edge, so leaving the PORTRAIT
+ * (not only the sheet) brings it back to rest, without a step. `k` = 0..1 presence (0 = the pointer is away).
+ */
+export function pointerTarget(x, y, rect, margin = POINTER_MARGIN) {
+  if (!rect || !(rect.w > 0 && rect.h > 0) || !Number.isFinite(x) || !Number.isFinite(y)) return { x: 0, y: 0, k: 0 };
+  const nx = ((x - rect.x) / rect.w - 0.5) * 2, ny = ((y - rect.y) / rect.h - 0.5) * 2;
+  const m = Math.max(Math.abs(nx), Math.abs(ny));
+  let k = 1;
+  if (m > 1) { const t = clamp((m - 1) / Math.max(1e-6, margin), 0, 1); k = 1 - t * t * (3 - 2 * t); }
+  const l = clampLook(nx, ny);
+  return { x: l.x * k, y: l.y * k, k };
+}
+
+export function createMotion() {
+  return { look: { x: 0, y: 0 }, vel: { x: 0, y: 0 }, breath: 0, breathV: 0, light: 0, lightV: 0, dust: 0, dustV: 0, opacity: 0, opacityV: 0, target: { x: 0, y: 0 } };
+}
+
+/**
+ * Advance the motion by `dt` seconds. `inp`:
+ *   pointer   {x, y, k}|null   pointerTarget (null / k 0 = away)
+ *   breathLook {x, y}         breathing look at full strength 1 (parallax-fx breathLook(t, 1)), at the motion clock
+ *   breath, light, dust       target amounts (0 = off): breathing strength 0..1, light multiplier, dust strength
+ *   animates                  breathing / dust on: the overlay stays shown at rest
+ * Returns {settled, idle}: settled = everything at rest (no extras): the loop may stop and the canvas hide; idle = only
+ * the slow breathing / dust is moving (the caller may draw at ~30 fps).
+ */
+export function stepMotion(s, dt, inp = {}) {
+  const p = inp.pointer && inp.pointer.k > 0 ? inp.pointer : null;
+  const pm = p ? clamp(Math.hypot(p.x, p.y), 0, 1) : 0;
+  // breathing fades out as the pointer's own tilt grows (the pointer wins smoothly, like parallax-fx withBreath)
+  const bT = clamp(Number(inp.breath) || 0, 0, 1) * (1 - pm);
+  [s.breath, s.breathV] = springStep(s.breath, s.breathV, bT, dt, MOTION.amp);
+  const bl = inp.breathLook ?? { x: 0, y: 0 };
+  const t = clampLook((p?.x ?? 0) + (bl.x || 0) * s.breath, (p?.y ?? 0) + (bl.y || 0) * s.breath);
+  s.target = t;
+  const w = p ? MOTION.follow : MOTION.rest;
+  [s.look.x, s.vel.x] = springStep(s.look.x, s.vel.x, t.x, dt, w);
+  [s.look.y, s.vel.y] = springStep(s.look.y, s.vel.y, t.y, dt, w);
+  const lT = Math.max(0, Number(inp.light) || 0), dT = Math.max(0, Number(inp.dust) || 0);
+  [s.light, s.lightV] = springStep(s.light, s.lightV, lT, dt, MOTION.amp);
+  [s.dust, s.dustV] = springStep(s.dust, s.dustV, dT, dt, MOTION.amp);
+  const m = Math.hypot(s.look.x, s.look.y);
+  const extrasShown = !!inp.animates || s.dust > MOTION.eps || s.breath > MOTION.eps;
+  const oT = extrasShown ? 1 : clamp(m / FADE_AT, 0, 1);
+  [s.opacity, s.opacityV] = springStep(s.opacity, s.opacityV, oT, dt, MOTION.fade);
+  s.opacity = clamp(s.opacity, 0, 1);
+  const near = (a, b, eps = MOTION.eps) => Math.abs(a - b) < eps;
+  const lookAt = Math.hypot(s.look.x - t.x, s.look.y - t.y) < MOTION.eps && Math.hypot(s.vel.x, s.vel.y) < MOTION.vEps;
+  const ampsAt = near(s.breath, bT) && near(s.light, lT) && near(s.dust, dT) && Math.abs(s.breathV) + Math.abs(s.lightV) + Math.abs(s.dustV) < MOTION.vEps;
+  const settled = !p && !inp.animates && lookAt && ampsAt && Math.hypot(t.x, t.y) < MOTION.eps && s.opacity < MOTION.hideBelow;
+  if (settled) {
+    // at rest: snap the last invisible remainder (all below eps) so the loop can stop
+    Object.assign(s, { look: { x: 0, y: 0 }, vel: { x: 0, y: 0 }, breath: bT, breathV: 0, light: lT, lightV: 0, dust: dT, dustV: 0, opacity: 0, opacityV: 0 });
+  }
+  // idle = only the breathing / dust drift: the look follows the slow breathing target closely and nothing else moves
+  const idle = !p && !!inp.animates && Math.hypot(s.look.x - t.x, s.look.y - t.y) < 0.02 && Math.hypot(s.vel.x, s.vel.y) < 0.25 && ampsAt && s.opacity > 0.995;
+  return { settled, idle };
+}
+
+/** Draw-rate caps (ms between draws): ~60/s while anything eases or follows the pointer, ~30/s for idle drift. */
+export const MOVE_FRAME_MS = 1000 / 75;
+export const IDLE_DRAW_MS = 33;
+
+/**
+ * W6-T: the frame guard decides from the MODULE'S OWN cost, not the page frame rate alone.
+ * `sample({tMs, gapMs, cpuMs, gpuMs})` once per drawn frame: gapMs = the page frame interval right after that draw,
+ * cpuMs = our main-thread time for it, gpuMs = GPU time from a timer query (null when the browser has none).
+ * Verdicts: "warmup" | "ok" | "bad" | "probe".
+ *  - own cost (cpu + gpu) above `maxCostMs` on average over the window = "bad" (also the hard last resort);
+ *  - page slow (median gap > `slowGapMs`): with GPU times known, "bad" only when our cost is ≥ `shareOfGap` of the
+ *    frame; without them, "probe": the caller skips its draws (and pauses its motion clock) for `probeFrames` frames and
+ *    reports the gaps through `probeSample(gapMs)`; "bad" only when the page got clearly faster without us
+ *    (gain ≥ max(`minGainMs`, `minGainShare` × gap)), else "ok" and no new probe for `probeEveryMs`.
+ */
+export function createCostGuard({
+  warmup = 20, window = 60, maxCostMs = 8, slowGapMs = 55, shareOfGap = 0.3, ignoreGapMs = 250,
+  probeFrames = 20, probeEveryMs = 30000, minGainMs = 8, minGainShare = 0.3
+} = {}) {
+  let seen = 0, S = [], last = "warmup", probing = false, probeGaps = [], onGap = 0, lastProbeT = -Infinity, probes = 0;
+  const median = (a) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : 0; };
+  const meanCost = () => S.reduce((a, s) => a + s.cpu + (s.gpu ?? 0), 0) / Math.max(1, S.length);
+  return {
+    get probing() { return probing; },
+    sample({ tMs = 0, gapMs, cpuMs = 0, gpuMs = null }) {
+      if (probing) return last;
+      if (!(gapMs > 0) || gapMs > ignoreGapMs) return last;
+      seen++;
+      if (seen <= warmup) return (last = "warmup");
+      S.push({ gap: gapMs, cpu: Math.max(0, cpuMs || 0), gpu: Number.isFinite(gpuMs) ? Math.max(0, gpuMs) : null });
+      if (S.length > window) S.shift();
+      if (S.length < window) return (last = "warmup");
+      const cost = meanCost(), gap = median(S.map((s) => s.gap));
+      if (cost > maxCostMs) return (last = "bad");
+      if (gap <= slowGapMs) return (last = "ok");
+      const gpuKnown = S.filter((s) => s.gpu !== null).length >= S.length / 2;
+      if (gpuKnown) return (last = cost >= shareOfGap * gap ? "bad" : "ok");
+      if (tMs - lastProbeT < probeEveryMs) return (last = "ok");
+      probing = true; probeGaps = []; onGap = gap; probes++;
+      return (last = "probe");
+    },
+    probeSample(gapMs, tMs = 0) {
+      if (!probing) return last;
+      if (!(gapMs > 0) || gapMs > ignoreGapMs) return last;
+      probeGaps.push(gapMs);
+      if (probeGaps.length < probeFrames) return (last = "probe");
+      const off = median(probeGaps), gain = onGap - off;
+      probing = false; lastProbeT = tMs; S = [];
+      return (last = gain >= Math.max(minGainMs, minGainShare * onGap) ? "bad" : "ok");
+    },
+    reset() { seen = 0; S = []; last = "warmup"; probing = false; probeGaps = []; lastProbeT = -Infinity; },
+    state() {
+      return {
+        last, samples: S.length, probing, probes, medianGapMs: S.length ? median(S.map((s) => s.gap)) : null,
+        meanCostMs: S.length ? Math.round(meanCost() * 1000) / 1000 : null, gpuSamples: S.filter((s) => s.gpu !== null).length,
+        probeOffGapMs: probeGaps.length ? median(probeGaps) : null, onGapMs: onGap || null
+      };
+    }
+  };
+}
+
 /**
  * Frame-time guard. `push(gapMs, drawMs)` for frames drawn back to back; gaps above `ignoreGapMs` (a stall, a tab
  * switch) are skipped. After `warmup` frames, once `window` samples are in: "bad" when the median gap is above

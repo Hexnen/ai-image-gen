@@ -15,21 +15,128 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 export const PNG_SIGNATURE = Object.freeze([137, 80, 78, 71, 13, 10, 26, 10]);
 export const isPng = (bytes) => bytes?.length > 8 && PNG_SIGNATURE.every((b, i) => bytes[i] === b);
 
-/** zlib inflate (RFC 1950) through DecompressionStream; browsers and Node ≥ 18. */
-export async function inflateZlib(bytes) {
+/**
+ * zlib inflate (RFC 1950) through DecompressionStream; browsers, workers and Node ≥ 18. `bytes` = one Uint8Array or a
+ * list of them (the IDAT chunks, fed in order without concatenating). W6-T: STREAMED with a hard output cap: reading
+ * stops as soon as `maxBytes` bytes are out (the rest of the stream is cancelled, never inflated), so a deflate bomb
+ * (1 MB -> 1 GB) costs at most `maxBytes`. `maxBytes` = Infinity keeps the old unbounded behaviour.
+ */
+export async function inflateZlib(bytes, { maxBytes = Infinity } = {}) {
+  const parts = Array.isArray(bytes) ? bytes : [bytes];
   const ds = new DecompressionStream("deflate");
-  const out = new Response(new Blob([bytes]).stream().pipeThrough(ds));
-  return new Uint8Array(await out.arrayBuffer());
+  const writer = ds.writable.getWriter();
+  // written concurrently with the reads below (backpressure); a cancelled read makes these writes reject: ignored
+  const writing = (async () => { for (const p of parts) await writer.write(p); await writer.close(); })();
+  writing.catch(() => {});
+  const reader = ds.readable.getReader();
+  const cap = Number.isFinite(maxBytes) && maxBytes >= 0 ? Math.floor(maxBytes) : Infinity;
+  const fixed = cap !== Infinity ? new Uint8Array(cap) : null;
+  const list = [];
+  let n = 0;
+  try {
+    for (;;) {
+      if (fixed && n >= cap) { await reader.cancel().catch(() => {}); break; }
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (fixed) {
+        const take = Math.min(value.length, cap - n);
+        fixed.set(take === value.length ? value : value.subarray(0, take), n);
+        n += take;
+      } else { list.push(value); n += value.length; }
+    }
+  } finally { try { reader.releaseLock(); } catch { /* cancelled */ } }
+  if (fixed) return n === cap ? fixed : fixed.subarray(0, n);
+  const out = new Uint8Array(n);
+  let p = 0;
+  for (const c of list) { out.set(c, p); p += c.length; }
+  return out;
 }
 
 const CHANNELS = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
+
+/** An error that says the file is over a size limit (`code: "too-large"`), so callers can tell it from a broken file. */
+export function tooLarge(msg) { return Object.assign(new Error(msg), { code: "too-large" }); }
+
+/**
+ * W6-T: decode limits. `map` = sheet portraits / tokens / api.depthMaps.load (they need ≤ 1024-2048 px: anything up to
+ * 4096² is decoded and box-downscaled at once, larger is refused); `window` = the W6-L comparison window (bigger
+ * reference maps), still far below the old 64 MP x 16-bit RGBA (≈ 512 MB per buffer).
+ * maxFileBytes = download size, maxPixels = declared width × height, maxRawBytes = inflated PNG scanlines.
+ */
+const MiB = 1024 * 1024;
+export const DEPTH_LIMITS = Object.freeze({
+  map: Object.freeze({ maxFileBytes: 64 * MiB, maxPixels: 4096 * 4096, maxRawBytes: 64 * MiB }),
+  window: Object.freeze({ maxFileBytes: 160 * MiB, maxPixels: 40e6, maxRawBytes: 160 * MiB })
+});
+
+/** IHDR of a PNG (the first chunk by the spec) without touching the image data, or null. */
+export function pngInfo(bytes) {
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? []);
+  if (!isPng(b) || b.length < 33) return null;
+  if (String.fromCharCode(b[12], b[13], b[14], b[15]) !== "IHDR") return null;
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  return { w: dv.getUint32(16), h: dv.getUint32(20), bitDepth: b[24], colorType: b[25], interlace: b[28] };
+}
+
+/** Adam7 / plain passes: [x0, y0, dx, dy]. */
+const passesOf = (interlace) => (interlace === 1
+  ? [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2]]
+  : [[0, 0, 1, 1]]);
+
+/** Exact size of the inflated scanlines (filter byte + stride per row, every pass) of a PNG header. */
+export function pngRawSize({ w, h, bitDepth, colorType, interlace }) {
+  const bitsPP = (CHANNELS[colorType] ?? 4) * bitDepth;
+  let total = 0;
+  for (const [x0, y0, dx, dy] of passesOf(interlace)) {
+    const pw = Math.ceil((w - x0) / dx), ph = Math.ceil((h - y0) / dy);
+    if (pw <= 0 || ph <= 0) continue;
+    total += ph * (1 + Math.ceil((pw * bitsPP) / 8));
+  }
+  return total;
+}
+
+/**
+ * W6-T: width / height from the header of a PNG, JPEG, WebP (VP8 / VP8L / VP8X) or GIF without decoding, or null.
+ * Lets a loader refuse a huge non-PNG map BEFORE the browser decodes it.
+ */
+export function imageSize(bytes) {
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? []);
+  const p = pngInfo(b);
+  if (p) return { w: p.w, h: p.h, type: "png" };
+  if (b.length > 10 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return { w: b[6] | (b[7] << 8), h: b[8] | (b[9] << 8), type: "gif" };
+  if (b.length > 4 && b[0] === 0xff && b[1] === 0xd8) {
+    let o = 2;
+    while (o + 9 < b.length) {
+      if (b[o] !== 0xff) { o++; continue; }
+      const m = b[o + 1];
+      if (m === 0xff) { o++; continue; }
+      if (m === 0xd8 || m === 0x01 || (m >= 0xd0 && m <= 0xd7)) { o += 2; continue; }
+      const len = (b[o + 2] << 8) | b[o + 3];
+      if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return { h: (b[o + 5] << 8) | b[o + 6], w: (b[o + 7] << 8) | b[o + 8], type: "jpeg" };
+      if (len < 2) return null;
+      o += 2 + len;
+    }
+    return null;
+  }
+  const tag = (o) => String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]);
+  if (b.length >= 30 && tag(0) === "RIFF" && tag(8) === "WEBP") {
+    const kind = tag(12);
+    if (kind === "VP8X") return { w: 1 + (b[24] | (b[25] << 8) | (b[26] << 16)), h: 1 + (b[27] | (b[28] << 8) | (b[29] << 16)), type: "webp" };
+    if (kind === "VP8 ") return { w: (b[26] | (b[27] << 8)) & 0x3fff, h: (b[28] | (b[29] << 8)) & 0x3fff, type: "webp" };
+    if (kind === "VP8L") {
+      const v = b[21] | (b[22] << 8) | (b[23] << 16) | (b[24] << 24);
+      return { w: (v & 0x3fff) + 1, h: ((v >>> 14) & 0x3fff) + 1, type: "webp" };
+    }
+  }
+  return null;
+}
 
 /**
  * Decode a PNG. @returns {Promise<{w:number, h:number, bitDepth:number, colorType:number, channels:number,
  *   data:Uint8Array|Uint16Array, palette?:Uint8Array, trns?:Uint8Array}>}  `data` = samples row-major, `channels` per
  *   pixel (palette images: 1 index channel, expanded by `pngToRGBA`). 16-bit samples are 0..65535, others 0..2^bd-1.
  */
-export async function decodePng(bytes, inflate = inflateZlib) {
+export async function decodePng(bytes, inflate = inflateZlib, { maxPixels = DEPTH_LIMITS.window.maxPixels, maxRawBytes = DEPTH_LIMITS.window.maxRawBytes } = {}) {
   const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   if (!isPng(b)) throw new Error("Not a PNG file.");
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
@@ -43,6 +150,8 @@ export async function decodePng(bytes, inflate = inflateZlib) {
     if (type === "IHDR") {
       const d = new DataView(data.buffer, data.byteOffset, data.byteLength);
       ihdr = { w: d.getUint32(0), h: d.getUint32(4), bitDepth: data[8], colorType: data[9], interlace: data[12] };
+      // W6-T: the size is checked from the header BEFORE any image data is touched
+      checkPngHeader(ihdr, maxPixels, maxRawBytes);
     } else if (type === "PLTE") palette = data.slice();
     else if (type === "tRNS") trns = data.slice();
     else if (type === "IDAT") idat.push(data);
@@ -52,20 +161,15 @@ export async function decodePng(bytes, inflate = inflateZlib) {
   if (!ihdr) throw new Error("PNG: no IHDR.");
   const { w, h, bitDepth, colorType, interlace } = ihdr;
   const channels = CHANNELS[colorType];
-  if (!channels || ![1, 2, 4, 8, 16].includes(bitDepth)) throw new Error(`PNG: unsupported colour type ${colorType} / ${bitDepth} bit.`);
-  if (!(w > 0 && h > 0) || w * h > 64e6) throw new Error(`PNG: bad size ${w}×${h}.`);
-  const total = idat.reduce((s, c) => s + c.length, 0);
-  const z = new Uint8Array(total);
-  let p = 0;
-  for (const c of idat) { z.set(c, p); p += c.length; }
-  const raw = await inflate(z);
+  // W6-T: inflate only as many bytes as the scanlines can hold (filter byte + stride per row); a bomb stops there
+  const expected = pngRawSize(ihdr);
+  let raw = inflate === inflateZlib ? await inflateZlib(idat, { maxBytes: expected }) : await inflate(concatBytes(idat), { maxBytes: expected });
+  if (raw.length > expected) raw = raw.subarray(0, expected);
   const out = bitDepth === 16 ? new Uint16Array(w * h * channels) : new Uint8Array(w * h * channels);
   const bitsPP = channels * bitDepth;
   const bpp = Math.max(1, bitsPP >> 3);
   let pos = 0;
-  const passes = interlace === 1
-    ? [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2]]
-    : [[0, 0, 1, 1]];
+  const passes = passesOf(interlace);
   for (const [x0, y0, dx, dy] of passes) {
     const pw = Math.ceil((w - x0) / dx), ph = Math.ceil((h - y0) / dy);
     if (pw <= 0 || ph <= 0) continue;
@@ -108,6 +212,24 @@ export async function decodePng(bytes, inflate = inflateZlib) {
   return { w, h, bitDepth, colorType, channels, data: out, ...(palette ? { palette } : {}), ...(trns ? { trns } : {}) };
 }
 
+function concatBytes(list) {
+  const out = new Uint8Array(list.reduce((s, c) => s + c.length, 0));
+  let p = 0;
+  for (const c of list) { out.set(c, p); p += c.length; }
+  return out;
+}
+
+/** W6-T: refuse a PNG header that is unsupported or over the limits (declared pixels, inflated bytes). */
+function checkPngHeader(ihdr, maxPixels, maxRawBytes) {
+  const { w, h, bitDepth, colorType } = ihdr;
+  const channels = CHANNELS[colorType];
+  if (!channels || ![1, 2, 4, 8, 16].includes(bitDepth)) throw new Error(`PNG: unsupported colour type ${colorType} / ${bitDepth} bit.`);
+  if (!(w > 0 && h > 0)) throw new Error(`PNG: bad size ${w}×${h}.`);
+  if (w * h > maxPixels) throw tooLarge(`PNG: ${w}×${h} is over the limit of ${Math.round(maxPixels / 1e6 * 10) / 10} MP.`);
+  const raw = pngRawSize(ihdr);
+  if (raw > maxRawBytes) throw tooLarge(`PNG: ${w}×${h} × ${channels * bitDepth} bit needs ${Math.round(raw / MiB)} MB, over the limit of ${Math.round(maxRawBytes / MiB)} MB.`);
+}
+
 /** Max sample value of a decoded PNG. */
 export const sampleMax = (png) => (1 << png.bitDepth) - 1;
 
@@ -146,38 +268,46 @@ export function detectDepthFormat(png, hint = null) {
  * Decoded PNG → depth 0..1 (near = 1) and optional mask. @returns {{D:Float32Array, mask:Float32Array|null, w, h,
  * bits:number, format:string}}  `bits` = effective precision (16 for png16 / rg16 / 16-bit images, else 8).
  */
-export function depthFromPng(png, { hint = null, invert = false } = {}) {
+export function depthFromPng(png, { hint = null, invert = false, factor = 1 } = {}) {
   const { w, h, data, channels, bitDepth } = png;
   const n = w * h;
   const format = detectDepthFormat(png, hint);
-  const D = new Float32Array(n);
-  let mask = null;
-  if (format === "rg16") {
-    let any = false;
-    const m = new Float32Array(n);
+  // W6-T: `factor` > 1 = box-downscale while converting (no full-size Float32 copy of a big map)
+  const f = Math.max(1, Math.min(Math.floor(Number(factor) || 1), w, h));
+  const dw = Math.max(1, Math.floor(w / f)), dh = Math.max(1, Math.floor(h / f));
+  const D = new Float32Array(dw * dh);
+  const M = format === "rg16" ? new Float32Array(dw * dh) : null;
+  let any = false;
+  const pal = png.colorType === 3 ? (png.palette ?? new Uint8Array(768)) : null;
+  const max = sampleMax(png);
+  const greyCh = channels <= 2 ? 1 : 3;
+  const value = (i) => {
+    const j = i * channels;
+    if (format === "rg16") return (data[j] * 256 + data[j + 1]) / 65535;
+    if (pal) { const k = data[i] * 3; return (pal[k] + pal[k + 1] + pal[k + 2]) / 765; }
+    let s = 0;
+    for (let c = 0; c < greyCh; c++) s += data[j + c];
+    return s / (greyCh * max);
+  };
+  if (f === 1) {
     for (let i = 0; i < n; i++) {
-      const j = i * channels;
-      D[i] = (data[j] * 256 + data[j + 1]) / 65535;
-      m[i] = data[j + 2] / 255;
-      if (data[j + 2]) any = true;
+      D[i] = value(i);
+      if (M) { const b = data[i * channels + 2]; M[i] = b / 255; if (b) any = true; }
     }
-    mask = any ? m : null;
-  } else if (png.colorType === 3) {
-    const pal = png.palette ?? new Uint8Array(768);
-    for (let i = 0; i < n; i++) { const k = data[i] * 3; D[i] = (pal[k] + pal[k + 1] + pal[k + 2]) / 765; }
   } else {
-    const max = sampleMax(png);
-    const greyCh = channels <= 2 ? 1 : 3;
-    for (let i = 0; i < n; i++) {
-      const j = i * channels;
-      let s = 0;
-      for (let c = 0; c < greyCh; c++) s += data[j + c];
-      D[i] = s / (greyCh * max);
+    const k = 1 / (f * f);
+    for (let y = 0; y < dh * f; y++) {
+      const row = ((y / f) | 0) * dw;
+      for (let x = 0; x < dw * f; x++) {
+        const i = y * w + x, o = row + ((x / f) | 0);
+        D[o] += value(i) * k;
+        if (M) { const b = data[i * channels + 2]; M[o] += (b / 255) * k; if (b) any = true; }
+      }
     }
   }
-  if (invert) for (let i = 0; i < n; i++) D[i] = 1 - D[i];
+  if (invert) for (let i = 0; i < D.length; i++) D[i] = 1 - D[i];
   const bits = format === "rg16" || bitDepth === 16 ? 16 : 8;
-  return { D, mask, w, h, bits, format };
+  return { D, mask: any ? M : null, w: dw, h: dh, bits, format };
 }
 
 /** RGBA bytes of a browser-decoded image (WebP, JPEG, 8-bit PNG) → depth 0..1 = mean of R, G, B (a tinted grey map still reads right). */
@@ -327,6 +457,123 @@ function upsampleNearestBilinear(src, sw, sh, dw, dh) {
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// W6-T: one load pipeline (bytes -> depth -> conditioned map) for the main thread and the depth worker
+// ---------------------------------------------------------------------------------------------------------------
+
+const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
+
+/** Float32 -> IEEE half floats (Uint16, round to nearest), for RGBA16F uploads at half the memory / transfer size. */
+export function toHalf(src) {
+  const out = new Uint16Array(src.length);
+  for (let i = 0; i < src.length; i++) {
+    f32[0] = src[i];
+    const x = u32[0];
+    const sign = (x >>> 16) & 0x8000;
+    const e = ((x >>> 23) & 0xff) - 112;
+    const m = x & 0x7fffff;
+    if (e >= 31) { out[i] = sign | ((x & 0x7fffffff) > 0x7f800000 ? 0x7e00 : 0x7c00); continue; }
+    if (e <= 0) {
+      if (e < -10) { out[i] = sign; continue; }
+      const mm = m | 0x800000, shift = 14 - e;
+      let hm = mm >>> shift;
+      if ((mm >>> (shift - 1)) & 1) hm++;
+      out[i] = sign | hm;
+      continue;
+    }
+    let v = sign | (e << 10) | (m >>> 13);
+    if (m & 0x1000) v++;            // round half up (carries into the exponent correctly)
+    out[i] = v;
+  }
+  return out;
+}
+
+/** Half (Uint16) -> number. Tests / checks only. */
+export function halfToFloat(hv) {
+  const s = hv & 0x8000 ? -1 : 1, e = (hv >> 10) & 0x1f, m = hv & 0x3ff;
+  if (e === 0) return s * m * 2 ** -24;
+  if (e === 31) return m ? NaN : s * Infinity;
+  return s * (1 + m / 1024) * 2 ** (e - 15);
+}
+
+/**
+ * W6-T: cache-busting revision on a fetch URL (`?v=<rev>`, or `&v=` when the URL has a query). Empty / null rev = the
+ * URL unchanged; data: / blob: URLs are never touched.
+ */
+export function withRev(url, rev) {
+  const u = String(url ?? "");
+  if (rev === null || rev === undefined || rev === "" || /^(data:|blob:)/i.test(u)) return u;
+  const hash = u.indexOf("#");
+  const base = hash >= 0 ? u.slice(0, hash) : u, tail = hash >= 0 ? u.slice(hash) : "";
+  return `${base}${base.includes("?") ? "&" : "?"}v=${encodeURIComponent(String(rev))}${tail}`;
+}
+
+/** Integer box factor that brings the longer side to ≤ `maxSide` (1 = none). */
+export const boxFactorFor = (w, h, maxSide) => (maxSide > 0 && Math.max(w, h) > maxSide ? Math.ceil(Math.max(w, h) / maxSide) : 1);
+
+/**
+ * Browser decode of a non-PNG map (WebP / JPEG / GIF / ...) to RGBA bytes, optionally straight to a smaller size
+ * (`maxSide`). Works on the main thread and in a worker (createImageBitmap + OffscreenCanvas). Not used in Node.
+ */
+export async function rasterizeBytes(bytes, type, { w = 0, h = 0, maxSide = 0, maxPixels = DEPTH_LIMITS.map.maxPixels } = {}) {
+  const blob = new Blob([bytes], { type: type || "image/webp" });
+  const opts = { premultiplyAlpha: "none", colorSpaceConversion: "none" };
+  if (w > 0 && h > 0 && maxSide > 0 && Math.max(w, h) > maxSide) {
+    const k = maxSide / Math.max(w, h);
+    Object.assign(opts, { resizeWidth: Math.max(1, Math.round(w * k)), resizeHeight: Math.max(1, Math.round(h * k)), resizeQuality: "medium" });
+  }
+  const bmp = await createImageBitmap(blob, opts);
+  try {
+    if (bmp.width * bmp.height > maxPixels) throw tooLarge(`Image ${bmp.width}×${bmp.height} is over the limit of ${Math.round(maxPixels / 1e6 * 10) / 10} MP.`);
+    const c = new OffscreenCanvas(bmp.width, bmp.height);
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(bmp, 0, 0);
+    return { rgba: ctx.getImageData(0, 0, bmp.width, bmp.height).data, w: bmp.width, h: bmp.height };
+  } finally { bmp.close?.(); }
+}
+
+/**
+ * Bytes of a depth file -> {D, mask, w, h, bits, format} and, with `condition`, the conditioned map for the shader
+ * (`cond: {rgba | half, w, h, info}`, D / mask then dropped). Order: size checks from the header (no decode of an
+ * over-limit file), decode (PNG: capped streaming inflate, box-downscaled while converting when `maxSide` asks for it;
+ * other formats: the browser decoder via `rasterize`, resized while decoding), crop, ≤ 2048 px, ≤ `maxSide`, condition.
+ * Throws `code: "too-large"` errors for over-limit files and plain errors for broken ones.
+ */
+export async function prepareDepth(bytes, {
+  type = "", hint = null, invert = false, crop = null, maxSide = 0, limits = DEPTH_LIMITS.map, condition = null, half = false,
+  inflate = inflateZlib, rasterize = rasterizeBytes
+} = {}) {
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const L = { ...DEPTH_LIMITS.map, ...(limits ?? {}) };
+  if (b.length > L.maxFileBytes) throw tooLarge(`Depth file of ${Math.round(b.length / MiB)} MB is over the limit of ${Math.round(L.maxFileBytes / MiB)} MB.`);
+  let src;
+  if (isPng(b)) {
+    const info = pngInfo(b);
+    if (info) checkPngHeader(info, L.maxPixels, L.maxRawBytes);
+    const f = !crop && info ? boxFactorFor(info.w, info.h, maxSide) : 1;
+    const png = await decodePng(b, inflate, L);
+    src = depthFromPng(png, { hint, invert, factor: f });
+  } else {
+    const sz = imageSize(b);
+    if (sz && sz.w * sz.h > L.maxPixels) throw tooLarge(`Depth image ${sz.w}×${sz.h} is over the limit of ${Math.round(L.maxPixels / 1e6 * 10) / 10} MP.`);
+    if (typeof rasterize !== "function") throw new Error("No image decoder for this format here.");
+    const r = await rasterize(b, type, { w: sz?.w ?? 0, h: sz?.h ?? 0, maxSide: crop ? 0 : maxSide, maxPixels: L.maxPixels });
+    src = depthFromRGBA(r.rgba, r.w, r.h, { invert });
+  }
+  const rect = resolveCrop(crop, src.w, src.h);
+  if (rect) src = { ...src, D: cropMap(src.D, src.w, src.h, rect), mask: src.mask ? cropMap(src.mask, src.w, src.h, rect) : null, w: rect[2], h: rect[3] };
+  const shrink = (f) => {
+    const d = downscaleMap(src.D, src.w, src.h, f);
+    src = { ...src, D: d.M, mask: src.mask ? downscaleMap(src.mask, src.w, src.h, f).M : null, w: d.w, h: d.h };
+  };
+  while (Math.max(src.w, src.h) > 2048) shrink(2);
+  const f2 = boxFactorFor(src.w, src.h, maxSide);
+  if (f2 > 1) shrink(f2);
+  if (!condition) return src;
+  const c = conditionDepth(src, condition);
+  return { w: c.w, h: c.h, bits: src.bits, format: src.format, D: null, mask: null, cond: { w: c.w, h: c.h, info: c.info, ...(half ? { half: toHalf(c.rgba) } : { rgba: c.rgba }) } };
 }
 
 // ---------------------------------------------------------------------------------------------------------------

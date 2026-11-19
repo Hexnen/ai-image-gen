@@ -80,7 +80,7 @@ export function registerParallax() {
       invalidate: (src) => depthIndex.invalidate(src),
       reportMissing: (src) => depthIndex.reportMissing(src),
       /** load a found map: {D, mask, w, h, bits, format, meta, path} (Float32 0..1, 1 = near) */
-      load: (info) => import("./parallax-load.mjs").then((m) => m.loadDepth({ path: info.depth, format: info.format, sidecar: info.sidecar })),
+      load: (info) => import("./parallax-load.mjs").then((m) => m.loadDepth({ path: info.depth, format: info.format, sidecar: info.sidecar, rev: info.rev || null })),
       ...(game.user.isGM ? { remember: (src, info) => depthIndex.remember(src, info), forget: (src) => depthIndex.forget(src) } : {})
     };
   });

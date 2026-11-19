@@ -189,7 +189,7 @@ export class ParallaxRenderer {
   }
 
   /** Conditioned depth (parallax-core conditionDepth: 4 floats per pixel) under a key. Half-float, linear filtering. */
-  setDepth(key, { rgba, w, h }) {
+  setDepth(key, { rgba, half, w, h }) {
     const gl = this.gl;
     const old = this.depths.get(key);
     if (old) gl.deleteTexture(old.tex);
@@ -197,9 +197,56 @@ export class ParallaxRenderer {
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.FLOAT, rgba);
+    // W6-T: `half` = Uint16 half floats from the depth worker (half the upload size); `rgba` = Float32 as before
+    if (half) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, half);
+    else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.FLOAT, rgba);
     this.#params(gl.LINEAR);
     this.depths.set(key, { tex, w, h });
+  }
+
+  /**
+   * W6-T: GPU time of draws (EXT_disjoint_timer_query_webgl2, when the browser exposes it). `timerBegin()` before a
+   * draw, `timerEnd()` after; `timerPoll()` returns the finished results in ms (a few frames later; disjoint = dropped).
+   * `timerSupported` false = no GPU times on this browser (the frame guard then uses its on/off comparison).
+   */
+  get timerSupported() {
+    if (this.tq === undefined) {
+      let ext = null;
+      try { ext = this.gl.getExtension("EXT_disjoint_timer_query_webgl2"); } catch { ext = null; }
+      this.tq = ext ? { ext, active: null, pending: [] } : null;
+    }
+    return !!this.tq;
+  }
+
+  timerBegin() {
+    if (!this.timerSupported || this.tq.active || this.lost) return;
+    if (this.tq.pending.length >= 6) return;               // results lag: do not pile up queries
+    const gl = this.gl, q = gl.createQuery();
+    gl.beginQuery(this.tq.ext.TIME_ELAPSED_EXT, q);
+    this.tq.active = q;
+  }
+
+  timerEnd() {
+    if (!this.tq?.active) return;
+    this.gl.endQuery(this.tq.ext.TIME_ELAPSED_EXT);
+    this.tq.pending.push(this.tq.active);
+    this.tq.active = null;
+  }
+
+  timerPoll() {
+    const out = [];
+    if (!this.tq || this.lost) return out;
+    const gl = this.gl;
+    while (this.tq.pending.length) {
+      const q = this.tq.pending[0];
+      if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) break;
+      const disjoint = gl.getParameter(this.tq.ext.GPU_DISJOINT_EXT);
+      const ns = gl.getQueryParameter(q, gl.QUERY_RESULT);
+      gl.deleteQuery(q);
+      this.tq.pending.shift();
+      if (!disjoint) out.push(ns / 1e6);
+    }
+    return out;
   }
 
   dropDepth(key) {
@@ -282,6 +329,8 @@ export class ParallaxRenderer {
 
   destroy() {
     const gl = this.gl;
+    try { if (this.tq) { if (this.tq.active) gl.endQuery(this.tq.ext.TIME_ELAPSED_EXT); for (const q of [this.tq.active, ...this.tq.pending]) if (q) gl.deleteQuery(q); } } catch { /* lost */ }
+    this.tq = null;
     for (const k of [...this.depths.keys()]) this.dropDepth(k);
     for (const k of [...this.images.keys()]) this.dropImage(k);
     gl.deleteProgram(this.program);

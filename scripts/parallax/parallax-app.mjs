@@ -121,7 +121,7 @@ export class ParallaxApp extends HandlebarsApplicationMixin(ApplicationV2) {
     this.#refresh();
     for (const m of this.maps) {
       try {
-        let src = await loadDepth(m);
+        let src = await loadDepth({ ...m, limits: "window" });   // W6-T: the window may show bigger reference maps
         if (gen !== this.#gen) return;
         // depth finer than the portrait adds nothing on screen: box it down to about the portrait size
         if (this.image.w) {

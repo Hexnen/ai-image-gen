@@ -4,12 +4,13 @@
 // Run from the module folder: node dev/test-parallax-core.mjs
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
-import { inflateSync, deflateSync } from "node:zlib";
+import { inflateSync, deflateSync, deflateRawSync, constants as zlibConstants } from "node:zlib";
 import {
   isPng, decodePng, detectDepthFormat, depthFromPng, depthFromRGBA, resolveCrop, cropMap, downscaleMap, rankFilter,
   dilateForeground, conditionDepth, MAX_SHIFT, condition, clampLook, offsetFor, overscanFor, stepsFor, normalFromGradient,
   stretchFactor, holeWeight, marchRay, easeToward, idleBlend, swayAt, backingSize, containRect, VIEW_RANGES, viewDefaults,
-  normalizeView, viewFromTypeParallax, depthNameFor
+  normalizeView, viewFromTypeParallax, depthNameFor, inflateZlib, pngInfo, pngRawSize, imageSize, DEPTH_LIMITS, prepareDepth,
+  toHalf, halfToFloat, withRev, boxFactorFor
 } from "../scripts/parallax/parallax-core.mjs";
 import { encodeDepthPng16, encodeDepthRG16, encodeGray8, crc32 } from "../scripts/depth/post.mjs";
 
@@ -352,6 +353,156 @@ await test("view settings: defaults, clamping, idempotence, seeding from cfg.dep
 await test("depth file name next to an image", () => {
   assert.equal(depthNameFor("worlds/x/a b.webp?v=2"), "a b_depth.png");
   assert.equal(depthNameFor(""), "");
+});
+
+// ---------- W6-T: decoder safety (bombs, header-first size checks, early downscale) ----------
+
+/** A PNG with a hand-made header and an arbitrary (possibly huge-when-inflated) IDAT stream. */
+function rawPng(w, h, bitDepth, colorType, idat) {
+  const chunk = (type, data) => {
+    const b = Buffer.alloc(12 + data.length);
+    b.writeUInt32BE(data.length, 0); b.write(type, 4, "latin1"); Buffer.from(data).copy(b, 8);
+    b.writeUInt32BE((crc32(b.subarray(4, 8 + data.length)) ^ 0xffffffff) >>> 0, 8 + data.length);
+    return b;
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = bitDepth; ihdr[9] = colorType;
+  return new Uint8Array(Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("IDAT", idat), chunk("IEND", Buffer.alloc(0))]));
+}
+
+await test("W6-T inflateZlib streams with a hard cap: a 1 GB deflate bomb (≈1 MB) stops at the cap, fast", async () => {
+  // ~1 GB of zeros as a zlib stream built from 16 non-final 64 MB raw blocks (the test never holds 1 GB)
+  const zero = Buffer.alloc(64 * 1024 * 1024);
+  const block = deflateRawSync(zero, { level: 9, finishFlush: zlibConstants.Z_SYNC_FLUSH });
+  const parts = [new Uint8Array([0x78, 0xda])];
+  for (let i = 0; i < 16; i++) parts.push(new Uint8Array(block));
+  const total = parts.reduce((s, p) => s + p.length, 0);
+  assert.ok(total < 2_000_000, `compressed bomb ${total} bytes`);
+  const t0 = performance.now();
+  const out = await inflateZlib(parts, { maxBytes: 4096 });
+  const ms = performance.now() - t0;
+  assert.equal(out.length, 4096);
+  assert.ok(out.every((x) => x === 0));
+  assert.ok(ms < 1500, `stopped early (${Math.round(ms)} ms)`);
+  // unbounded mode still returns everything for a normal stream; a short stream under the cap returns what is there
+  assert.equal(Buffer.from(await inflateZlib(new Uint8Array(deflateSync(Buffer.from("hello hello hello"))))).toString(), "hello hello hello");
+  assert.equal(Buffer.from(await inflateZlib(new Uint8Array(deflateSync(Buffer.from("abc"))), { maxBytes: 100 })).toString(), "abc");
+});
+
+await test("W6-T PNG bomb: 1×1 grey PNG whose IDAT inflates to 64 MB decodes from its first 2 bytes only", async () => {
+  const png = rawPng(1, 1, 8, 0, deflateSync(Buffer.alloc(64 * 1024 * 1024), { level: 9 }));
+  assert.ok(png.length < 200000);
+  assert.equal(pngRawSize(pngInfo(png)), 2);
+  const t0 = performance.now();
+  const r = await decodePng(png);                         // default inflate = streamed, capped at 2 bytes
+  assert.equal(r.w, 1); assert.equal(r.data.length, 1); assert.equal(r.data[0], 0);
+  assert.ok(performance.now() - t0 < 1500);
+  // an injected inflate is told the cap
+  let asked = null;
+  const spy = async (z, o) => { asked = o?.maxBytes; return new Uint8Array(inflateSync(z, { maxOutputLength: o.maxBytes })).subarray(0, o.maxBytes); };
+  await decodePng(png, spy).catch(() => {});
+  assert.equal(asked, 2);
+});
+
+await test("W6-T sizes are checked from the header BEFORE inflating: over-limit pixels / bytes refused, nothing inflated", async () => {
+  let calls = 0;
+  const spy = async (z) => { calls++; return new Uint8Array(inflateSync(z)); };
+  const tiny = deflateSync(Buffer.alloc(10));
+  const big = rawPng(8000, 8000, 16, 6, tiny);          // a legal 64 MP 16-bit RGBA header (≈ 512 MB of scanlines)
+  await assert.rejects(decodePng(big, spy), (e) => e.code === "too-large");
+  await assert.rejects(decodePng(big, spy, DEPTH_LIMITS.map), (e) => e.code === "too-large" && /MP/.test(e.message));
+  // under the pixel cap but over the byte cap: 4000×4000 16-bit RGBA = 128 MB > 64 MB (map limits)
+  await assert.rejects(decodePng(rawPng(4000, 4000, 16, 6, tiny), spy, DEPTH_LIMITS.map), (e) => e.code === "too-large" && /MB/.test(e.message));
+  // within the window limits: reaches inflate, then fails cleanly on the (short) data
+  await assert.rejects(decodePng(rawPng(4000, 4000, 16, 6, tiny), spy, DEPTH_LIMITS.window), /too short/);
+  assert.equal(calls, 1, "only the in-limit file reached inflate");
+  await assert.rejects(prepareDepth(big, { inflate: spy }), (e) => e.code === "too-large");
+  await assert.rejects(prepareDepth(new Uint8Array(65 * 1024 * 1024), {}), (e) => e.code === "too-large" && /file/.test(e.message));
+  assert.equal(calls, 1);
+  assert.ok(DEPTH_LIMITS.map.maxPixels <= 4096 * 4096 && DEPTH_LIMITS.map.maxRawBytes <= 64 * 1024 * 1024);
+  assert.ok(DEPTH_LIMITS.window.maxPixels < 64e6);
+});
+
+await test("W6-T non-PNG maps: header size read without decoding; over-limit refused before the browser decoder runs", async () => {
+  const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 4, 0, 0, 0xff, 0xc0, 0, 11, 8, 0x13, 0x88, 0x0b, 0xb8, 3, 0, 0, 0, 0]);
+  assert.deepEqual(imageSize(jpg), { w: 3000, h: 5000, type: "jpeg" });
+  const webp = (kind, set) => { const b = new Uint8Array(30); b.set([82, 73, 70, 70], 0); b.set([87, 69, 66, 80], 8); b.set([...kind].map((c) => c.charCodeAt(0)), 12); for (const [i, v] of set) b[i] = v; return b; };
+  assert.deepEqual(imageSize(webp("VP8X", [[24, 0xff], [25, 0x0f], [27, 0x3f], [28, 0x06]])), { w: 4096, h: 1600, type: "webp" });
+  assert.deepEqual(imageSize(webp("VP8 ", [[26, 0x00], [27, 0x04], [28, 0x00], [29, 0x03]])), { w: 1024, h: 768, type: "webp" });
+  const v = 1023 | (511 << 14);
+  assert.deepEqual(imageSize(webp("VP8L", [[21, v & 255], [22, (v >> 8) & 255], [23, (v >> 16) & 255], [24, (v >>> 24) & 255]])), { w: 1024, h: 512, type: "webp" });
+  assert.deepEqual(imageSize(new Uint8Array([71, 73, 70, 56, 57, 97, 0x20, 0x03, 0x58, 0x02, 0])), { w: 800, h: 600, type: "gif" });
+  assert.equal(imageSize(new Uint8Array([1, 2, 3])), null);
+  let raster = 0;
+  const fake = async (b, type, o) => {
+    raster++;
+    const k = o.maxSide && o.w ? o.maxSide / Math.max(o.w, o.h) : 1, w = Math.round((o.w || 4) * Math.min(1, k)), h = Math.round((o.h || 4) * Math.min(1, k));
+    return { rgba: new Uint8Array(w * h * 4).fill(128), w, h };
+  };
+  const huge = new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0x4e, 0x20, 0x4e, 0x20, 3, 0, 0, 0, 0]); // 20000×20000
+  await assert.rejects(prepareDepth(huge, { rasterize: fake }), (e) => e.code === "too-large");
+  assert.equal(raster, 0, "the decoder never ran");
+  const ok = await prepareDepth(jpg, { rasterize: fake, maxSide: 1024 });
+  assert.equal(raster, 1);
+  assert.ok(Math.max(ok.w, ok.h) <= 1024, `decoded straight to ≤ 1024: ${ok.w}×${ok.h}`);
+});
+
+await test("W6-T early downscale: depthFromPng factor = box downscale of the full map; prepareDepth ≤ maxSide + conditioned half floats", async () => {
+  const w = 41, h = 30;
+  const D = fill(w, h, (x, y) => ((x * 37 + y * 101) % 997) / 996);
+  const png = await decodePng(await encodeDepthPng16(D, w, h, deflate), inflate);
+  const full = depthFromPng(png);
+  for (const f of [2, 3, 4]) {
+    const a = depthFromPng(png, { factor: f }), b = downscaleMap(full.D, w, h, f);
+    assert.equal(a.w, b.w); assert.equal(a.h, b.h);
+    for (let i = 0; i < a.D.length; i++) near(a.D[i], b.M[i], 1e-6);
+  }
+  const A = fill(w, h, (x) => (x < 20 ? 1 : 0));
+  const rg = depthFromPng(await decodePng(await encodeDepthRG16(D, A, w, h, deflate), inflate), { factor: 2 });
+  assert.ok(rg.mask && rg.mask.length === rg.w * rg.h, "rg16 mask kept through the factor");
+  near(rg.mask[0], 1); near(rg.mask[rg.w - 1], 0);
+  assert.equal(boxFactorFor(941, 1672, 1024), 2);
+  assert.equal(boxFactorFor(1000, 800, 1024), 1);
+  const big = fill(300, 200, (x, y) => (x + y) / 500);
+  const bytes = await encodeDepthPng16(big, 300, 200, deflate);
+  const r = await prepareDepth(bytes, { maxSide: 128, condition: { dilatePx: 2, normalBlurPx: 3 }, half: true });
+  assert.ok(Math.max(r.w, r.h) <= 128, `${r.w}×${r.h}`);
+  assert.equal(r.D, null);
+  assert.ok(r.cond.half instanceof Uint16Array && r.cond.half.length === r.w * r.h * 4);
+  const plain = await prepareDepth(bytes, { maxSide: 128, condition: { dilatePx: 2, normalBlurPx: 3 } });
+  for (let i = 0; i < plain.cond.rgba.length; i += 97) near(halfToFloat(r.cond.half[i]), plain.cond.rgba[i], 1e-3);
+});
+
+await test("W6-T half floats and cache-busting revisions", () => {
+  const xs = new Float32Array([0, 1, 0.5, 0.333333, 1e-5, 1e-8, 65504, 1e6, -2.5, 0.0001234]);
+  const h = toHalf(xs);
+  near(halfToFloat(h[0]), 0); near(halfToFloat(h[1]), 1); near(halfToFloat(h[2]), 0.5);
+  near(halfToFloat(h[3]), 0.333333, 2e-4); near(halfToFloat(h[4]), 1e-5, 1e-7); near(halfToFloat(h[5]), 0, 1e-7);
+  near(halfToFloat(h[6]), 65504); assert.equal(halfToFloat(h[7]), Infinity); near(halfToFloat(h[8]), -2.5); near(halfToFloat(h[9]), 0.0001234, 1e-6);
+  for (let i = 0; i <= 1000; i++) near(halfToFloat(toHalf(new Float32Array([i / 1000]))[0]), i / 1000, 5e-4);
+  assert.equal(withRev("/worlds/a/b_depth.png", 1731), "/worlds/a/b_depth.png?v=1731");
+  assert.equal(withRev("/x.png?raw=1#f", "a b"), "/x.png?raw=1&v=a%20b#f");
+  assert.equal(withRev("/x.png", null), "/x.png");
+  assert.equal(withRev("/x.png", ""), "/x.png");
+  assert.equal(withRev("data:image/png;base64,AA", 3), "data:image/png;base64,AA");
+});
+
+await test("W6-T wiring: loaders go through the worker with limits; the window keeps bigger ones; rev + encoded paths", () => {
+  const load = readFileSync(new URL("../scripts/parallax/parallax-load.mjs", import.meta.url), "utf8");
+  assert.ok(load.includes('new Worker(new URL("./parallax-worker.mjs", import.meta.url), { type: "module"'));
+  assert.ok(load.includes("return prepareDepth(bytes, opts);"), "main-thread fallback = the same pipeline");
+  assert.ok(load.includes("depthIndexModule.encodeDataPath"));
+  assert.ok(load.includes("withRev(p, rev)"));
+  const app = readFileSync(new URL("../scripts/parallax/parallax-app.mjs", import.meta.url), "utf8");
+  assert.ok(app.includes('loadDepth({ ...m, limits: "window" })'));
+  const worker = readFileSync(new URL("../scripts/parallax/parallax-worker.mjs", import.meta.url), "utf8");
+  assert.ok(worker.includes('import { prepareDepth } from "./parallax-core.mjs";'));
+  assert.doesNotMatch(worker, /fetch\(|foundry\.|game\./);
+  // the worker's import graph stays free of Foundry / DOM modules
+  for (const f of ["../scripts/parallax/parallax-core.mjs", "../scripts/depth/post.mjs", "../scripts/constants.mjs"]) {
+    const src = readFileSync(new URL(f, import.meta.url), "utf8");
+    for (const m of src.matchAll(/^import .* from "(.+)";/gm)) assert.ok(["../depth/post.mjs", "../constants.mjs"].includes(m[1]), `${f} imports ${m[1]}`);
+  }
 });
 
 await test("shader mirrors the tested maths; the parallax code makes no network calls of its own", () => {

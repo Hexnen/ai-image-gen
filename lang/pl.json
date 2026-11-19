@@ -680,7 +680,7 @@
   "AIIMG.PortraitParallax.Setting.Name":"Paralaksa głębi na portretach aktorów",
   "AIIMG.PortraitParallax.Setting.Hint":"Gdy obraz aktora ma mapę głębi, portret na karcie aktora porusza się w 3D za myszą. Gracze też to widzą (mapa to zwykły plik). Wyłączone: portrety zostają płaskie. Szanuje systemowe ograniczenie ruchu i sama się wyłącza na komputerze, na którym spowalnia klatki.",
   "AIIMG.PortraitParallax.Generate":"Generuj głębię (portret)",
-  "AIIMG.PortraitParallax.Slow":"Paralaksa portretów chwilowo wyłączona na tym komputerze: klatki były za wolne. Wróci po przeładowaniu strony.",
+  "AIIMG.PortraitParallax.Slow":"Paralaksa portretów chwilowo wyłączona na tym komputerze: jej rysowanie zajmowało za dużo czasu w każdej klatce. Wróci po przeładowaniu strony.",
   "AIIMG.TokenParallax.Setting.Name":"Paralaksa głębi na tokenach",
   "AIIMG.TokenParallax.Setting.Hint":"Gdy obraz tokenu ma mapę głębi, obraz wewnątrz tokenu lekko przesuwa się w 3D. Tylko na scenach, na których jest włączona (ustawienia sceny), albo na tokenach ustawionych na Wł. Obrys, rozmiar i obszar kliknięcia tokenu nigdy się nie zmieniają. Wyłączone: żaden token nigdzie nie ma efektu. Szanuje systemowe ograniczenie ruchu i sama się wyłącza na komputerze, na którym spowalnia klatki.",
   "AIIMG.TokenParallax.Drive.Name":"Paralaksa tokenów: co ją porusza",
