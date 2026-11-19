@@ -33,6 +33,28 @@ Modules that should also work with the old id look it up as
   overrides the saved-file settings. With `pick: true` the picker window opens and the promise resolves with the chosen
   version (rejects with `Error("cancelled")` if the window is closed without choosing).
 
+## AI Tile (change a part of the map)
+
+GM only. Left toolbar → **Moinens AI Gen** → **AI Tile** (square icon).
+
+1. Drag a rectangle on the map (right-drag pans, the wheel zooms). Drag a corner or the whole rectangle to adjust,
+   Esc cancels, Enter or **Next** opens the window.
+2. The window shows what is sent: **image 1** = the marked rectangle (the image that is edited), **image 2** = the map
+   around it, twice as wide and twice as high around the same centre (cut at the canvas edge), with the marked area
+   framed in red; with OpenAI also a **mask** over image 1. Write what should change, pick the number of versions,
+   Now or Batch, the soft edge (px, fades the tile's border inwards) and whether tokens appear in the pictures.
+   The window shows the input images, the estimated input tokens (OpenAI) and the estimated cost.
+3. **Now**: the versions appear in a window and the selected one is previewed on the map in place of the rectangle;
+   **Accept and paste** saves it to `ai-image-gen/tiles/<scene>/` and creates a Tile exactly over the rectangle
+   (rotation 0, elevation 0, above the other tiles of that elevation, below tokens). **Again** asks for more versions
+   with the same pictures, **Discard** drops them (nothing saved). **Batch**: the tile is pasted on the same scene when
+   the result arrives (several versions: the usual "ready to pick" notification opens the versions window).
+
+Model, quality, size limit (the longer side of the request), the prompt template (fields `{description}`, `{pos}`,
+`{guide}`, `{grid}`, `{distance}`, `{units}`, `{scene}`), reference size (applies to image 2) and output are set in the
+settings window under the type **AI Tile**. Lighting, fog and overhead tiles never go into the pictures. Only
+rectangles for now. Real model responses for this feature have not been checked yet.
+
 ## Privacy & limits
 
 These are properties of Foundry itself, not something the module can work around:
