@@ -52,7 +52,7 @@ export class LogApp extends HandlebarsApplicationMixin(ApplicationV2) {
   #open = new Set();
 
   #hook = () => {
-    if (!this.rendered) return;
+    if (this.state < ApplicationV2.RENDER_STATES.RENDERING) return;
     clearTimeout(this.#timer);
     this.#timer = setTimeout(() => this.render({ parts: ["table"] }), 150);
   };

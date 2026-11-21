@@ -156,7 +156,7 @@ export class ParallaxApp extends HandlebarsApplicationMixin(ApplicationV2) {
     m.cond = this.#gl ? null : c; // kept until a context exists
   }
 
-  #refresh() { if (this.rendered) this.render(); }
+  #refresh() { if (this.rendered) this.render(); }   // a render in flight re-checks in _onRender
 
   // ------------------------------------------------------------------ context
 
@@ -245,6 +245,12 @@ export class ParallaxApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   _onRender(context, options) {
     super._onRender?.(context, options);
+    // a load that finished after this render read its context (the first open loads the template in between, and a
+    // re-render is not 'rendered' while it builds) was not shown: `rendered` was false, so render again
+    const stale = (context.imageLoading && this.image?.status !== "loading")
+      || context.maps.length !== this.maps.length
+      || context.maps.some((m, i) => m.key !== this.maps[i]?.key || m.status !== this.maps[i]?.status);
+    if (stale) this.render();
     const el = this.element;
     const stage = el.querySelector("[data-role=stage]");
     for (const o of this.#observers) o.disconnect();

@@ -43,7 +43,8 @@ export class BatchesApp extends HandlebarsApplicationMixin(ApplicationV2) {
     return this.#instance;
   }
 
-  #hook = (rec) => { if (this.rendered) this.render(); };
+  // also during a render in flight (queued): a record change that lands mid-render must not leave the list stale
+  #hook = (rec) => { if (this.state >= ApplicationV2.RENDER_STATES.RENDERING) this.render(); };
 
   _onFirstRender(context, options) {
     super._onFirstRender?.(context, options);

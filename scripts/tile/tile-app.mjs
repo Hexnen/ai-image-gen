@@ -79,7 +79,7 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     if (seq !== this.#prepSeq) return this.prepared;
     this.job = job;
     this.error = error;
-    if (this.rendered) this.render();
+    if (this.rendered) this.render();   // a render in flight re-checks in _onRender
     return this.job;
   }
 
@@ -166,6 +166,10 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     if (options?.isFirstRender) { ta?.focus(); ta?.setSelectionRange(ta.value.length, ta.value.length); }
     else if (ta && this.#caret && document.activeElement === ta) ta.setSelectionRange(...this.#caret);
     this.#caret = null;
+    // the capture finished after this render read its context (the first open loads the template in between, and a
+    // re-render is not 'rendered' while it builds): `rendered` was false then, so render again or the spinner and the
+    // disabled Generate button stay until an option changes
+    if (context.preparing && (this.job || this.error)) this.render();
     ta?.addEventListener("input", (ev) => {
       this.description = ev.target.value;
       const p = el.querySelector("[data-role=prompt]");
@@ -364,7 +368,7 @@ export class TileReviewApp extends HandlebarsApplicationMixin(ApplicationV2) {
       this.preview.destroy();
       this.preview = null;
     } else return;
-    if (this.rendered) this.render();
+    if (this.state >= ApplicationV2.RENDER_STATES.RENDERING) this.render();
   }
 
   #onScene() { return canvas?.ready && canvas.scene?.id === this.sceneId; }
