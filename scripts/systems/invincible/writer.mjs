@@ -93,6 +93,16 @@ export const VITAL_PATHS = new Map([
 const listOf = (coll) => (coll == null ? [] : Array.isArray(coll) ? coll : typeof coll.values === "function" ? [...coll.values()] : [...coll]);
 const srcOf = (doc) => doc?._source ?? (typeof doc?.toObject === "function" ? doc.toObject() : doc) ?? {};
 const docName = (doc) => doc?.documentName ?? doc?.constructor?.documentName ?? null;
+/** flag key on a world item created by a run (target "newItem"): flags.<module>.builtByRun = runId */
+export const BUILT_RUN = "builtByRun";
+/**
+ * Security: the undo journal lives in the document's flags, which an owning PLAYER can write, while undo runs on the GM's
+ * client. A "world" entry is therefore only trusted when its uuid resolves to a top-level world Item (not embedded, not in a
+ * compendium) stamped with this run's id at creation; a player cannot write that stamp on an item he does not own, so a
+ * forged entry can never make the GM delete someone else's document (an Actor, a Scene, another player's item...).
+ */
+const worldItemOfRun = (d, runId) => !!d && !!runId && docName(d) === "Item" && !d.parent && !d.pack
+  && getPath(srcOf(d), `flags.${MODULE_ID}.${BUILT_RUN}`) === runId;
 const CTRL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F‪-‮⁦-⁩]/g;
 /** plain text: control chars and bidi overrides stripped, trimmed, capped */
 export const cleanText = (v, cap = 1200) => String(v ?? "").replace(CTRL, "").replace(/\r\n?/g, "\n").trim().slice(0, cap);
@@ -1144,7 +1154,7 @@ export function createWriter(deps = {}) {
       D.log?.error?.(`moinens-ai-gen | writer apply failed at ${phase}`, err);
       const reason = String(err?.message ?? err).replace(/[\s.]+$/, "");
       try {
-        await revert(doc, run.ops, { rollback: true, order: run.order, full: true });
+        await revert(doc, run.ops, { rollback: true, order: run.order, full: true, runId: run.runId });
         const e = msg("write.failed", `Writing failed at "${phase}" (${reason}); everything this run wrote was rolled back.`);
         return { ...base, errors: [e], rolledBack: true, message: e.message };
       } catch (rb) {
@@ -1160,7 +1170,9 @@ export function createWriter(deps = {}) {
     try {
       if (exec.world) {
         if (typeof D.createWorldItem !== "function") throw new Error("creating world items is not available");
-        const created = await D.createWorldItem(exec.world.data);
+        // stamped with the run id: undo deletes a world item only when it carries this stamp (worldItemOfRun)
+        const data = { ...exec.world.data, flags: { ...(exec.world.data.flags ?? {}), [MODULE_ID]: { ...(exec.world.data.flags?.[MODULE_ID] ?? {}), [BUILT_RUN]: run.runId } } };
+        const created = await D.createWorldItem(data);
         run.ops.push({ opId: exec.world.opId, kind: "world", itemId: created.id, uuid: created.uuid, type: created.type, name: created.name, before: null, after: fingerprint(srcOf(created)) });
       } else if (exec.item?.paths.length) {
         run.ops.push({ opId: exec.item.opId, kind: "actor", itemId: null, type: item.type, name: item.name, paths: exec.item.paths, before: clone(exec.item.before), after: null });
@@ -1173,7 +1185,7 @@ export function createWriter(deps = {}) {
       const w = run.ops[0];
       return { ...base, ok: true, runId: run.runId, errors: [], created: w.kind === "world" ? [w.itemId] : [], updated: w.kind === "actor" ? [String(srcOf(item)._id ?? item.id)] : [], idMap: w.kind === "world" ? { [w.opId]: w.uuid } : {}, message: w.kind === "world" ? `Created "${w.name}".` : `Updated "${item.name}".` };
     } catch (err) {
-      try { await revert(item, run.ops, { rollback: true }); } catch (rb) { D.log?.error?.("moinens-ai-gen | writer rollback failed", rb); }
+      try { await revert(item, run.ops, { rollback: true, runId: run.runId }); } catch (rb) { D.log?.error?.("moinens-ai-gen | writer rollback failed", rb); }
       const e = msg("write.failed", `Writing failed (${String(err?.message ?? err)}); rolled back.`);
       return { ...base, errors: [e], rolledBack: true, message: e.message };
     }
@@ -1212,7 +1224,7 @@ export function createWriter(deps = {}) {
     await createKeep(doc, data);
   }
 
-  async function revert(doc, entries, { rollback = false, order = null, full = true } = {}) {
+  async function revert(doc, entries, { rollback = false, order = null, full = true, runId = null } = {}) {
     const isItem = docName(doc) === "Item";
     const o = undoOrder(entries);
     const skipped = [];
@@ -1263,7 +1275,7 @@ export function createWriter(deps = {}) {
     }
     for (const e of entries.filter((x) => x.kind === "world")) {
       const d = typeof D.fromUuid === "function" ? await D.fromUuid(e.uuid) : null;
-      if (d) await d.delete(); else skipped.push(e);
+      if (worldItemOfRun(d, runId)) await d.delete(); else skipped.push(e);
     }
     if (rollback) return { skipped };
     return { skipped };
@@ -1308,7 +1320,8 @@ export function createWriter(deps = {}) {
     if (!entries.length) return none("undo.none", "Those changes are already undone.");
     const drift = driftOf(entries, items, src, laterTouches(journal, run));   // W6-R4: laterRun = changed by a later builder run
     for (const e of entries.filter((x) => x.kind === "world")) {
-      const d = typeof D.fromUuid === "function" ? await D.fromUuid(e.uuid) : null;
+      const d0 = typeof D.fromUuid === "function" ? await D.fromUuid(e.uuid) : null;
+      const d = worldItemOfRun(d0, run.runId) ? d0 : null;   // a uuid that is not this run's own world item counts as missing
       if (!d) drift.push({ opId: e.opId, itemId: e.itemId, name: e.name, why: "missing" });
       else if (e.after && fingerprint(srcOf(d)) !== e.after) drift.push({ opId: e.opId, itemId: e.itemId, name: d.name, why: "edited" });
     }
@@ -1319,7 +1332,7 @@ export function createWriter(deps = {}) {
     try {
       // whole run (or everything left of it) = every item back to its pre-run place; per item = only the restored ones
       const full = !opIds?.length || entries.length === run.ops.filter((e) => !e.undone).length;
-      const { skipped } = await revert(doc, entries, { order: Array.isArray(run.order) ? run.order : null, full });
+      const { skipped } = await revert(doc, entries, { order: Array.isArray(run.order) ? run.order : null, full, runId: run.runId });
       const fresh = readJournal(srcOf(doc));
       const r = fresh.runs.find((x) => x.runId === run.runId);
       if (r) { const done = new Set(entries.map((e) => `${e.opId}:${e.itemId}:${e.kind}`)); for (const e of r.ops) if (done.has(`${e.opId}:${e.itemId}:${e.kind}`)) e.undone = true; }

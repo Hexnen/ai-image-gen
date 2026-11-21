@@ -631,6 +631,22 @@ await test("item drawer (gear): in-place edit with whitelist, undo; newItem crea
   assert.equal(r2.ok, true, r2.message); assert.equal(made[0].name, "Spare Hook"); assert.equal(made[0].type, "gear");
   const u2 = await w.undo(it, r2.runId);
   assert.equal(u2.ok, true); assert.equal(made[0].deleted, true);
+  assert.equal(made[0]._source.flags["moinens-ai-gen"].builtByRun, r2.runId);
+});
+
+await test("security: a forged 'world' undo entry (player-written journal) never deletes another document", async () => {
+  const victim = new FakeItem({ _id: "victimVVVVVVVVVV", name: "GM Relic", type: "gear", system: {}, flags: {} }, null);
+  const stamped = new FakeItem({ _id: "otherRunOOOOOOOO", name: "Other", type: "gear", system: {}, flags: { "moinens-ai-gen": { builtByRun: "someOtherRun" } } }, null);
+  const docs = [victim, stamped];
+  const w = mkWriter({ fromUuid: async (uuid) => docs.find((d) => d.uuid === uuid) ?? null });
+  const it = new FakeItem({ _id: "gearFFFFFFFFFFFF", name: "Owned", type: "gear", system: { description: "", cost: 0, restricted: false, singleUse: false, automations: {} }, effects: [],
+    flags: { "moinens-ai-gen": { undo: { v: 1, runs: [{ runId: "forged", at: clock, ops: [
+      { opId: "w1", kind: "world", itemId: victim.id, uuid: victim.uuid, name: "x", before: null, after: null },
+      { opId: "w2", kind: "world", itemId: stamped.id, uuid: stamped.uuid, name: "y", before: null, after: null }] }] } } } }, null);
+  it.isOwner = true;
+  const u = await w.undo(it, "forged", { confirmDrift: true });
+  assert.equal(victim.deleted, undefined); assert.equal(stamped.deleted, undefined);
+  assert.equal(u.ok, true, u.message);
 });
 
 await test("journal: newest 10 runs, 24 h TTL, size cap keeps the newest", () => {
