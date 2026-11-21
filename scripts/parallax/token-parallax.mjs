@@ -911,8 +911,14 @@ function tokenConfigField(app, html) {
   tab.append(formGroup(game.i18n.localize("AIIMG.TokenParallax.Token.Label"), game.i18n.localize("AIIMG.TokenParallax.Token.Hint"), sel));
   // W6-U: saving the form as a GM confirms "on" in the scene's GM-only list (also for an unchanged, older plain "on")
   const form = root.tagName === "FORM" ? root : root.querySelector("form");
-  if (form && doc.parent?.documentName === "Scene") {
-    form.addEventListener("submit", () => { mirrorGmOn(doc, sel.value).catch((e) => console.warn(`${MODULE_ID} | token parallax`, e)); });
+  // The AppV2 <form> survives re-renders: one listener per form, reading the select that is in the form at submit time
+  // (a listener per render would also fire with the detached, stale selects of earlier renders).
+  if (form && doc.parent?.documentName === "Scene" && !form.dataset.aiimgPlxSubmit) {
+    form.dataset.aiimgPlxSubmit = "1";
+    form.addEventListener("submit", () => {
+      const cur = form.querySelector(`select[name="flags.${MODULE_ID}.${FLAG}"]`);
+      if (cur) mirrorGmOn(doc, cur.value).catch((e) => console.warn(`${MODULE_ID} | token parallax`, e));
+    });
   }
 }
 
