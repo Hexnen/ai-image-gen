@@ -136,6 +136,9 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
         // update the estimate in place: a re-render here (change fires on blur, at the mousedown of the next click)
         // replaced the Generate button under the pointer and that click was lost
         saveTileOptions(this.opts);
+        // no re-render any more, so show the clamped value (1-8) the job will use; an out-of-range value
+        // left in the field would also fail the browser's min/max check when Generate is clicked
+        if (ev.target.value !== String(this.opts.count)) ev.target.value = this.opts.count;
         const est = this.element.querySelector("[data-role=estimate]");
         if (est && this.job) est.textContent = this.#estimateText();
       }
