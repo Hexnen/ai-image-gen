@@ -171,6 +171,10 @@ export function flushLog() {
       try { await writeMonth(key); }
       catch (e) {
         dirty.add(key);
+        // Session lost / no upload permission (UploadError retryable:false): retrying on this page cannot help, and every
+        // refused upload makes Foundry show its own error toast, so a 30 s timer would repeat it until reload. The entries
+        // stay dirty: the next logCall/updateCall writes them again.
+        if (e?.retryable === false) { console.warn(`${MODULE_ID} | log: write failed (not retried automatically)`, e); break; }
         console.warn(`${MODULE_ID} | log: write failed (will retry)`, e);
         retryTimer ??= setTimeout(() => { retryTimer = null; flushLog(); }, 30_000);
         retryTimer?.unref?.(); // tylko Node (testy): nie trzymaj procesu
