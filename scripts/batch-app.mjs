@@ -1,7 +1,7 @@
 import { MODULE_ID } from "./constants.mjs";
 import { PROVIDERS } from "./providers/index.mjs";
 import { openPickForBatch } from "./pick-app.mjs";
-import { listBatches, removeBatch, isActive, checkBatches, cancelBatch, abandonBatch, retryBatchSave, retryableItems } from "./batch/index.mjs";
+import { listBatches, getBatch, removeBatch, isActive, checkBatches, cancelBatch, abandonBatch, retryBatchSave, retryableItems } from "./batch/index.mjs";
 import { safeMessage } from "./redact.mjs";
 
 const { ApplicationV2, HandlebarsApplicationMixin, DialogV2 } = foundry.applications.api;
@@ -126,7 +126,20 @@ export class BatchesApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   static async #onRemove(event, target) {
-    try { await removeBatch(target.dataset.id); }
+    try {
+      // paid results still reachable only through this record (pick window, retry save): ask before dropping it
+      const rec = getBatch(target.dataset.id);
+      if (rec && ((rec.status === "awaiting-pick" && rec.candidates?.length) || retryableItems(rec).length)) {
+        const ok = await DialogV2.confirm({
+          window: { title: tx("AIIMG.Batches.RemoveTitle", "Remove batch"), icon: "fa-solid fa-trash" },
+          content: `<p>${esc(tx("AIIMG.Batches.RemoveBody", "This batch has paid images you have not picked or saved yet. Remove it from the list? The pick and retry buttons for it will be gone."))}</p>`,
+          yes: { default: false },
+          rejectClose: false
+        });
+        if (!ok) return;
+      }
+      await removeBatch(target.dataset.id);
+    }
     catch (e) { ui.notifications.error(safeMessage(e.message)); }
     this.render();
   }

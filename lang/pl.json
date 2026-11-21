@@ -256,6 +256,8 @@
   "AIIMG.Batches.Abandon": "Porzuć (przestań śledzić; anuluje u dostawcy, jeśli się da)",
   "AIIMG.Batches.AbandonTitle": "Porzuć batch",
   "AIIMG.Batches.AbandonBody": "Przestać śledzić ten batch? Zostanie anulowany u dostawcy, jeśli to możliwe, a jego wyniki nie będą już pobierane.",
+  "AIIMG.Batches.RemoveTitle": "Usuń batch",
+  "AIIMG.Batches.RemoveBody": "Ten batch ma opłacone obrazy, których jeszcze nie wybrano ani nie zapisano. Usunąć go z listy? Znikną przyciski wyboru i ponownego zapisu.",
   "AIIMG.Batches.GMOnly": "Tylko GM może zarządzać batchami.",
   "AIIMG.Pick.AlreadyDecided": "Ten batch został już rozstrzygnięty w innym oknie.",
   "AIIMG.Settings.OptimizeImages.Name": "Optymalizuj obrazy AI",

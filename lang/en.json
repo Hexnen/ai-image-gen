@@ -256,6 +256,8 @@
   "AIIMG.Batches.Abandon": "Abandon (stop tracking; cancels at the provider if possible)",
   "AIIMG.Batches.AbandonTitle": "Abandon batch",
   "AIIMG.Batches.AbandonBody": "Stop tracking this batch? It is cancelled at the provider when possible, and its results will no longer be collected.",
+  "AIIMG.Batches.RemoveTitle": "Remove batch",
+  "AIIMG.Batches.RemoveBody": "This batch has paid images you have not picked or saved yet. Remove it from the list? The pick and retry buttons for it will be gone.",
   "AIIMG.Batches.GMOnly": "Only the GM can manage batches.",
   "AIIMG.Pick.AlreadyDecided": "This batch was already decided in another window.",
   "AIIMG.Settings.OptimizeImages.Name": "Optimize AI images",
