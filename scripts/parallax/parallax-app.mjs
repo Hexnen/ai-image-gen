@@ -343,6 +343,7 @@ export class ParallaxApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const j = { ArrowRight: (i + 1) % tabs.length, ArrowLeft: (i - 1 + tabs.length) % tabs.length, Home: 0, End: tabs.length - 1 }[ev.key];
     if (j === undefined) return;
     ev.preventDefault();
+    ev.stopPropagation();
     this.active = Number(tabs[j].dataset.index);
     this.render().then(() => this.element.querySelector(`[role=tab][data-index="${this.active}"]`)?.focus());
   }

@@ -77,6 +77,7 @@ export class LogApp extends HandlebarsApplicationMixin(ApplicationV2) {
       const row = ev.target.closest?.("tr.aiimg-log-row");
       if (!row || ev.target !== row) return;
       ev.preventDefault();
+      ev.stopPropagation();
       this.#toggleRow(row.dataset.id);
     });
   }
