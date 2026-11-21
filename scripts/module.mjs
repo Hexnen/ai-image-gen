@@ -44,7 +44,20 @@ function notifyPick(rec) {
   // Nazwę dokumentu może zmienić gracz-właściciel: do powiadomienia (HTML) tylko po escape.
   const name = foundry.utils.escapeHTML(String(rec.items?.[0]?.meta?.name ?? ""));
   const n = ui.notifications.info(game.i18n.format("AIIMG.Pick.Ready", { name }), { permanent: true, console: false });
-  try { n?.element?.addEventListener?.("click", () => openPickForBatch(rec.id)); } catch { /* best effort */ }
+  try {
+    // v14 renders the element only when the notification is shown: with 5 already on screen it waits in the queue and
+    // `element` is still undefined, so the click would never open the pick window. Foundry keeps an element set before
+    // that (`element ??=`), so build it here the way Notifications#render does (message is already cleaned by notify).
+    if (n && !n.element) {
+      const li = document.createElement("li");
+      li.classList.add("notification", n.type ?? "info");
+      if (n.permanent) li.classList.add("permanent");
+      li.dataset.id = String(n.id);
+      li.innerHTML = `<p>${n.message}</p> <span class="pct"></span>`;
+      n.element = li;
+    }
+    n?.element?.addEventListener?.("click", () => openPickForBatch(rec.id));
+  } catch { /* best effort */ }
 }
 
 Hooks.once("init", () => {
