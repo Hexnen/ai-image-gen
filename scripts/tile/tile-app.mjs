@@ -67,13 +67,18 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
 
   async #prepare() {
     this.error = "";
+    // a newer prepare (option changed meanwhile) wins: an older one finishing later must not overwrite its job
+    const seq = ++this.#prepSeq;
+    let job = null, error = "";
     try {
-      this.job = await prepareJob({ scene: this.scene, points: this.points, opts: this.opts, description: this.description, mode: this.mode });
+      job = await prepareJob({ scene: this.scene, points: this.points, opts: this.opts, description: this.description, mode: this.mode });
     } catch (e) {
       console.error(`${MODULE_ID} | AI Tile prepare`, e);
-      this.job = null;
-      this.error = e?.message ?? String(e);
+      error = e?.message ?? String(e);
     }
+    if (seq !== this.#prepSeq) return this.prepared;
+    this.job = job;
+    this.error = error;
     if (this.rendered) this.render();
     return this.job;
   }
@@ -111,22 +116,29 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     };
   }
 
-  _onRender(context, options) {
-    super._onRender?.(context, options);
-    const el = this.element;
-    el.querySelector("textarea[name=description]")?.focus();
+  _onFirstRender(context, options) {
+    super._onFirstRender?.(context, options);
+    // The <form> element survives re-renders (only the part is replaced): one delegated listener for the window's life.
     // opcje zmieniające wycinek: przygotuj ponownie (z opóźnieniem); pozostałe tylko przeliczają podgląd
-    let t = null;
-    el.addEventListener("change", (ev) => {
+    this.element.addEventListener("change", (ev) => {
       const n = ev.target?.name;
       if (!n) return;
       this.#readForm();
       if (["feather", "context", "mode"].includes(n)) {
-        clearTimeout(t);
-        t = setTimeout(() => { this.job = null; this.render(); this.prepared = this.#prepare(); saveTileOptions(this.opts); }, 150);
+        clearTimeout(this.#prepTimer);
+        this.#prepTimer = setTimeout(() => { this.job = null; this.render(); this.prepared = this.#prepare(); saveTileOptions(this.opts); }, 150);
       } else if (n === "count") { saveTileOptions(this.opts); this.render(); }
       else if (n === "expand") { if (this.job) this.job.opts = { ...this.job.opts, expand: this.opts.expand }; saveTileOptions(this.opts); }
     });
+  }
+
+  #prepTimer = null;
+  #prepSeq = 0;
+
+  _onRender(context, options) {
+    super._onRender?.(context, options);
+    const el = this.element;
+    el.querySelector("textarea[name=description]")?.focus();
     el.querySelector("textarea[name=description]")?.addEventListener("input", (ev) => {
       this.description = ev.target.value;
       const p = el.querySelector("[data-role=prompt]");
@@ -149,6 +161,7 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
 
   _onClose(options) {
     super._onClose?.(options);
+    clearTimeout(this.#prepTimer);
     for (const u of this.urls) URL.revokeObjectURL(u);
     this.abort?.abort();
   }
@@ -279,13 +292,22 @@ export class TileReviewApp extends HandlebarsApplicationMixin(ApplicationV2) {
    * @param {object} [p.batch]        Batch: {rec, geom, scene}
    */
   static open(p) {
-    const app = new this(p);
+    // same batch already in review (notification clicked twice, Batches window): reuse it. A second instance with the
+    // same id would replace the first one's DOM without closing it, leaving its map preview on the canvas for good.
+    const id = TileReviewApp.idFor(p);
+    const existing = foundry.applications.instances.get(id);
+    if (existing) { existing.bringToFront?.(); return existing; }
+    const app = new this({ ...p, id });
     app.render({ force: true });
     return app;
   }
 
-  constructor({ job, candidates, count = 1, batch, ...options }) {
-    super({ id: `${MODULE_ID}-tile-review-${batch?.rec?.id ?? job?.id ?? foundry.utils.randomID()}`, ...options });
+  static idFor({ job, batch } = {}) {
+    return `${MODULE_ID}-tile-review-${batch?.rec?.id ?? job?.id ?? foundry.utils.randomID()}`;
+  }
+
+  constructor({ job, candidates, count = 1, batch, id, ...options }) {
+    super({ id: id ?? TileReviewApp.idFor({ job, batch }), ...options });
     this.job = job ?? null;
     this.batch = batch ?? null;
     this.count = count;
@@ -302,6 +324,20 @@ export class TileReviewApp extends HandlebarsApplicationMixin(ApplicationV2) {
     this.preview = this.#onScene() ? new MapPreview(this.rect) : null;
     this.#add(candidates);
     if (this.cands.length) this.#select(this.cands[0]);
+    // the preview lives on canvas.controls, which outlasts a scene change: drop it off its scene, rebuild it on return
+    this.sceneHook = Hooks.on("canvasReady", () => this.#syncPreview());
+  }
+
+  #syncPreview() {
+    const want = this.#onScene() && !this.pasted;
+    if (want && !this.preview) {
+      this.preview = new MapPreview(this.rect);
+      if (this.active) this.#select(this.active);
+    } else if (!want && this.preview) {
+      this.preview.destroy();
+      this.preview = null;
+    } else return;
+    if (this.rendered) this.render();
   }
 
   #onScene() { return canvas?.ready && canvas.scene?.id === this.sceneId; }
@@ -339,6 +375,7 @@ export class TileReviewApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   _onClose(options) {
     super._onClose?.(options);
+    Hooks.off("canvasReady", this.sceneHook);
     this.preview?.destroy();
     this.preview = null;
   }
