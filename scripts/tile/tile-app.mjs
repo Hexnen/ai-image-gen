@@ -391,7 +391,8 @@ export class TileReviewApp extends HandlebarsApplicationMixin(ApplicationV2) {
       })),
       busy: this.busy, error: this.error, original: this.original,
       canRetry: !!this.job, onScene: !!this.preview,
-      offScene: F("AIIMG.Tile.OffScene", { scene: foundry.utils.escapeHTML(game.scenes.get(this.sceneId)?.name ?? "?") }),
+      // plain text: the template escapes it ({{offScene}}); escaping here too showed "&amp;" for "&"
+      offScene: F("AIIMG.Tile.OffScene", { scene: game.scenes.get(this.sceneId)?.name ?? "?" }),
       hasActive: !!this.active,
       pasted: this.pasted ? { revealed: !!this.pasted.revealed, gone: !this.#pastedDoc() } : null
     };
