@@ -83,6 +83,11 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     return this.job;
   }
 
+  #estimateText() {
+    const n = this.opts.count;
+    return F("AIIMG.Tile.Estimate", { cost: money(estimateJob(this.job, n, this.mode)), n });
+  }
+
   #url(blob) { if (!blob) return ""; const u = URL.createObjectURL(blob); this.urls.push(u); return u; }
 
   async _prepareContext() {
@@ -111,7 +116,7 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       inputs: job ? (job.input.tokens != null
         ? F("AIIMG.Tile.InputsTokens", { w: job.input.sent.width, h: job.input.sent.height, t: job.input.tokens })
         : F("AIIMG.Tile.Inputs", { w: job.input.sent.width, h: job.input.sent.height })) : "",
-      estimate: job ? F("AIIMG.Tile.Estimate", { cost: money(estimateJob(job, count, this.mode)), n: count }) : "",
+      estimate: job ? this.#estimateText() : "",
       prompt: job ? buildJobPrompt(job, this.description || "…") : ""
     };
   }
@@ -127,7 +132,13 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       if (["feather", "context", "mode"].includes(n)) {
         clearTimeout(this.#prepTimer);
         this.#prepTimer = setTimeout(() => { this.job = null; this.render(); this.prepared = this.#prepare(); saveTileOptions(this.opts); }, 150);
-      } else if (n === "count") { saveTileOptions(this.opts); this.render(); }
+      } else if (n === "count") {
+        // update the estimate in place: a re-render here (change fires on blur, at the mousedown of the next click)
+        // replaced the Generate button under the pointer and that click was lost
+        saveTileOptions(this.opts);
+        const est = this.element.querySelector("[data-role=estimate]");
+        if (est && this.job) est.textContent = this.#estimateText();
+      }
       else if (n === "expand") { if (this.job) this.job.opts = { ...this.job.opts, expand: this.opts.expand }; saveTileOptions(this.opts); }
     });
   }
@@ -135,11 +146,24 @@ export class TileDialog extends HandlebarsApplicationMixin(ApplicationV2) {
   #prepTimer = null;
   #prepSeq = 0;
 
+  /** caret of the description field before a re-render (core restores focus only, which puts the caret at 0) */
+  #caret = null;
+
+  async _preRender(context, options) {
+    await super._preRender?.(context, options);
+    const ta = this.element?.querySelector("textarea[name=description]");
+    this.#caret = ta && document.activeElement === ta ? [ta.selectionStart, ta.selectionEnd] : null;
+  }
+
   _onRender(context, options) {
     super._onRender?.(context, options);
     const el = this.element;
-    el.querySelector("textarea[name=description]")?.focus();
-    el.querySelector("textarea[name=description]")?.addEventListener("input", (ev) => {
+    const ta = el.querySelector("textarea[name=description]");
+    // focus the prompt on open only; later renders (prepare done, count change) keep the user's focus and caret
+    if (options?.isFirstRender) { ta?.focus(); ta?.setSelectionRange(ta.value.length, ta.value.length); }
+    else if (ta && this.#caret && document.activeElement === ta) ta.setSelectionRange(...this.#caret);
+    this.#caret = null;
+    ta?.addEventListener("input", (ev) => {
       this.description = ev.target.value;
       const p = el.querySelector("[data-role=prompt]");
       if (p && this.job) p.textContent = buildJobPrompt(this.job, this.description || "…");

@@ -39,9 +39,9 @@
     {{#if ready}}{{ready.providerLabel}} · {{ready.modelLabel}}{{/if}}
     <button type="button" class="link" data-action="openConfig">{{localize "AIIMG.Tile.TypeSettings"}}</button>
   </p>
-  {{#if estimate}}<p class="aiimg-tile-estimate"><i class="fa-solid fa-coins"></i> {{estimate}}</p>{{/if}}
+  {{#if estimate}}<p class="aiimg-tile-estimate"><i class="fa-solid fa-coins"></i> <span data-role="estimate">{{estimate}}</span></p>{{/if}}
 
-  <details class="aiimg-tile-prompt">
+  <details class="aiimg-tile-prompt" data-sync="prompt">
     <summary>{{localize "AIIMG.Tile.PromptSent"}}</summary>
     <p data-role="prompt">{{prompt}}</p>
   </details>
