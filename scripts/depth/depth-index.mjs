@@ -160,7 +160,22 @@ export function createDepthIndex(io) {
   let seen = null;             // key -> signature of the stored index last seen (diffed on change)
   const stats = { lookups: 0, hits: 0, index: 0, browse: 0, listings: 0, writes: 0, rejected: 0, repaired: 0 };
 
-  const stored = () => { try { return cleanIndex(io.read?.()); } catch { return cleanIndex(null); } };
+  // Perf: cleanIndex (clean + sort up to INDEX_MAX entries) ran on EVERY lookup miss: a scene of N tokens with N distinct
+  // images did N full cleans synchronously in one refresh. The stored value keeps its identity until the setting changes
+  // (Foundry re-casts it on update), so the clean result is reused per raw object; callers get their own `maps` copy
+  // (doFlush / resolve add and delete keys on it).
+  let memoRaw, memoIdx = null;
+  const stored = () => {
+    let raw;
+    try { raw = io.read?.(); } catch { return cleanIndex(null); }
+    if (!memoIdx || raw !== memoRaw || !raw || typeof raw !== "object") {
+      try { memoIdx = cleanIndex(raw); } catch { memoIdx = null; return cleanIndex(null); }
+      memoRaw = raw;
+    }
+    const maps = {};
+    for (const k of Object.keys(memoIdx.maps)) setOwn(maps, k, memoIdx.maps[k]);
+    return { v: memoIdx.v, maps };
+  };
   const snapshot = (idx) => { const m = new Map(); for (const k of Object.keys(idx.maps)) m.set(k, sigOf(idx.maps[k])); return m; };
   const read = () => { const idx = stored(); if (!seen) seen = snapshot(idx); return idx; };
   const emit = (keys) => { for (const fn of [...listeners]) { try { fn(keys); } catch (e) { console.error(`${MODULE_ID} | depth index listener`, e); } } };
