@@ -116,15 +116,25 @@ function inject(app, html) {
     requestAnimationFrame(tick);
   };
   place();
-  anchor.addEventListener("load", settle);
+  // The AppV2 root element survives re-renders (only the parts are replaced), so watchers and listeners of the previous
+  // render's button are dropped first: otherwise each sheet re-render adds another set on the same root for its life.
+  watchers.get(root)?.();
+  const ac = new AbortController();
+  const obs = [];
+  anchor.addEventListener("load", settle, { signal: ac.signal });
   if (typeof ResizeObserver === "function") {
     const ro = new ResizeObserver(settle);
     for (const el of new Set([anchor, host, btn.offsetParent, root].filter(Boolean))) ro.observe(el);
+    obs.push(ro);
   }
-  if (typeof IntersectionObserver === "function") new IntersectionObserver(settle).observe(anchor);
-  root.addEventListener("transitionend", settle);
-  root.addEventListener("animationend", settle);
+  if (typeof IntersectionObserver === "function") { const io = new IntersectionObserver(settle); io.observe(anchor); obs.push(io); }
+  root.addEventListener("transitionend", settle, { signal: ac.signal });
+  root.addEventListener("animationend", settle, { signal: ac.signal });
+  watchers.set(root, () => { ac.abort(); for (const o of obs) o.disconnect(); watchers.delete(root); });
 }
+
+/** root element -> cleanup of the watchers of the button placed in it by the last inject. */
+const watchers = new WeakMap();
 
 export function registerSheetButtons() {
   // ApplicationV2 (arkusze v13/v14, MacroConfig) oraz stare arkusze v1 (np. stonetop).
