@@ -110,10 +110,18 @@ function inject(app, html) {
       plxBtn.style.top = btn.style.top;
     }
   };
+  // One placement loop at a time: each trigger only extends its end. (A new 700 ms rAF chain per trigger meant a window
+  // resize, where the ResizeObserver fires every frame, ran dozens of chains at once, each forcing a layout per frame.)
+  let settleUntil = 0, settleRaf = 0;
   const settle = () => {
-    const until = performance.now() + 700;
-    const tick = () => { place(); if (btn.isConnected && performance.now() < until) requestAnimationFrame(tick); };
-    requestAnimationFrame(tick);
+    settleUntil = performance.now() + 700;
+    if (settleRaf) return;
+    const tick = () => {
+      settleRaf = 0;
+      place();
+      if (btn.isConnected && performance.now() < settleUntil) settleRaf = requestAnimationFrame(tick);
+    };
+    settleRaf = requestAnimationFrame(tick);
   };
   place();
   // The AppV2 root element survives re-renders (only the parts are replaced), so watchers and listeners of the previous
@@ -130,7 +138,7 @@ function inject(app, html) {
   if (typeof IntersectionObserver === "function") { const io = new IntersectionObserver(settle); io.observe(anchor); obs.push(io); }
   root.addEventListener("transitionend", settle, { signal: ac.signal });
   root.addEventListener("animationend", settle, { signal: ac.signal });
-  watchers.set(root, () => { ac.abort(); for (const o of obs) o.disconnect(); watchers.delete(root); });
+  watchers.set(root, () => { ac.abort(); for (const o of obs) o.disconnect(); if (settleRaf) cancelAnimationFrame(settleRaf); settleRaf = 0; watchers.delete(root); });
 }
 
 /** root element -> cleanup of the watchers of the button placed in it by the last inject. */
