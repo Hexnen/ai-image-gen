@@ -160,6 +160,9 @@ class DrawTool {
 
   #key(e) {
     if (e.target?.closest?.("input, textarea, [contenteditable]")) return;
+    // a focused HUD button keeps its own Enter: Enter on Cancel must cancel, not confirm the shape. Other focused buttons
+    // (the toolbar button that started the tool keeps focus: pointerdown on the canvas is prevented) still confirm.
+    if (e.key === "Enter" && e.target?.closest?.("button") && this.hud?.contains(e.target)) return;
     if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); this.finish(null); }
     else if (e.key === "Enter") { e.preventDefault(); e.stopImmediatePropagation(); this.confirm(); }
   }
